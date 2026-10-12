@@ -37,6 +37,7 @@ const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
 const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
+const ERC4337_MAX_VERIFICATION_GAS = 500_000n;
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
@@ -170,6 +171,11 @@ export function createPasskeyFeeEstimator(
     ) {
       const minimumVerificationGas = BigInt(input.userOperation.verificationGasLimit)
         + PASSKEY_VERIFICATION_GAS_MARGIN;
+      if (minimumVerificationGas >= ERC4337_MAX_VERIFICATION_GAS) {
+        throw new Error(
+          "The passkey verification margin reaches the ERC-4337 verification gas limit.",
+        );
+      }
       const sponsored = await baseEstimator.postEstimateUserOperationGas({
         ...input,
         userOperation: {
@@ -180,12 +186,10 @@ export function createPasskeyFeeEstimator(
       const sponsoredVerificationGas = sponsored.verificationGasLimit == null
         ? 0n
         : BigInt(sponsored.verificationGasLimit);
-      return {
-        ...sponsored,
-        verificationGasLimit: sponsoredVerificationGas > minimumVerificationGas
-          ? sponsoredVerificationGas
-          : minimumVerificationGas,
-      };
+      if (sponsoredVerificationGas < minimumVerificationGas) {
+        throw new Error("The paymaster returned insufficient verification gas for the passkey.");
+      }
+      return sponsored;
     },
   };
 }
