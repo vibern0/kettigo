@@ -4,6 +4,9 @@ main = "packages/web/worker.ts"
 workers_dev = true
 preview_urls = true
 
+[limits]
+cpu_ms = 30_000
+
 [triggers]
 crons = ["* * * * *"]
 

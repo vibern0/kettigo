@@ -87,6 +87,11 @@ test("web Worker configs run the keeper every minute", () => {
   assert.equal(rootWrangler.split('MORPHO_KEEPER_START_BLOCK = "11864127"').length, 3);
 });
 
+test("Worker configs reserve enough CPU for scheduled keeper runs", () => {
+  assert.deepEqual(webConfig.limits, { cpu_ms: 30_000 });
+  assert.match(rootWrangler, /\[limits\]\s+cpu_ms = 30_000/);
+});
+
 test("root app Worker cron runs every keeper lane", () => {
   assert.match(rootWorker, /runKeeperAll\(env, "cron"\)/);
   assert.match(rootWorker, /runMorphoKeeper/);
