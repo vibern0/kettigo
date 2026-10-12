@@ -12,9 +12,8 @@ import type { PasskeySmartSession } from "./smart-session";
 import {
   asChecksumAddress,
   clearValueToBigInt,
-  grantSmartZamaPermit,
+  decryptWithSmartReadSession,
   isZeroEncryptedHandle,
-  withSmartZamaSDK,
 } from "./zama";
 
 const publicClient = createPublicClient({
@@ -39,13 +38,12 @@ async function decryptHandles(
 ) {
   if (requests.length === 0) return {};
 
-  const results = await withSmartZamaSDK(currentSession, (sdk) =>
-    sdk.decryption.decryptValues(
-      requests.map((request) => ({
-        encryptedValue: request.handle,
-        contractAddress: request.contract,
-      })),
-    ),
+  const results = await decryptWithSmartReadSession(
+    currentSession,
+    requests.map((request) => ({
+      encryptedValue: request.handle,
+      contractAddress: request.contract,
+    })),
   );
 
   return Object.fromEntries(requests.map((request) => [request.key, results[request.handle]]));
@@ -96,22 +94,12 @@ export async function decryptConfidentialBalances(
     });
   }
 
-  if (requests.length > 0) {
-    await grantSmartZamaPermit(currentSession, [token, pool]);
+  const decryptedBalances = await decryptHandles(requests, currentSession);
+  if (decryptedBalances.confidentialBalance !== undefined) {
+    balances.confidentialBalance = clearValueToBigInt(decryptedBalances.confidentialBalance);
   }
-
-  const [decryptedBalances] = await Promise.allSettled([
-    decryptHandles(requests, currentSession),
-  ]);
-
-  for (const decrypted of [decryptedBalances]) {
-    if (decrypted.status !== "fulfilled") continue;
-    if (decrypted.value.confidentialBalance !== undefined) {
-      balances.confidentialBalance = clearValueToBigInt(decrypted.value.confidentialBalance);
-    }
-    if (decrypted.value.principal !== undefined) {
-      balances.principal = clearValueToBigInt(decrypted.value.principal);
-    }
+  if (decryptedBalances.principal !== undefined) {
+    balances.principal = clearValueToBigInt(decryptedBalances.principal);
   }
 
   return balances;

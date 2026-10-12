@@ -1,16 +1,16 @@
 1:"$Sreact.fragment"
-2:I[7245,["900","static/chunks/e8735de6-e501aaf61f34c7aa.js","266","static/chunks/e7fabc54-c14876c0bbbc839b.js","761","static/chunks/ba241ee2-cf34476c43105856.js","303","static/chunks/6405a05c-4a301b7e43361617.js","540","static/chunks/dd4c4bf0-c225c83495e10628.js","160","static/chunks/160-d6cc362a03d3c37b.js","33","static/chunks/33-902093c46933abef.js","869","static/chunks/869-c52b7c93bf3de009.js","309","static/chunks/309-2be99320b1fc3aa9.js","549","static/chunks/549-21d27a71304a405d.js","410","static/chunks/410-ec4ab74686ac6cd3.js","47","static/chunks/47-1b3dc66902cdc1c4.js","984","static/chunks/984-21bc7269de5e6c76.js","177","static/chunks/app/layout-8cee03aa0747af07.js"],"Providers"]
-3:I[88414,["900","static/chunks/e8735de6-e501aaf61f34c7aa.js","266","static/chunks/e7fabc54-c14876c0bbbc839b.js","761","static/chunks/ba241ee2-cf34476c43105856.js","303","static/chunks/6405a05c-4a301b7e43361617.js","540","static/chunks/dd4c4bf0-c225c83495e10628.js","160","static/chunks/160-d6cc362a03d3c37b.js","33","static/chunks/33-902093c46933abef.js","869","static/chunks/869-c52b7c93bf3de009.js","309","static/chunks/309-2be99320b1fc3aa9.js","549","static/chunks/549-21d27a71304a405d.js","410","static/chunks/410-ec4ab74686ac6cd3.js","47","static/chunks/47-1b3dc66902cdc1c4.js","984","static/chunks/984-21bc7269de5e6c76.js","177","static/chunks/app/layout-8cee03aa0747af07.js"],"Header"]
-4:I[71844,[],""]
-5:I[95938,[],""]
-6:I[9105,[],"ClientPageRoot"]
-7:I[89475,["900","static/chunks/e8735de6-e501aaf61f34c7aa.js","266","static/chunks/e7fabc54-c14876c0bbbc839b.js","761","static/chunks/ba241ee2-cf34476c43105856.js","303","static/chunks/6405a05c-4a301b7e43361617.js","540","static/chunks/dd4c4bf0-c225c83495e10628.js","160","static/chunks/160-d6cc362a03d3c37b.js","33","static/chunks/33-902093c46933abef.js","869","static/chunks/869-c52b7c93bf3de009.js","383","static/chunks/383-3a0422d688eb9125.js","549","static/chunks/549-21d27a71304a405d.js","47","static/chunks/47-1b3dc66902cdc1c4.js","974","static/chunks/app/page-7830e9fee0685f0d.js"],"default"]
-a:I[16353,[],"OutletBoundary"]
-c:I[16924,[],"AsyncMetadataOutlet"]
-e:I[16353,[],"ViewportBoundary"]
-10:I[16353,[],"MetadataBoundary"]
+2:I[53912,["101","static/chunks/0c15fd09-cb7319d288943901.js","522","static/chunks/0eedbce9-9b833b9334afbf18.js","906","static/chunks/a2afb10f-dc44c993dc71ee33.js","989","static/chunks/d6d63cc5-d6c578e6f2ec964b.js","590","static/chunks/617c92e2-47879a97867db0c4.js","99","static/chunks/99-97d7b35011889961.js","110","static/chunks/110-3459a11ab3142c65.js","102","static/chunks/102-9e96cba0204f356e.js","389","static/chunks/389-2b3f2bc6cdbe707e.js","333","static/chunks/333-d364871e6d484897.js","627","static/chunks/627-6a95c96301481092.js","866","static/chunks/866-b12c3c30d6197665.js","942","static/chunks/942-06b03104c9f3de5e.js","177","static/chunks/app/layout-e846fc79dd3010e9.js"],"Providers"]
+3:I[53790,["101","static/chunks/0c15fd09-cb7319d288943901.js","522","static/chunks/0eedbce9-9b833b9334afbf18.js","906","static/chunks/a2afb10f-dc44c993dc71ee33.js","989","static/chunks/d6d63cc5-d6c578e6f2ec964b.js","590","static/chunks/617c92e2-47879a97867db0c4.js","99","static/chunks/99-97d7b35011889961.js","110","static/chunks/110-3459a11ab3142c65.js","102","static/chunks/102-9e96cba0204f356e.js","389","static/chunks/389-2b3f2bc6cdbe707e.js","333","static/chunks/333-d364871e6d484897.js","627","static/chunks/627-6a95c96301481092.js","866","static/chunks/866-b12c3c30d6197665.js","942","static/chunks/942-06b03104c9f3de5e.js","177","static/chunks/app/layout-e846fc79dd3010e9.js"],"Header"]
+4:I[56092,[],""]
+5:I[13066,[],""]
+6:I[5785,[],"ClientPageRoot"]
+7:I[72771,["101","static/chunks/0c15fd09-cb7319d288943901.js","522","static/chunks/0eedbce9-9b833b9334afbf18.js","906","static/chunks/a2afb10f-dc44c993dc71ee33.js","989","static/chunks/d6d63cc5-d6c578e6f2ec964b.js","590","static/chunks/617c92e2-47879a97867db0c4.js","99","static/chunks/99-97d7b35011889961.js","110","static/chunks/110-3459a11ab3142c65.js","102","static/chunks/102-9e96cba0204f356e.js","285","static/chunks/285-47c8db51c4a4c38c.js","333","static/chunks/333-d364871e6d484897.js","866","static/chunks/866-b12c3c30d6197665.js","974","static/chunks/app/page-47fe03f32690eea8.js"],"default"]
+a:I[14985,[],"OutletBoundary"]
+c:I[71876,[],"AsyncMetadataOutlet"]
+e:I[14985,[],"ViewportBoundary"]
+10:I[14985,[],"MetadataBoundary"]
 11:"$Sreact.suspense"
-13:I[17952,[],""]
+13:I[91608,[],""]
 :HL["/_next/static/media/19b19945c700ed31-s.p.ttf","font",{"crossOrigin":"","type":"font/ttf"}]
 :HL["/_next/static/media/3a34dc355c90aaed-s.p.ttf","font",{"crossOrigin":"","type":"font/ttf"}]
 :HL["/_next/static/media/4f40d598744b068e-s.p.ttf","font",{"crossOrigin":"","type":"font/ttf"}]
@@ -24,6 +24,6 @@ e:I[16353,[],"ViewportBoundary"]
 9:"$0:f:0:1:2:children:1:props:children:0:props:params"
 f:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1, maximum-scale=1"}],["$","meta","2",{"name":"theme-color","content":"#2548F4"}]]
 b:null
-14:I[75940,[],"IconMark"]
+14:I[9884,[],"IconMark"]
 d:{"metadata":[["$","title","0",{"children":"Kettigo — Savings with a chance to win"}],["$","meta","1",{"name":"description","content":"Your savings, with weekly prizes. 100% of your principal, always."}],["$","link","2",{"rel":"manifest","href":"/manifest.json","crossOrigin":"$undefined"}],["$","meta","3",{"name":"mobile-web-app-capable","content":"yes"}],["$","meta","4",{"name":"apple-mobile-web-app-title","content":"Kettigo"}],["$","meta","5",{"name":"apple-mobile-web-app-status-bar-style","content":"black-translucent"}],["$","meta","6",{"property":"og:title","content":"Kettigo — Savings with a chance to win"}],["$","meta","7",{"property":"og:description","content":"Your savings, with weekly prizes. 100% of your principal, always."}],["$","meta","8",{"property":"og:url","content":"https://app.kettigo.xyz"}],["$","meta","9",{"property":"og:site_name","content":"Kettigo"}],["$","meta","10",{"property":"og:image","content":"https://app.kettigo.xyz/kettigo-share.png"}],["$","meta","11",{"property":"og:image:width","content":"1734"}],["$","meta","12",{"property":"og:image:height","content":"907"}],["$","meta","13",{"property":"og:image:alt","content":"Kettigo — Save. Win. Keep it all."}],["$","meta","14",{"property":"og:type","content":"website"}],["$","meta","15",{"name":"twitter:card","content":"summary_large_image"}],["$","meta","16",{"name":"twitter:title","content":"Kettigo — Savings with a chance to win"}],["$","meta","17",{"name":"twitter:description","content":"Your savings, with weekly prizes. 100% of your principal, always."}],["$","meta","18",{"name":"twitter:image","content":"https://app.kettigo.xyz/kettigo-share.png"}],["$","link","19",{"rel":"icon","href":"/kettigo-mark.svg"}],["$","link","20",{"rel":"apple-touch-icon","href":"/kettigo-mark.svg"}],["$","$L14","21",{}]],"error":null,"digest":"$undefined"}
 12:"$d:metadata"
