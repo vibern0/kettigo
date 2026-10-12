@@ -73,4 +73,6 @@ test("prize reveals are cleared and stale results cannot cross account sessions"
   assert.match(draw, /setWinnings\(undefined\)/);
   assert.match(draw, /winningsSessionRef\.current !== user/);
   assert.match(draw, /winningsRequestId\.current !== requestId/);
+  assert.match(draw, /session\?\.address === winningsOwner \? winnings : undefined/);
+  assert.match(draw, /if \(completed === false\) return/);
 });
