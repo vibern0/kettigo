@@ -21,32 +21,58 @@ export function createPersistentCredentialOptions<Storage>(storage: Storage) {
 export function createZamaSessionManager<Session extends object, Resource extends ZamaSessionResource>(
   createResource: (session: Session) => Resource,
 ) {
-  const resources = new WeakMap<Session, Resource>();
+  type SessionResource = {
+    resource: Resource;
+    tail: Promise<void>;
+  };
 
-  function get(session: Session) {
+  const resources = new WeakMap<Session, SessionResource>();
+  const closedSessions = new WeakSet<Session>();
+  const clearPromises = new WeakMap<Session, Promise<void>>();
+
+  function getOrCreate(session: Session) {
     const existing = resources.get(session);
     if (existing) return existing;
 
-    const resource = createResource(session);
-    resources.set(session, resource);
-    return resource;
+    const entry = {
+      resource: createResource(session),
+      tail: Promise.resolve(),
+    };
+    resources.set(session, entry);
+    return entry;
+  }
+
+  function run<Result>(session: Session, operation: (resource: Resource) => Promise<Result>) {
+    if (closedSessions.has(session)) {
+      return Promise.reject(new Error("Zama session is closed."));
+    }
+
+    const entry = getOrCreate(session);
+    const result = entry.tail.then(() => operation(entry.resource));
+    entry.tail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   async function grantPermit(session: Session, contracts: Address[]) {
-    await get(session).permits.grantPermit(contracts);
+    await run(session, (resource) => resource.permits.grantPermit(contracts));
   }
 
   async function clear(session: Session) {
-    const resource = resources.get(session);
-    if (!resource) return;
+    const existingClear = clearPromises.get(session);
+    if (existingClear) return existingClear;
 
-    try {
-      await resource.permits.clear();
-    } finally {
-      resource.terminate();
-      resources.delete(session);
-    }
+    closedSessions.add(session);
+    const entry = getOrCreate(session);
+
+    const clearing = entry.tail
+      .then(() => entry.resource.permits.clear())
+      .finally(() => {
+        entry.resource.terminate();
+        resources.delete(session);
+      });
+    clearPromises.set(session, clearing);
+    return clearing;
   }
 
-  return { get, grantPermit, clear };
+  return { run, grantPermit, clear };
 }

@@ -12,9 +12,9 @@ import type { PasskeySmartSession } from "./smart-session";
 import {
   asChecksumAddress,
   clearValueToBigInt,
-  getSmartZamaSDK,
   grantSmartZamaPermit,
   isZeroEncryptedHandle,
+  withSmartZamaSDK,
 } from "./zama";
 
 const publicClient = createPublicClient({
@@ -39,12 +39,13 @@ async function decryptHandles(
 ) {
   if (requests.length === 0) return {};
 
-  const sdk = getSmartZamaSDK(currentSession);
-  const results = await sdk.decryption.decryptValues(
-    requests.map((request) => ({
-      encryptedValue: request.handle,
-      contractAddress: request.contract,
-    })),
+  const results = await withSmartZamaSDK(currentSession, (sdk) =>
+    sdk.decryption.decryptValues(
+      requests.map((request) => ({
+        encryptedValue: request.handle,
+        contractAddress: request.contract,
+      })),
+    ),
   );
 
   return Object.fromEntries(requests.map((request) => [request.key, results[request.handle]]));

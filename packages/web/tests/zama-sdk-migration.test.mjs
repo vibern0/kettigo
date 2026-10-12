@@ -46,6 +46,8 @@ test("browser decryption persists one seven-day permit for the token and pool", 
   assert.doesNotMatch(zama, /\bmemoryStorage\b/);
   assert.match(zama, /createPersistentCredentialOptions\(indexedDBStorage\)/);
   assert.match(balances, /grantSmartZamaPermit\(currentSession, \[token, pool\]\)/);
+  assert.match(balances, /withSmartZamaSDK\(currentSession/);
+  assert.doesNotMatch(balances, /getSmartZamaSDK/);
   assert.equal((balances.match(/decryptValues\(/g) ?? []).length, 1);
 });
 
@@ -57,4 +59,8 @@ test("explicit sign-out clears the session's stored Zama credentials", async () 
   );
 
   assert.match(disconnect, /clearSmartZamaSession\(state\.session\)/);
+  assert.ok(
+    disconnect.indexOf("balanceLoadId.current += 1")
+      < disconnect.indexOf("clearSmartZamaSession(state.session)"),
+  );
 });

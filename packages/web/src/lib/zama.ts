@@ -113,8 +113,11 @@ export function createPublicZamaSDK() {
   return new ZamaSDK(configFor());
 }
 
-export function getSmartZamaSDK(session: PasskeySmartSession) {
-  return smartZamaSessions.get(session);
+export function withSmartZamaSDK<Result>(
+  session: PasskeySmartSession,
+  operation: (sdk: ZamaSDK) => Promise<Result>,
+) {
+  return smartZamaSessions.run(session, operation);
 }
 
 export async function grantSmartZamaPermit(

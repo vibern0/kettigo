@@ -14,9 +14,9 @@ import { useWallet } from "@/lib/wallet-context";
 import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
 import {
   asChecksumAddress,
-  getSmartZamaSDK,
   decryptUint64,
   isZeroEncryptedHandle,
+  withSmartZamaSDK,
 } from "@/lib/zama";
 import { useToast } from "@/components/Toast";
 import { getPrizeActions, type PrizeActionId } from "@/lib/prize-actions";
@@ -252,8 +252,9 @@ export default function DrawPage() {
       return;
     }
 
-    const sdk = getSmartZamaSDK(currentSession);
-    setWinnings(await decryptUint64(sdk, handle as `0x${string}`, pool));
+    setWinnings(await withSmartZamaSDK(currentSession, (sdk) =>
+      decryptUint64(sdk, handle as `0x${string}`, pool),
+    ));
   }
 
   async function claimPrize() {

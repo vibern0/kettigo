@@ -188,6 +188,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [state.status]);
 
   const disconnect = useCallback(async () => {
+    balanceLoadId.current += 1;
     if (state.session) {
       try {
         await clearSmartZamaSession(state.session);
@@ -195,7 +196,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         console.error("Could not clear saved balance access", error);
       }
     }
-    balanceLoadId.current += 1;
     setConfidentialBalance(undefined);
     setPrincipal(undefined);
     setConfidentialBalancesError(null);

@@ -16,7 +16,7 @@ test("persistent credentials expire after seven days", () => {
   });
 });
 
-test("one SDK instance is reused for the same wallet session", () => {
+test("one SDK instance is reused for the same wallet session", async () => {
   const created = [];
   const manager = createZamaSessionManager((session) => {
     const sdk = { session, permits: {}, terminate() {} };
@@ -25,9 +25,11 @@ test("one SDK instance is reused for the same wallet session", () => {
   });
   const session = {};
 
-  assert.equal(manager.get(session), manager.get(session));
+  const first = await manager.run(session, async (sdk) => sdk);
+  const second = await manager.run(session, async (sdk) => sdk);
   assert.equal(created.length, 1);
-  assert.notEqual(manager.get({}), manager.get(session));
+  assert.equal(first, second);
+  assert.notEqual(await manager.run({}, async (sdk) => sdk), first);
   assert.equal(created.length, 2);
 });
 
@@ -49,7 +51,7 @@ test("grantPermit authorizes all requested contracts through the reused SDK", as
   assert.deepEqual(grants, [["token", "pool"], ["token", "pool"]]);
 });
 
-test("clear removes persistent credentials, terminates the SDK, and allows recreation", async () => {
+test("clear removes persistent credentials and terminates the SDK", async () => {
   const events = [];
   let instance = 0;
   const manager = createZamaSessionManager(() => {
@@ -67,17 +69,66 @@ test("clear removes persistent credentials, terminates the SDK, and allows recre
     };
   });
   const session = {};
-  const first = manager.get(session);
+  await manager.run(session, async (sdk) => sdk);
 
   await manager.clear(session);
-  const second = manager.get(session);
 
   assert.deepEqual(events, ["clear:1", "terminate:1"]);
-  assert.notEqual(first, second);
-  assert.equal(second.id, 2);
+  await assert.rejects(manager.run(session, async (sdk) => sdk), /closed/);
 });
 
-test("clear still terminates and evicts an SDK when credential removal fails", async () => {
+test("clear creates an SDK to remove credentials persisted before reload", async () => {
+  const events = [];
+  const session = {};
+  const manager = createZamaSessionManager(() => ({
+    permits: {
+      async clear() {
+        events.push("clear");
+      },
+    },
+    terminate() {
+      events.push("terminate");
+    },
+  }));
+
+  await manager.clear(session);
+
+  assert.deepEqual(events, ["clear", "terminate"]);
+});
+
+test("clear waits for active work before removing credentials", async () => {
+  const events = [];
+  let finishWork;
+  const workGate = new Promise((resolve) => { finishWork = resolve; });
+  const session = {};
+  const manager = createZamaSessionManager(() => ({
+    permits: {
+      async clear() {
+        events.push("clear");
+      },
+    },
+    terminate() {
+      events.push("terminate");
+    },
+  }));
+
+  const work = manager.run(session, async () => {
+    events.push("work:start");
+    await workGate;
+    events.push("work:end");
+  });
+  await Promise.resolve();
+  const clearing = manager.clear(session);
+  await Promise.resolve();
+
+  assert.deepEqual(events, ["work:start"]);
+  await assert.rejects(manager.run(session, async () => {}), /closed/);
+  finishWork();
+  await Promise.all([work, clearing]);
+  assert.deepEqual(events, ["work:start", "work:end", "clear", "terminate"]);
+});
+
+test("clear still terminates and closes a session when credential removal fails", async () => {
   let terminated = false;
   const manager = createZamaSessionManager(() => ({
     permits: {
@@ -90,10 +141,8 @@ test("clear still terminates and evicts an SDK when credential removal fails", a
     },
   }));
   const session = {};
-  const first = manager.get(session);
-
   await assert.rejects(manager.clear(session), /storage unavailable/);
 
   assert.equal(terminated, true);
-  assert.notEqual(manager.get(session), first);
+  await assert.rejects(manager.run(session, async () => {}), /closed/);
 });
