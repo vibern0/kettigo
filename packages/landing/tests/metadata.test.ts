@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { renderLandingHtmlMetadata, resolveSiteUrl } from "../vite.config";
 
 describe("landing metadata", () => {
   it("renders the production page with the shared social metadata", () => {
-    const source = readFileSync(resolve(process.cwd(), "index.html"), "utf8");
+    const source = readFileSync("index.html", "utf8");
     const html = renderLandingHtmlMetadata(source, undefined);
 
     expect(html).toContain('href="https://kettigo.xyz"');
@@ -21,8 +20,8 @@ describe("landing metadata", () => {
   });
 
   it("ships the same thumbnail as the app", () => {
-    const landingThumbnail = readFileSync(resolve(process.cwd(), "public/kettigo-share.png"));
-    const appThumbnail = readFileSync(resolve(process.cwd(), "../web/public/kettigo-share.png"));
+    const landingThumbnail = readFileSync("public/kettigo-share.png");
+    const appThumbnail = readFileSync("../web/public/kettigo-share.png");
 
     expect(landingThumbnail).toEqual(appThumbnail);
   });
