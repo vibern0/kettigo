@@ -111,7 +111,7 @@ Cloudflare Workers Builds settings for `kettigo-landing`:
 - Root directory: `/`
 - Build command: `pnpm run landing:build`
 - Deploy command: `pnpm run landing:deploy`
-- Preview branch builds: enabled
+- Preview branch builds: enabled (required for PR checks)
 - Previews Base build command: `pnpm run cf:build`
 - Preview command: `npx wrangler preview`
 
