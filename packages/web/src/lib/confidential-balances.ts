@@ -12,9 +12,8 @@ import type { PasskeySmartSession } from "./smart-session";
 import {
   asChecksumAddress,
   clearValueToBigInt,
-  grantSmartZamaPermit,
+  decryptWithSmartReadSession,
   isZeroEncryptedHandle,
-  withSmartZamaSDK,
 } from "./zama";
 
 const publicClient = createPublicClient({
@@ -39,13 +38,12 @@ async function decryptHandles(
 ) {
   if (requests.length === 0) return {};
 
-  const results = await withSmartZamaSDK(currentSession, (sdk) =>
-    sdk.decryption.decryptValues(
-      requests.map((request) => ({
-        encryptedValue: request.handle,
-        contractAddress: request.contract,
-      })),
-    ),
+  const results = await decryptWithSmartReadSession(
+    currentSession,
+    requests.map((request) => ({
+      encryptedValue: request.handle,
+      contractAddress: request.contract,
+    })),
   );
 
   return Object.fromEntries(requests.map((request) => [request.key, results[request.handle]]));
@@ -94,10 +92,6 @@ export async function decryptConfidentialBalances(
       handle: principalHandle as `0x${string}`,
       contract: pool,
     });
-  }
-
-  if (requests.length > 0) {
-    await grantSmartZamaPermit(currentSession, [token, pool]);
   }
 
   const [decryptedBalances] = await Promise.allSettled([
