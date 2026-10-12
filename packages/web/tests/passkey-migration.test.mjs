@@ -31,7 +31,6 @@ test("runtime config exposes passkey relying-party values", () => {
     read(".env.example"),
     read("worker.ts"),
     read("wrangler.jsonc"),
-    read("wrangler.toml", repoRoot),
   ]) {
     assert.match(config, /NEXT_PUBLIC_PASSKEY_RP_ID/);
     assert.match(config, /NEXT_PUBLIC_PASSKEY_RP_NAME/);

@@ -44,7 +44,11 @@ describe("landing operations README", () => {
     expect(markdown).toContain("dropping waitlist data is not a safe rollback");
   });
 
-  it("links from the root README without changing root deployment instructions", () => {
+  it("links from the root README and documents root deployment ownership", () => {
     expect(read(rootReadme)).toContain("[Landing site operations](packages/landing/README.md)");
+    expect(read(landingReadme)).toContain(
+      "The root\n`wrangler.toml` and `cf:build` script target the landing Worker",
+    );
+    expect(read(landingReadme)).toContain("packages/web/wrangler.jsonc");
   });
 });

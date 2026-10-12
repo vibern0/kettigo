@@ -2,7 +2,7 @@
 
 > Your savings, with a chance to win. Test version on Ethereum Sepolia.
 
-**Live app:** https://kettigo.xyz
+**Live app:** [app.kettigo.xyz](https://app.kettigo.xyz)
 
 Mobile-first confidential prize-savings app for the Zama Developer Program
 Mainnet Season 4 bounty. Kettigo recreates the core PoolTogether no-loss
@@ -95,8 +95,8 @@ claims, and Morpho yield routing.
 
 Frontend:
 
-- **Live app:** https://kettigo.xyz
-- **Host:** Netlify
+- **Live app:** [app.kettigo.xyz](https://app.kettigo.xyz)
+- **Host:** Cloudflare Workers
 - **Status:** fresh safe-withdrawals contracts deployed; run a new app
   end-to-end exercise before judging from the live URL.
 
@@ -161,7 +161,7 @@ Explorer links use the Sepolia Etherscan transaction URL format:
 
 ## How to test the live app
 
-Use the hosted app at https://kettigo.xyz.
+Use the hosted app at [app.kettigo.xyz](https://app.kettigo.xyz).
 
 1. Create an account in the app.
 2. Fund that account with Circle's faucet: https://faucet.circle.com.
@@ -424,8 +424,8 @@ Important current limitations:
 
 ## Where to go from here
 
-1. Keep the funded Netlify app and Sepolia contracts available for judges:
-   https://kettigo.xyz.
+1. Keep the funded Cloudflare app and Sepolia contracts available for judges:
+   [app.kettigo.xyz](https://app.kettigo.xyz).
 2. Record the real-person demo using the verified hosted flow.
 3. Publish the X thread/article and add the final link here.
 4. Continue hardening after submission: draw-start snapshots, larger participant
