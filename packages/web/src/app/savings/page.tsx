@@ -17,7 +17,7 @@ import { sendSmartTransaction, sendSmartTransactionBatch, type PasskeySmartSessi
 import {
   asChecksumAddress,
   createPublicZamaSDK,
-  createSmartZamaSDK,
+  getSmartZamaSDK,
   decryptPublicUint64,
   encryptUint64,
 } from "@/lib/zama";
@@ -469,8 +469,8 @@ export default function SavingsPage() {
     const usdc = asAddress(addresses.usdc, "USDC");
     const token = asAddress(addresses.confidentialUsdc, "Savings token");
     const pool = asAddress(addresses.pool, "Prize pool");
-    const sdk = createSmartZamaSDK(currentSession);
-    const encrypted = await encryptUint64(sdk, token, user, value).finally(() => sdk.terminate());
+    const sdk = getSmartZamaSDK(currentSession);
+    const encrypted = await encryptUint64(sdk, token, user, value);
     const wrapCall = encodeFunctionData({
       abi: confidentialUsdcAbi,
       functionName: "wrap",
@@ -522,8 +522,8 @@ export default function SavingsPage() {
     if (!poolReady) throw new Error("Withdrawals are unavailable right now.");
 
     const pool = asAddress(addresses.pool, "Prize pool");
-    const sdk = createSmartZamaSDK(currentSession);
-    const encrypted = await encryptUint64(sdk, pool, user, value).finally(() => sdk.terminate());
+    const sdk = getSmartZamaSDK(currentSession);
+    const encrypted = await encryptUint64(sdk, pool, user, value);
     const data = encodeFunctionData({
       abi: confidentialPrizePoolAbi,
       functionName: "requestWithdrawal",

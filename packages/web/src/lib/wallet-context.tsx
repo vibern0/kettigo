@@ -19,6 +19,7 @@ import { isPasskeySupported } from "./passkey-webauthn";
 import { publicConfig } from "./runtime-config";
 import type { PasskeySmartSession } from "./smart-session";
 import { getWalletError, type WalletFailureStatus } from "./wallet-errors";
+import { clearSmartZamaSession } from "./zama";
 
 export type WalletStatus =
   | "checking"
@@ -187,13 +188,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [state.status]);
 
   const disconnect = useCallback(async () => {
+    if (state.session) {
+      try {
+        await clearSmartZamaSession(state.session);
+      } catch (error) {
+        console.error("Could not clear saved balance access", error);
+      }
+    }
     balanceLoadId.current += 1;
     setConfidentialBalance(undefined);
     setPrincipal(undefined);
     setConfidentialBalancesError(null);
     setConfidentialBalancesLoading(false);
     setState({ session: null, status: "no-account", error: null, hasSavedAccount: true });
-  }, []);
+  }, [state.session]);
 
   useEffect(() => {
     if (!state.session) {

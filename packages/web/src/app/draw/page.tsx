@@ -14,7 +14,7 @@ import { useWallet } from "@/lib/wallet-context";
 import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
 import {
   asChecksumAddress,
-  createSmartZamaSDK,
+  getSmartZamaSDK,
   decryptUint64,
   isZeroEncryptedHandle,
 } from "@/lib/zama";
@@ -252,12 +252,8 @@ export default function DrawPage() {
       return;
     }
 
-    const sdk = createSmartZamaSDK(currentSession);
-    try {
-      setWinnings(await decryptUint64(sdk, handle as `0x${string}`, pool));
-    } finally {
-      sdk.terminate();
-    }
+    const sdk = getSmartZamaSDK(currentSession);
+    setWinnings(await decryptUint64(sdk, handle as `0x${string}`, pool));
   }
 
   async function claimPrize() {
