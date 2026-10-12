@@ -6,6 +6,7 @@ import { getAddress, hashTypedData } from "viem";
 
 import {
   buildPasskeySigner,
+  createPasskeyFeeEstimator,
   createPasskeyAccount,
   restorePasskeyAccount,
   signSafeTypedData,
@@ -60,6 +61,73 @@ function relay(address = SAFE_ADDRESS) {
     },
   };
 }
+
+test("adds passkey verification gas before paymaster sponsorship", async () => {
+  let sponsoredVerificationGas;
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() {
+      return { maxFeePerGas: 1n };
+    },
+    async postEstimateUserOperationGas(input) {
+      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
+      return {
+        verificationGasLimit: input.userOperation.verificationGasLimit,
+        paymasterData: "0x1234",
+      };
+    },
+  });
+
+  assert.deepEqual(await estimator.preEstimateUserOperationGas({}), { maxFeePerGas: 1n });
+  const result = await estimator.postEstimateUserOperationGas({
+    userOperation: { verificationGasLimit: 413_085n },
+  });
+
+  assert.equal(sponsoredVerificationGas, 463_085n);
+  assert.equal(result.verificationGasLimit, 463_085n);
+  assert.equal(result.paymasterData, "0x1234");
+});
+
+test("does not alter sponsor-signed gas fields", async () => {
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() {
+      return {};
+    },
+    async postEstimateUserOperationGas() {
+      return {
+        verificationGasLimit: 420_000n,
+        paymasterData: "0x1234",
+      };
+    },
+  });
+
+  await assert.rejects(
+    estimator.postEstimateUserOperationGas({
+      userOperation: { verificationGasLimit: 413_085n },
+    }),
+    /insufficient verification gas/i,
+  );
+});
+
+test("rejects a passkey gas margin at the ERC-4337 ceiling", async () => {
+  let sponsorshipRequested = false;
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() {
+      return {};
+    },
+    async postEstimateUserOperationGas() {
+      sponsorshipRequested = true;
+      return {};
+    },
+  });
+
+  await assert.rejects(
+    estimator.postEstimateUserOperationGas({
+      userOperation: { verificationGasLimit: 450_000n },
+    }),
+    /ERC-4337 verification gas limit/i,
+  );
+  assert.equal(sponsorshipRequested, false);
+});
 
 function dependencies(overrides = {}) {
   return {
