@@ -128,21 +128,25 @@ test("clear waits for active work before removing credentials", async () => {
   assert.deepEqual(events, ["work:start", "work:end", "clear", "terminate"]);
 });
 
-test("clear still terminates and closes a session when credential removal fails", async () => {
-  let terminated = false;
+test("clear still terminates and can retry when credential removal fails", async () => {
+  let attempts = 0;
+  let terminations = 0;
   const manager = createZamaSessionManager(() => ({
     permits: {
       async clear() {
-        throw new Error("storage unavailable");
+        attempts += 1;
+        if (attempts === 1) throw new Error("storage unavailable");
       },
     },
     terminate() {
-      terminated = true;
+      terminations += 1;
     },
   }));
   const session = {};
   await assert.rejects(manager.clear(session), /storage unavailable/);
+  await manager.clear(session);
 
-  assert.equal(terminated, true);
+  assert.equal(attempts, 2);
+  assert.equal(terminations, 2);
   await assert.rejects(manager.run(session, async () => {}), /closed/);
 });

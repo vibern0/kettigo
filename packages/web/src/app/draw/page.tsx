@@ -160,6 +160,9 @@ export default function DrawPage() {
   const [publicPrizeReserve, setPublicPrizeReserve] = useState<bigint | undefined>();
   const [accruedYieldAssets, setAccruedYieldAssets] = useState<bigint | undefined>();
   const [winnings, setWinnings] = useState<bigint | undefined>();
+  const winningsRequestId = useRef(0);
+  const winningsSessionRef = useRef(session?.address);
+  winningsSessionRef.current = session?.address;
   const refreshRef = useRef<(blockNumber?: bigint) => Promise<void>>(async () => undefined);
   const addresses = useMemo(
     () => ({
@@ -216,6 +219,8 @@ export default function DrawPage() {
   }, [addresses.pool, ready]);
 
   useEffect(() => {
+    winningsRequestId.current += 1;
+    setWinnings(undefined);
     if (!session?.address) return;
     void refresh();
   }, [session?.address]);
@@ -237,6 +242,8 @@ export default function DrawPage() {
   async function decryptWinnings() {
     const currentSession = activeSession();
     const user = currentSession.address;
+    const requestId = winningsRequestId.current + 1;
+    winningsRequestId.current = requestId;
     if (!ready) throw new Error("Prize checks are unavailable right now.");
 
     const pool = asAddress(addresses.pool, "Prize pool");
@@ -248,13 +255,16 @@ export default function DrawPage() {
     });
 
     if (isZeroEncryptedHandle(handle)) {
+      if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return;
       setWinnings(0n);
       return;
     }
 
-    setWinnings(await withSmartZamaSDK(currentSession, (sdk) =>
+    const revealedWinnings = await withSmartZamaSDK(currentSession, (sdk) =>
       decryptUint64(sdk, handle as `0x${string}`, pool),
-    ));
+    );
+    if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return;
+    setWinnings(revealedWinnings);
   }
 
   async function claimPrize() {

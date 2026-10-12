@@ -59,8 +59,18 @@ test("explicit sign-out clears the session's stored Zama credentials", async () 
   );
 
   assert.match(disconnect, /clearSmartZamaSession\(state\.session\)/);
+  assert.match(disconnect, /return false/);
+  assert.match(disconnect, /Could not sign out safely\. Try again\./);
   assert.ok(
     disconnect.indexOf("balanceLoadId.current += 1")
       < disconnect.indexOf("clearSmartZamaSession(state.session)"),
   );
+});
+
+test("prize reveals are cleared and stale results cannot cross account sessions", async () => {
+  const draw = await readFile(path.join(import.meta.dirname, "..", "src/app/draw/page.tsx"), "utf8");
+
+  assert.match(draw, /setWinnings\(undefined\)/);
+  assert.match(draw, /winningsSessionRef\.current !== user/);
+  assert.match(draw, /winningsRequestId\.current !== requestId/);
 });

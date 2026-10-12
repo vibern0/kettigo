@@ -69,6 +69,10 @@ export function createZamaSessionManager<Session extends object, Resource extend
       .finally(() => {
         entry.resource.terminate();
         resources.delete(session);
+      })
+      .catch((error) => {
+        clearPromises.delete(session);
+        throw error;
       });
     clearPromises.set(session, clearing);
     return clearing;
