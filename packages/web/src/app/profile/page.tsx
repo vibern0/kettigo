@@ -11,6 +11,7 @@ import { balanceBucketLabels } from "@/lib/withdrawal-state";
 export default function ProfilePage() {
   const {
     session,
+    error,
     passkeyReady,
     pimlicoReady,
     disconnect,
@@ -95,6 +96,7 @@ export default function ProfilePage() {
       >
         Sign out
       </button>
+      {error && <p className="text-sm text-danger">{error}</p>}
     </div>
   );
 }

@@ -14,9 +14,9 @@ import { useWallet } from "@/lib/wallet-context";
 import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
 import {
   asChecksumAddress,
-  createSmartZamaSDK,
   decryptUint64,
   isZeroEncryptedHandle,
+  withSmartZamaSDK,
 } from "@/lib/zama";
 import { useToast } from "@/components/Toast";
 import { getPrizeActions, type PrizeActionId } from "@/lib/prize-actions";
@@ -160,6 +160,10 @@ export default function DrawPage() {
   const [publicPrizeReserve, setPublicPrizeReserve] = useState<bigint | undefined>();
   const [accruedYieldAssets, setAccruedYieldAssets] = useState<bigint | undefined>();
   const [winnings, setWinnings] = useState<bigint | undefined>();
+  const [winningsOwner, setWinningsOwner] = useState<`0x${string}` | undefined>();
+  const winningsRequestId = useRef(0);
+  const winningsSessionRef = useRef(session?.address);
+  winningsSessionRef.current = session?.address;
   const refreshRef = useRef<(blockNumber?: bigint) => Promise<void>>(async () => undefined);
   const addresses = useMemo(
     () => ({
@@ -173,7 +177,8 @@ export default function DrawPage() {
   const ready = isAddress(addresses.pool);
   const activeDrawId = drawId === undefined ? undefined : drawId + 1n;
   const roundsClosed = drawId ?? 0n;
-  const hasPrizeToClaim = winnings !== undefined && winnings > 0n;
+  const visibleWinnings = session?.address === winningsOwner ? winnings : undefined;
+  const hasPrizeToClaim = visibleWinnings !== undefined && visibleWinnings > 0n;
   const prizeAssets =
     publicPrizeReserve === undefined || accruedYieldAssets === undefined
       ? undefined
@@ -216,6 +221,9 @@ export default function DrawPage() {
   }, [addresses.pool, ready]);
 
   useEffect(() => {
+    winningsRequestId.current += 1;
+    setWinnings(undefined);
+    setWinningsOwner(undefined);
     if (!session?.address) return;
     void refresh();
   }, [session?.address]);
@@ -237,6 +245,8 @@ export default function DrawPage() {
   async function decryptWinnings() {
     const currentSession = activeSession();
     const user = currentSession.address;
+    const requestId = winningsRequestId.current + 1;
+    winningsRequestId.current = requestId;
     if (!ready) throw new Error("Prize checks are unavailable right now.");
 
     const pool = asAddress(addresses.pool, "Prize pool");
@@ -248,16 +258,25 @@ export default function DrawPage() {
     });
 
     if (isZeroEncryptedHandle(handle)) {
+      if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return false;
       setWinnings(0n);
-      return;
+      setWinningsOwner(user);
+      return true;
     }
 
-    const sdk = createSmartZamaSDK(currentSession);
+    let revealedWinnings: bigint;
     try {
-      setWinnings(await decryptUint64(sdk, handle as `0x${string}`, pool));
-    } finally {
-      sdk.terminate();
+      revealedWinnings = await withSmartZamaSDK(currentSession, (sdk) =>
+        decryptUint64(sdk, handle as `0x${string}`, pool),
+      );
+    } catch (error) {
+      if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return false;
+      throw error;
     }
+    if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return false;
+    setWinnings(revealedWinnings);
+    setWinningsOwner(user);
+    return true;
   }
 
   async function claimPrize() {
@@ -271,6 +290,7 @@ export default function DrawPage() {
     });
     await sendTx(currentSession, asAddress(addresses.pool, "Prize pool"), data);
     setWinnings(undefined);
+    setWinningsOwner(undefined);
     await refresh();
     await refreshConfidentialBalances();
   }
@@ -286,6 +306,7 @@ export default function DrawPage() {
     });
     await sendTx(currentSession, asAddress(addresses.pool, "Prize pool"), data);
     setWinnings(undefined);
+    setWinningsOwner(undefined);
     await refresh();
     await refreshConfidentialBalances();
   }
@@ -300,11 +321,12 @@ export default function DrawPage() {
     return run(decryptWinnings, "Winnings revealed.", "checkPrize");
   }
 
-  async function run(action: () => Promise<void>, ok: string, currentAction?: WorkingAction) {
+  async function run(action: () => Promise<void | boolean>, ok: string, currentAction?: WorkingAction) {
     setStatus("working");
     setWorkingAction(currentAction);
     try {
-      await action();
+      const completed = await action();
+      if (completed === false) return;
       setStatus("success");
       toast({ tone: "success", title: ok });
     } catch (error) {
@@ -386,7 +408,7 @@ export default function DrawPage() {
         <div className="flex min-h-20 items-center justify-between gap-3 rounded-2xl border border-white/50 bg-white/35 px-4 py-3">
           <span className="text-xs font-semibold text-muted">Prize ready</span>
           <span className="min-w-32 max-w-[68%] text-right font-display text-2xl font-bold leading-none tabular-nums text-brand break-words">
-            {formatUSDC(winnings, 6)} USDC
+            {formatUSDC(visibleWinnings, 6)} USDC
           </span>
         </div>
         {prizeActions.map((action) => (

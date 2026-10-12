@@ -19,6 +19,7 @@ import { isPasskeySupported } from "./passkey-webauthn";
 import { publicConfig } from "./runtime-config";
 import type { PasskeySmartSession } from "./smart-session";
 import { getWalletError, type WalletFailureStatus } from "./wallet-errors";
+import { clearSmartZamaSession } from "./zama";
 
 export type WalletStatus =
   | "checking"
@@ -42,7 +43,7 @@ type WalletContextValue = WalletState & {
   confidentialBalancesLoading: boolean;
   confidentialBalancesError: string | null;
   connect: () => Promise<void>;
-  disconnect: () => Promise<void>;
+  disconnect: () => Promise<boolean>;
   refreshConfidentialBalances: () => Promise<void>;
   passkeyReady: boolean;
   pimlicoReady: boolean;
@@ -188,12 +189,26 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(async () => {
     balanceLoadId.current += 1;
+    setState((current) => ({ ...current, error: null }));
+    if (state.session) {
+      try {
+        await clearSmartZamaSession(state.session);
+      } catch (error) {
+        console.error("Could not clear saved balance access", error);
+        setState((current) => ({
+          ...current,
+          error: "Could not sign out safely. Try again.",
+        }));
+        return false;
+      }
+    }
     setConfidentialBalance(undefined);
     setPrincipal(undefined);
     setConfidentialBalancesError(null);
     setConfidentialBalancesLoading(false);
     setState({ session: null, status: "no-account", error: null, hasSavedAccount: true });
-  }, []);
+    return true;
+  }, [state.session]);
 
   useEffect(() => {
     if (!state.session) {

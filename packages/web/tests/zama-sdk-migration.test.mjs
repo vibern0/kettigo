@@ -38,3 +38,41 @@ test("runtime code delegates decryption instead of raw EIP-712 userDecrypt orche
 
   assert.deepEqual(offenders, []);
 });
+
+test("browser decryption persists one seven-day permit for the token and pool", async () => {
+  const zama = await readFile(path.join(import.meta.dirname, "..", "src/lib/zama.ts"), "utf8");
+  const balances = await readFile(path.join(import.meta.dirname, "..", "src/lib/confidential-balances.ts"), "utf8");
+
+  assert.doesNotMatch(zama, /\bmemoryStorage\b/);
+  assert.match(zama, /createPersistentCredentialOptions\(indexedDBStorage\)/);
+  assert.match(balances, /grantSmartZamaPermit\(currentSession, \[token, pool\]\)/);
+  assert.match(balances, /withSmartZamaSDK\(currentSession/);
+  assert.doesNotMatch(balances, /getSmartZamaSDK/);
+  assert.equal((balances.match(/decryptValues\(/g) ?? []).length, 1);
+});
+
+test("explicit sign-out clears the session's stored Zama credentials", async () => {
+  const wallet = await readFile(path.join(import.meta.dirname, "..", "src/lib/wallet-context.tsx"), "utf8");
+  const disconnect = wallet.slice(
+    wallet.indexOf("const disconnect = useCallback"),
+    wallet.indexOf("useEffect(() =>", wallet.indexOf("const disconnect = useCallback")),
+  );
+
+  assert.match(disconnect, /clearSmartZamaSession\(state\.session\)/);
+  assert.match(disconnect, /return false/);
+  assert.match(disconnect, /Could not sign out safely\. Try again\./);
+  assert.ok(
+    disconnect.indexOf("balanceLoadId.current += 1")
+      < disconnect.indexOf("clearSmartZamaSession(state.session)"),
+  );
+});
+
+test("prize reveals are cleared and stale results cannot cross account sessions", async () => {
+  const draw = await readFile(path.join(import.meta.dirname, "..", "src/app/draw/page.tsx"), "utf8");
+
+  assert.match(draw, /setWinnings\(undefined\)/);
+  assert.match(draw, /winningsSessionRef\.current !== user/);
+  assert.match(draw, /winningsRequestId\.current !== requestId/);
+  assert.match(draw, /session\?\.address === winningsOwner \? winnings : undefined/);
+  assert.match(draw, /if \(completed === false\) return/);
+});

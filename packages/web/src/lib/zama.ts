@@ -3,7 +3,7 @@
 import {
   createConfig,
   createWalletAccountStore,
-  memoryStorage,
+  indexedDBStorage,
   ZamaSDK,
   type EIP712TypedData,
   type GenericSigner,
@@ -25,6 +25,10 @@ import {
 import { sepolia } from "viem/chains";
 import { RPC_URL } from "./contracts";
 import type { PasskeySmartSession } from "./smart-session";
+import {
+  createPersistentCredentialOptions,
+  createZamaSessionManager,
+} from "./zama-session-manager";
 
 const ZERO_HANDLE = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -77,10 +81,14 @@ function configFor(signer?: GenericSigner): ZamaConfig {
     chains: [chain],
     provider,
     signer,
-    storage: memoryStorage,
+    ...createPersistentCredentialOptions(indexedDBStorage),
     relayers: { [chain.id]: web({ timeout: DEFAULT_TIMEOUT_MS }) },
   });
 }
+
+const smartZamaSessions = createZamaSessionManager((session: PasskeySmartSession) =>
+  new ZamaSDK(configFor(new SmartAccountZamaSigner(session))),
+);
 
 export function asChecksumAddress(value: unknown, label: string): Address {
   if (typeof value !== "string" || !isAddress(value)) {
@@ -105,8 +113,22 @@ export function createPublicZamaSDK() {
   return new ZamaSDK(configFor());
 }
 
-export function createSmartZamaSDK(session: PasskeySmartSession) {
-  return new ZamaSDK(configFor(new SmartAccountZamaSigner(session)));
+export function withSmartZamaSDK<Result>(
+  session: PasskeySmartSession,
+  operation: (sdk: ZamaSDK) => Promise<Result>,
+) {
+  return smartZamaSessions.run(session, operation);
+}
+
+export async function grantSmartZamaPermit(
+  session: PasskeySmartSession,
+  contractAddresses: Address[],
+) {
+  await smartZamaSessions.grantPermit(session, contractAddresses.map(getAddress));
+}
+
+export async function clearSmartZamaSession(session: PasskeySmartSession) {
+  await smartZamaSessions.clear(session);
 }
 
 export async function encryptUint64(

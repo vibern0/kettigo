@@ -17,7 +17,7 @@ const NAV = [
 
 export function Header() {
   const path = usePathname();
-  const { session, connect, connecting, disconnect, passkeyReady, pimlicoReady, hasSavedAccount } = useWallet();
+  const { session, connect, connecting, disconnect, error, passkeyReady, pimlicoReady, hasSavedAccount } = useWallet();
   const [accountSheetOpen, setAccountSheetOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const navItems = NAV;
@@ -30,8 +30,7 @@ export function Header() {
   }
 
   async function signOut() {
-    setAccountSheetOpen(false);
-    await disconnect();
+    if (await disconnect()) setAccountSheetOpen(false);
   }
 
   const accountSheet =
@@ -74,6 +73,7 @@ export function Header() {
                     Log out
                   </button>
                 </div>
+                {error && <p className="text-sm text-danger">{error}</p>}
               </div>
             </div>
           </div>,
