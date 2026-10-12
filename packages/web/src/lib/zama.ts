@@ -141,7 +141,7 @@ async function ensureReadSessionDelegated(
   const delegator = getAddress(session.address);
   const delegate = getAddress(key.address);
   const expiration = BigInt(Math.floor(key.expiresAtMs / 1_000));
-  const uniqueContracts = [...new Set(contracts.map(getAddress))];
+  const uniqueContracts = [...new Set(contracts.map((address) => getAddress(address)))];
   const delegationStates = await Promise.all(uniqueContracts.map(async (contractAddress) => ({
     contractAddress,
     currentExpiration: await publicClient.readContract(getDelegationExpiryContract(

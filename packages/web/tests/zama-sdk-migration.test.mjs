@@ -49,6 +49,15 @@ test("balance decryption propagates read-session failures", async () => {
   assert.match(source, /await decryptHandles\(requests, currentSession\)/);
 });
 
+test("checksum normalization is not passed directly as an Array map callback", async () => {
+  const zama = await readFile(
+    path.join(import.meta.dirname, "..", "src/lib/zama.ts"),
+    "utf8",
+  );
+
+  assert.doesNotMatch(zama, /\.map\(getAddress\)/);
+});
+
 test("explicit sign-out clears the session's stored Zama credentials", async () => {
   const wallet = await readFile(path.join(import.meta.dirname, "..", "src/lib/wallet-context.tsx"), "utf8");
   const disconnect = wallet.slice(
