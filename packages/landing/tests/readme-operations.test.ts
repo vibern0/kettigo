@@ -42,6 +42,8 @@ describe("landing operations README", () => {
     expect(markdown).toContain("replay");
     expect(markdown).toContain("previous Worker version");
     expect(markdown).toContain("dropping waitlist data is not a safe rollback");
+    expect(markdown).toContain("Previews Base build command: `pnpm run cf:build`");
+    expect(markdown).toContain("Preview command: `npx wrangler preview`");
   });
 
   it("links from the root README and documents root deployment ownership", () => {
