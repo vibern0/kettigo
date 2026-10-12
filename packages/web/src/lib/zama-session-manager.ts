@@ -38,16 +38,9 @@ export function getOrCreateZamaReadSessionKey(
   },
 ): ZamaReadSessionKey {
   const storageKey = readSessionStorageKey(safeAddress);
-  const serialized = storage.getItem(storageKey);
-  if (serialized !== null) {
-    try {
-      const stored: unknown = JSON.parse(serialized);
-      if (isStoredReadSessionKey(stored) && stored.expiresAtMs > nowMs) {
-        return stored;
-      }
-    } catch {
-      // Replace malformed browser state below.
-    }
+  const stored = loadZamaReadSessionKey(storage, safeAddress, dependencies.getAccountAddress);
+  if (stored && stored.expiresAtMs > nowMs) {
+    return stored;
   }
 
   const privateKey = dependencies.generatePrivateKey();
@@ -64,6 +57,26 @@ export function removeZamaReadSessionKey(storage: BrowserStorage, safeAddress: s
   storage.removeItem(readSessionStorageKey(safeAddress));
 }
 
+export function loadZamaReadSessionKey(
+  storage: BrowserStorage,
+  safeAddress: string,
+  getAccountAddress: (privateKey: Hex) => Address,
+) {
+  const serialized = storage.getItem(readSessionStorageKey(safeAddress));
+  if (serialized === null) return undefined;
+
+  try {
+    const stored: unknown = JSON.parse(serialized);
+    if (!isStoredReadSessionKey(stored)) return undefined;
+    return {
+      ...stored,
+      address: getAccountAddress(stored.privateKey),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function signZamaReadSessionTypedData(
   privateKey: Hex,
   typedData: EIP712TypedData,
@@ -75,6 +88,23 @@ export function signZamaReadSessionTypedData(
     types: types as any,
     message: typedData.message as any,
   });
+}
+
+export function prepareZamaReadContracts(
+  requestedContracts: Address[],
+  allowedContracts: Address[],
+) {
+  const allowed = [...new Set(allowedContracts)];
+  const allowedSet = new Set(allowed.map((address) => address.toLowerCase()));
+  for (const contract of requestedContracts) {
+    if (!allowedSet.has(contract.toLowerCase())) {
+      throw new Error(`${contract} is not authorized for balance reads.`);
+    }
+  }
+  return {
+    requestedContracts: [...new Set(requestedContracts)],
+    delegationContracts: allowed,
+  };
 }
 
 type ZamaSessionResource = {
@@ -161,33 +191,37 @@ export function createDelegatedZamaSessionManager<
   SessionKey,
   Resource extends ZamaSessionResource,
 >({
+  loadSessionKey,
   createSessionKey,
+  isSessionKeyValid,
   createResource,
   ensureDelegated,
 }: {
+  loadSessionKey(session: Session): Promise<SessionKey | undefined>;
   createSessionKey(session: Session): Promise<SessionKey>;
+  isSessionKeyValid(key: SessionKey): boolean;
   createResource(key: SessionKey): Resource;
   ensureDelegated(session: Session, key: SessionKey, contracts: Address[]): Promise<void>;
 }) {
   type Entry = {
     key: SessionKey;
     resource: Resource;
+  };
+  type State = {
+    entry?: Entry;
     tail: Promise<void>;
   };
 
-  const entries = new WeakMap<Session, Promise<Entry>>();
+  const states = new WeakMap<Session, State>();
   const closedSessions = new WeakSet<Session>();
+  const clearPromises = new WeakMap<Session, Promise<void>>();
 
-  function getOrCreate(session: Session) {
-    const existing = entries.get(session);
+  function getOrCreateState(session: Session) {
+    const existing = states.get(session);
     if (existing) return existing;
 
-    const created = createSessionKey(session).then((key) => ({
-      key,
-      resource: createResource(key),
-      tail: Promise.resolve(),
-    }));
-    entries.set(session, created);
+    const created = { tail: Promise.resolve() } as State;
+    states.set(session, created);
     return created;
   }
 
@@ -200,28 +234,48 @@ export function createDelegatedZamaSessionManager<
       throw new Error("Zama session is closed.");
     }
 
-    const entry = await getOrCreate(session);
-    const result = entry.tail.then(async () => {
+    const state = getOrCreateState(session);
+    const result = state.tail.then(async () => {
+      if (!state.entry || !isSessionKeyValid(state.entry.key)) {
+        if (state.entry) state.entry.resource.terminate();
+        const key = await createSessionKey(session);
+        state.entry = { key, resource: createResource(key) };
+      }
+      const entry = state.entry;
       await ensureDelegated(session, entry.key, contracts);
       return operation(entry.resource, entry.key);
     });
-    entry.tail = result.then(() => undefined, () => undefined);
+    state.tail = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  async function clear(session: Session) {
-    closedSessions.add(session);
-    const existing = entries.get(session);
-    if (!existing) return;
+  function clear(session: Session) {
+    const existingClear = clearPromises.get(session);
+    if (existingClear) return existingClear;
 
-    const entry = await existing;
-    await entry.tail;
-    try {
-      await entry.resource.permits.clear();
-    } finally {
-      entry.resource.terminate();
-      entries.delete(session);
-    }
+    closedSessions.add(session);
+    const existingState = states.get(session);
+    const clearing = (async () => {
+      if (existingState) await existingState.tail;
+      let entry = existingState?.entry;
+      if (!entry) {
+        const key = await loadSessionKey(session);
+        if (!key) return;
+        entry = { key, resource: createResource(key) };
+      }
+
+      try {
+        await entry.resource.permits.clear();
+      } finally {
+        entry.resource.terminate();
+        states.delete(session);
+      }
+    })().catch((error) => {
+      clearPromises.delete(session);
+      throw error;
+    });
+    clearPromises.set(session, clearing);
+    return clearing;
   }
 
   return { run, clear };

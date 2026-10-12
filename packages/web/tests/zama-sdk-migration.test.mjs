@@ -39,6 +39,16 @@ test("runtime code delegates decryption instead of raw EIP-712 userDecrypt orche
   assert.deepEqual(offenders, []);
 });
 
+test("balance decryption propagates read-session failures", async () => {
+  const source = await readFile(
+    path.join(import.meta.dirname, "..", "src/lib/confidential-balances.ts"),
+    "utf8",
+  );
+
+  assert.doesNotMatch(source, /Promise\.allSettled/);
+  assert.match(source, /await decryptHandles\(requests, currentSession\)/);
+});
+
 test("explicit sign-out clears the session's stored Zama credentials", async () => {
   const wallet = await readFile(path.join(import.meta.dirname, "..", "src/lib/wallet-context.tsx"), "utf8");
   const disconnect = wallet.slice(

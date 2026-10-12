@@ -94,18 +94,12 @@ export async function decryptConfidentialBalances(
     });
   }
 
-  const [decryptedBalances] = await Promise.allSettled([
-    decryptHandles(requests, currentSession),
-  ]);
-
-  for (const decrypted of [decryptedBalances]) {
-    if (decrypted.status !== "fulfilled") continue;
-    if (decrypted.value.confidentialBalance !== undefined) {
-      balances.confidentialBalance = clearValueToBigInt(decrypted.value.confidentialBalance);
-    }
-    if (decrypted.value.principal !== undefined) {
-      balances.principal = clearValueToBigInt(decrypted.value.principal);
-    }
+  const decryptedBalances = await decryptHandles(requests, currentSession);
+  if (decryptedBalances.confidentialBalance !== undefined) {
+    balances.confidentialBalance = clearValueToBigInt(decryptedBalances.confidentialBalance);
+  }
+  if (decryptedBalances.principal !== undefined) {
+    balances.principal = clearValueToBigInt(decryptedBalances.principal);
   }
 
   return balances;
