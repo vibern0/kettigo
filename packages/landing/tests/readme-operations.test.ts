@@ -28,10 +28,12 @@ describe("landing operations README", () => {
   it("documents production deployment, smoke tests, and rollback", () => {
     const markdown = read(landingReadme);
 
-    expect(markdown).toContain("wrangler d1 create kettigo-landing");
-    expect(markdown).toContain("00000000-0000-0000-0000-000000000000");
+    expect(markdown).toContain("wrangler d1 info kettigo");
+    expect(markdown).toContain("d6cfede8-60bb-45dc-b342-60e6da48f1e4");
+    expect(markdown).not.toContain("wrangler d1 create kettigo");
+    expect(markdown).not.toContain("00000000-0000-0000-0000-000000000000");
     expect(markdown).toContain(
-      "npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo-landing --remote",
+      "npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo --remote",
     );
     expect(markdown).toContain("Approve remote emails with a targeted D1 update");
     expect(markdown).toContain("Waitlist join");

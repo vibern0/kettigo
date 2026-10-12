@@ -25,8 +25,8 @@ MORPHO_KEEPER_START_BLOCK = "11864127"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "kettigo-landing"
-database_id = "f6f8c304-fa39-495d-8307-d01f3899968a"
+database_name = "kettigo"
+database_id = "d6cfede8-60bb-45dc-b342-60e6da48f1e4"
 migrations_dir = "packages/landing/migrations"
 
 [previews]
@@ -44,6 +44,6 @@ MORPHO_KEEPER_START_BLOCK = "11864127"
 
 [[previews.d1_databases]]
 binding = "DB"
-database_name = "kettigo-landing"
-database_id = "f6f8c304-fa39-495d-8307-d01f3899968a"
+database_name = "kettigo"
+database_id = "d6cfede8-60bb-45dc-b342-60e6da48f1e4"
 migrations_dir = "packages/landing/migrations"
