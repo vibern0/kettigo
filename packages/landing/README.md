@@ -47,21 +47,16 @@ npm exec --workspace @kettigo/landing wrangler d1 execute kettigo-landing-local 
 
 ## Production D1
 
-Create the shared owner-operated production D1 database from `packages/landing`:
+The shared production D1 database is already provisioned as `kettigo` with ID
+`d6cfede8-60bb-45dc-b342-60e6da48f1e4`. Verify it from `packages/landing`
+before applying migrations or deploying:
 
 ```bash
-npm exec --workspace @kettigo/landing wrangler d1 create kettigo
+npm exec --workspace @kettigo/landing wrangler d1 info kettigo
 ```
 
-Copy the returned `database_id` into `packages/landing/wrangler.jsonc`,
-replacing the local placeholder:
-
-```json
-"database_id": "00000000-0000-0000-0000-000000000000"
-```
-
-Do not invent this identifier. It must come from the Cloudflare account that
-will run the Worker. Keep the `DB` binding name unchanged.
+Stop if the reported name or ID differs. Keep the `DB` binding name unchanged,
+and do not create or rebind the production database during a routine deploy.
 
 Apply the migration to the remote D1 database after the ID is configured:
 
@@ -173,7 +168,7 @@ contracts.
 - `npm run landing:test`
 - `npm run landing:build`
 - Local migration and email approval succeed.
-- Production D1 database ID replaces `00000000-0000-0000-0000-000000000000`.
+- Production D1 reports `kettigo` / `d6cfede8-60bb-45dc-b342-60e6da48f1e4`.
 - Remote migration applies before remote approvals.
 - Preview deployment passes waitlist join, replay, approval, and app gate smoke
   tests before the custom domain is connected.

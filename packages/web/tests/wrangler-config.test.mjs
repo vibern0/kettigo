@@ -14,14 +14,22 @@ const publicRuntimeVars = [
   ["NEXT_PUBLIC_PASSKEY_RP_NAME", "Kettigo"],
   ["NEXT_PUBLIC_USDC_ADDRESS", "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"],
 ];
+const expectedD1Binding = {
+  binding: "DB",
+  database_name: "kettigo",
+  database_id: "d6cfede8-60bb-45dc-b342-60e6da48f1e4",
+  migrations_dir: "../landing/migrations",
+};
+
+function tomlSection(name, nextName) {
+  const start = rootWrangler.indexOf(name);
+  const end = nextName ? rootWrangler.indexOf(nextName, start + name.length) : rootWrangler.length;
+  return rootWrangler.slice(start, end);
+}
 
 test("web Worker config binds the shared waitlist D1 database", () => {
-  assert.match(webWrangler, /"d1_databases"\s*:/);
-  assert.match(webWrangler, /"binding": "DB"/);
-  assert.match(webWrangler, /"database_name": "kettigo"/);
-  assert.match(webWrangler, /"database_id": "d6cfede8-60bb-45dc-b342-60e6da48f1e4"/);
-  assert.match(webWrangler, /"migrations_dir": "\.\.\/landing\/migrations"/);
-  assert.match(webWrangler, /"previews"\s*:/);
+  assert.deepEqual(webConfig.d1_databases, [expectedD1Binding]);
+  assert.deepEqual(webConfig.previews.d1_databases, [expectedD1Binding]);
   assert.deepEqual(webConfig.assets.run_worker_first, [
     "/",
     "/draw",
@@ -34,12 +42,19 @@ test("web Worker config binds the shared waitlist D1 database", () => {
 });
 
 test("root app Worker config binds the shared waitlist D1 database", () => {
-  assert.match(rootWrangler, /\[\[d1_databases\]\]/);
-  assert.match(rootWrangler, /binding = "DB"/);
-  assert.match(rootWrangler, /database_name = "kettigo"/);
-  assert.match(rootWrangler, /database_id = "d6cfede8-60bb-45dc-b342-60e6da48f1e4"/);
-  assert.match(rootWrangler, /migrations_dir = "packages\/landing\/migrations"/);
-  assert.match(rootWrangler, /\[\[previews\.d1_databases\]\]/);
+  const expectedBinding = [
+    'binding = "DB"',
+    'database_name = "kettigo"',
+    'database_id = "d6cfede8-60bb-45dc-b342-60e6da48f1e4"',
+    'migrations_dir = "packages/landing/migrations"',
+  ];
+  const productionD1 = tomlSection("[[d1_databases]]", "[previews]");
+  const previewD1 = tomlSection("[[previews.d1_databases]]");
+
+  for (const assignment of expectedBinding) {
+    assert.ok(productionD1.includes(assignment));
+    assert.ok(previewD1.includes(assignment));
+  }
   assert.match(rootWrangler, /run_worker_first = \["\/", "\/draw", "\/draw\/", "\/profile", "\/profile\/", "\/savings", "\/savings\/"\]/);
 });
 
