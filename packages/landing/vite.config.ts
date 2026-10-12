@@ -14,7 +14,7 @@ export function resolveSiteUrl(value = process.env.VITE_SITE_URL): string {
 
 export function renderLandingHtmlMetadata(html: string, value = process.env.VITE_SITE_URL): string {
   const siteUrl = resolveSiteUrl(value);
-  return html.replaceAll("%SITE_URL%", siteUrl).replaceAll("%OG_IMAGE_URL%", `${siteUrl}/og-image.png`);
+  return html.replaceAll("%SITE_URL%", siteUrl).replaceAll("%OG_IMAGE_URL%", `${siteUrl}/kettigo-share.png`);
 }
 
 function landingMetadataPlugin(): Plugin {
