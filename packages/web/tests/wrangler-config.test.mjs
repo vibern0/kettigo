@@ -18,8 +18,8 @@ const publicRuntimeVars = [
 test("web Worker config binds the shared waitlist D1 database", () => {
   assert.match(webWrangler, /"d1_databases"\s*:/);
   assert.match(webWrangler, /"binding": "DB"/);
-  assert.match(webWrangler, /"database_name": "kettigo-landing"/);
-  assert.match(webWrangler, /"database_id": "f6f8c304-fa39-495d-8307-d01f3899968a"/);
+  assert.match(webWrangler, /"database_name": "kettigo"/);
+  assert.match(webWrangler, /"database_id": "d6cfede8-60bb-45dc-b342-60e6da48f1e4"/);
   assert.match(webWrangler, /"migrations_dir": "\.\.\/landing\/migrations"/);
   assert.match(webWrangler, /"previews"\s*:/);
   assert.deepEqual(webConfig.assets.run_worker_first, [
@@ -36,8 +36,8 @@ test("web Worker config binds the shared waitlist D1 database", () => {
 test("root app Worker config binds the shared waitlist D1 database", () => {
   assert.match(rootWrangler, /\[\[d1_databases\]\]/);
   assert.match(rootWrangler, /binding = "DB"/);
-  assert.match(rootWrangler, /database_name = "kettigo-landing"/);
-  assert.match(rootWrangler, /database_id = "f6f8c304-fa39-495d-8307-d01f3899968a"/);
+  assert.match(rootWrangler, /database_name = "kettigo"/);
+  assert.match(rootWrangler, /database_id = "d6cfede8-60bb-45dc-b342-60e6da48f1e4"/);
   assert.match(rootWrangler, /migrations_dir = "packages\/landing\/migrations"/);
   assert.match(rootWrangler, /\[\[previews\.d1_databases\]\]/);
   assert.match(rootWrangler, /run_worker_first = \["\/", "\/draw", "\/draw\/", "\/profile", "\/profile\/", "\/savings", "\/savings\/"\]/);

@@ -50,7 +50,7 @@ npm exec --workspace @kettigo/landing wrangler d1 execute kettigo-landing-local 
 Create the shared owner-operated production D1 database from `packages/landing`:
 
 ```bash
-npm exec --workspace @kettigo/landing wrangler d1 create kettigo-landing
+npm exec --workspace @kettigo/landing wrangler d1 create kettigo
 ```
 
 Copy the returned `database_id` into `packages/landing/wrangler.jsonc`,
@@ -66,7 +66,7 @@ will run the Worker. Keep the `DB` binding name unchanged.
 Apply the migration to the remote D1 database after the ID is configured:
 
 ```bash
-npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo-landing --remote
+npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo --remote
 ```
 
 The web Worker has its own Wrangler config at `packages/web/wrangler.jsonc`.
