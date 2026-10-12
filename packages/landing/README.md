@@ -83,7 +83,7 @@ The two Workers have separate deployment targets:
 
 | Site | Worker | Wrangler config |
 | --- | --- | --- |
-| `https://kettigo.xyz` | `kettigo-landing` | `packages/landing/wrangler.jsonc` |
+| `https://kettigo.xyz` | `kettigo-landing` | `wrangler.toml` (mirrors `packages/landing/wrangler.jsonc`) |
 | `https://app.kettigo.xyz` | `kettigo` | `packages/web/wrangler.jsonc` |
 
 Use the repository's pinned `pnpm@10.11.1` from the repository root:
@@ -99,10 +99,11 @@ The deploy script also applies the empty Cron Trigger list after uploading the
 Worker. Keep that step so stale keeper schedules are removed.
 
 The landing config owns the `kettigo.xyz` custom domain. The root
-`wrangler.toml` and `cf:build` script target the **app**, not the landing.
-Never run an unqualified `wrangler deploy` from the repository root for the
-landing Worker. Workers Builds can override the configured Worker name and
-upload the app to the landing Worker even when DNS is correct.
+`wrangler.toml` and `cf:build` script target the landing Worker because
+Cloudflare Workers Builds reads the repository-root convention. Keep the root
+config synchronized with `packages/landing/wrangler.jsonc`. The app remains
+isolated in `packages/web/wrangler.jsonc` and must always be deployed with that
+explicit config path.
 
 Cloudflare Workers Builds settings for `kettigo-landing`:
 
@@ -110,6 +111,9 @@ Cloudflare Workers Builds settings for `kettigo-landing`:
 - Root directory: `/`
 - Build command: `pnpm run landing:build`
 - Deploy command: `pnpm run landing:deploy`
+- Preview branch builds: enabled (required for PR checks)
+- Previews Base build command: `pnpm run cf:build`
+- Preview command: `npx wrangler preview`
 
 Keep these repository scripts in the hosted build settings; the landing deploy
 script supplies the explicit config path. A manual landing deployment alone

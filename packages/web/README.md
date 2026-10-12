@@ -3,7 +3,7 @@
 Mobile-first PWA. Next.js 15 (App Router) + Tailwind + wagmi v2 + Safe
 passkeys + Pimlico.
 
-Live app: https://kettigo.xyz
+Live app: [app.kettigo.xyz](https://app.kettigo.xyz)
 
 ## Stack
 
@@ -65,7 +65,7 @@ as the landing Worker, while its assets and entry point remain package-local.
 Build and deploy from the repository root:
 
 ```bash
-pnpm run cf:build
+pnpm run web:build
 pnpm exec wrangler deploy --config packages/web/wrangler.jsonc
 ```
 
