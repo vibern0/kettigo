@@ -10,13 +10,24 @@
   },
   "assets": {
     "binding": "ASSETS",
-    "directory": "out"
+    "directory": "out",
+    "run_worker_first": [
+      "/",
+      "/draw",
+      "/draw/",
+      "/profile",
+      "/profile/",
+      "/savings",
+      "/savings/"
+    ]
   },
   "vars": {
     "NEXT_PUBLIC_CHAIN_ID": "11155111",
     "NEXT_PUBLIC_RPC_URL": "https://ethereum-sepolia-rpc.publicnode.com",
     "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS": "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b",
     "NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS": "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a",
+    "NEXT_PUBLIC_PASSKEY_RP_ID": "kettigo.xyz",
+    "NEXT_PUBLIC_PASSKEY_RP_NAME": "Kettigo",
     "NEXT_PUBLIC_USDC_ADDRESS": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     "MORPHO_KEEPER_START_BLOCK": "11864127"
   },
@@ -34,6 +45,8 @@
       "NEXT_PUBLIC_RPC_URL": "https://ethereum-sepolia-rpc.publicnode.com",
       "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS": "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b",
       "NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS": "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a",
+      "NEXT_PUBLIC_PASSKEY_RP_ID": "blvieira5.workers.dev",
+      "NEXT_PUBLIC_PASSKEY_RP_NAME": "Kettigo",
       "NEXT_PUBLIC_USDC_ADDRESS": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
       "MORPHO_KEEPER_START_BLOCK": "11864127"
     },

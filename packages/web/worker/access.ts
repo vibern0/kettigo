@@ -1,14 +1,8 @@
 export type WaitlistJoinResult = { ok: true; status: "joined" | "already_joined" };
 
-export type AccessClaimResult =
-  | { ok: true; status: "approved" }
-  | { ok: false; status: "pending" | "claimed" | "invalid_request" };
-
 export type AccessStatusResult =
   | { ok: true; status: "approved" }
   | { ok: false; status: "pending" | "invalid_request" };
-
-export const JOINED_MESSAGE = "i've joined";
 
 type D1StatementLike = {
   bind(...values: unknown[]): D1StatementLike;
@@ -23,9 +17,6 @@ type D1Like = {
 type WaitlistRow = {
   email_normalized: string;
   approved_at: string | null;
-  wallet_address: string | null;
-  joined_signature: string | null;
-  joined_message: string | null;
 };
 
 export function normalizeEmail(value: string): string {
@@ -71,43 +62,6 @@ export async function registerWaitlistInterest(
   }
 }
 
-export async function claimApprovedAccess(
-  db: D1Like,
-  emailInput: string,
-  walletAddress: string,
-  signature: string,
-): Promise<AccessClaimResult> {
-  const email = normalizeEmail(emailInput);
-  if (!isValidEmail(email) || walletAddress.trim() === "" || signature.trim() === "") {
-    return { ok: false, status: "invalid_request" };
-  }
-
-  const row = await findWaitlistRow(db, email);
-  if (!row?.approved_at) {
-    return { ok: false, status: "pending" };
-  }
-
-  if (row.joined_signature) {
-    return row.wallet_address === walletAddress && row.joined_signature === signature
-      ? { ok: true, status: "approved" }
-      : { ok: false, status: "claimed" };
-  }
-
-  await db
-    .prepare(
-      `UPDATE waitlist_entries
-      SET wallet_address = ?, joined_signature = ?, joined_message = ?
-      WHERE email_normalized = ? AND approved_at IS NOT NULL AND joined_signature IS NULL`,
-    )
-    .bind(walletAddress, signature, JOINED_MESSAGE, email)
-    .run();
-
-  const updated = await findWaitlistRow(db, email);
-  return updated?.wallet_address === walletAddress && updated.joined_signature === signature
-    ? { ok: true, status: "approved" }
-    : { ok: false, status: "claimed" };
-}
-
 export async function readAccessStatus(db: D1Like, emailInput: string): Promise<AccessStatusResult> {
   const email = normalizeEmail(emailInput);
   if (!isValidEmail(email)) {
@@ -122,10 +76,7 @@ async function findWaitlistRow(db: D1Like, email: string): Promise<WaitlistRow |
     .prepare(
       `SELECT
         email_normalized,
-        approved_at,
-        wallet_address,
-        joined_signature,
-        joined_message
+        approved_at
       FROM waitlist_entries
       WHERE email_normalized = ?`,
     )

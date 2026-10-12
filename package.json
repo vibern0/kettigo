@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.11.1",
-  "description": "Kettigo — mobile-first no-loss lottery on PoolTogether architecture, Web3-abstracted for non-crypto users.",
+  "description": "Kettigo — mobile-first no-loss prize savings with passkey-owned Safe accounts.",
   "engines": {
     "node": ">=22"
   },
@@ -16,9 +16,25 @@
     "hono": "4.13.8",
     "lodash": "4.18.1",
     "postcss": "8.5.28",
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2",
     "stream-json": "3.7.0",
     "uuid": "14.0.2",
     "ws": "8.21.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "axios": "1.20.0",
+      "decode-uri-component": "0.5.0",
+      "hono": "4.13.8",
+      "lodash": "4.18.1",
+      "postcss": "8.5.28",
+      "sharp": "0.35.5",
+      "source-map-js": "1.2.2",
+      "stream-json": "3.7.0",
+      "uuid": "14.0.2",
+      "ws": "8.21.3"
+    }
   },
   "scripts": {
     "cf:build": "pnpm --filter @kettigo/web build",
@@ -42,6 +58,6 @@
     "keeper:watch": "node packages/keeper/src/watch-keepers.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.140.0"
+    "wrangler": "4.149.0"
   }
 }

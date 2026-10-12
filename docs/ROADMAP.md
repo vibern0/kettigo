@@ -14,8 +14,8 @@ This roadmap targets the Zama Developer Program Mainnet Season 4 bounty. See
 - Replace the plaintext ERC-4626 `Vault` and `PrizePool` with a confidential
   pool built from Zama/OpenZeppelin confidential-token primitives.
 - Use an admin-funded, public global prize as the documented mock yield source.
-- Use Web3Auth, Safe, and Pimlico as the single account-abstraction path for
-  Zama signing and judge testing.
+- Use a passkey-owned Safe and Pimlico as the single account-abstraction path
+  for Zama signing and judge testing.
 - Defer real yield and mainnet until the required flow works end to end.
 
 **Exit gate:** architecture note names contracts, token flow, encrypted state,
@@ -93,15 +93,16 @@ winner discovery, claim, and principal withdrawal.
 
 **Goal:** make every required action understandable and reliable.
 
-- Connect the Web3Auth-backed Safe smart account on Ethereum Sepolia.
+- Connect the passkey-owned Safe smart account on Ethereum Sepolia.
 - Add faucet, approval/wrap, deposit, balance decryption, draw, winnings
   decryption, claim, and withdrawal states.
 - Show transaction pending/success/failure feedback.
 - Handle missing approval, insufficient balance, wrong network, rejected
   signatures, relayer failures, unsupported token, and unavailable draw.
 - Keep admin/keeper controls clearly separated from participant actions.
-- Revisit Web3Auth/Safe/Pimlico only after their signer and account model is
-  proven compatible with Zama input proofs and EIP-712 user decryption.
+- Remove the legacy account path only after the passkey/Safe/Pimlico signer and
+  account model is proven compatible with Zama input proofs and EIP-712 user
+  decryption.
 
 **Exit gate:** a new judge can complete every required action from the UI
 without using Hardhat or a block explorer.
@@ -143,7 +144,7 @@ the complete flow; submission contains every required link.
   basic lifecycle tests, and the product's no-loss UX.
 - Replace: plaintext ERC-4626 accounting, `blockhash` randomness, public winner,
   direct plaintext prize payment, and current contract ABIs.
-- Defer: Web3Auth/Safe/Pimlico, real yield, fiat on-ramp, mobile wrappers,
+- Defer: account recovery, real yield, fiat on-ramp, mobile wrappers,
   official PoolTogether integration, and mainnet. See [`TODO.md`](TODO.md) for
   the later Morpho USDC/WETH yield adapter notes.
 

@@ -62,8 +62,7 @@ export default function HomePage() {
         <section className="card space-y-4">
           <p className="label">Get started</p>
           <p className="text-muted text-sm">
-            Sign in with your Google or Apple account. No passwords, no
-            extensions, no hidden fees.
+            Create an account with your device. No passwords, extensions, or hidden fees.
           </p>
           <ConnectButton fullWidth />
         </section>

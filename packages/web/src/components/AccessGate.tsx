@@ -1,104 +1,23 @@
 "use client";
 
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { checkAccess, claimAccess, joinWaitlist } from "@/lib/access";
+import { checkAccess, joinWaitlist } from "@/lib/access";
 import {
-  hasCachedApprovedAccess,
   hasCachedApprovedSession,
-  rememberApprovedAccess,
   rememberApprovedEmail,
-  shouldBypassAccessGate,
 } from "@/lib/access-cache";
-import { useWallet } from "@/lib/wallet-context";
-import { ConnectButton } from "./ConnectButton";
 
-type GateState = "checking" | "approved" | "email" | "ready" | "pending" | "claimed" | "error";
+type GateState = "checking" | "approved" | "email" | "pending" | "error";
 
 export function AccessGate({ children }: { children: ReactNode }) {
-  const { session, ready } = useWallet();
   const [email, setEmail] = useState("");
-  const [approvedEmail, setApprovedEmail] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("Enter your email to check whether your access is ready.");
   const [submitting, setSubmitting] = useState(false);
   const [gateState, setGateState] = useState<GateState>("checking");
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function verify() {
-      const hasApprovedSession = hasCachedApprovedSession();
-      const hasMatchingApprovedAccess = session
-        ? hasCachedApprovedAccess({ email: session.email ?? "", walletAddress: session.address })
-        : false;
-      if (shouldBypassAccessGate({
-        walletReady: ready,
-        hasApprovedSession,
-        hasMatchingApprovedAccess,
-        hasSession: Boolean(session),
-      })) {
-        setGateState("approved");
-        return;
-      }
-      if (!ready) {
-        setGateState("checking");
-        return;
-      }
-      if (!session) {
-        setGateState((current) => (current === "ready" ? "ready" : "email"));
-        return;
-      }
-      if (!session.email) {
-        setGateState("error");
-        setStatus("This login did not include an email.");
-        return;
-      }
-      if (approvedEmail && session.email.toLowerCase() !== approvedEmail) {
-        setGateState("error");
-        setStatus("Please sign in with the same email you checked for access.");
-        return;
-      }
-
-      setGateState("checking");
-      try {
-        const access = await checkAccess(session.email);
-        if (cancelled) return;
-        if (!access.ok) {
-          setGateState("pending");
-          setStatus("You're on the list. We'll let you know when your access opens.");
-          return;
-        }
-        setApprovedEmail(session.email.toLowerCase());
-        const signature = await session.signJoinedMessage();
-        const result = await claimAccess({
-          email: session.email,
-          walletAddress: session.address,
-          signature,
-        });
-        if (cancelled) return;
-        if (result.ok) {
-          rememberApprovedAccess({ email: session.email, walletAddress: session.address });
-          setGateState("approved");
-          return;
-        }
-        setGateState(result.status === "claimed" ? "claimed" : "pending");
-        setStatus(
-          result.status === "claimed"
-            ? "That email is already linked to another account."
-            : "You're on the list. We'll let you know when your access opens.",
-        );
-      } catch {
-        if (!cancelled) {
-          setGateState("error");
-          setStatus("We could not check your access right now.");
-        }
-      }
-    }
-
-    void verify();
-    return () => {
-      cancelled = true;
-    };
-  }, [approvedEmail, ready, session]);
+    setGateState(hasCachedApprovedSession() ? "approved" : "email");
+  }, []);
 
   async function submitEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -110,15 +29,12 @@ export function AccessGate({ children }: { children: ReactNode }) {
       if (access.ok) {
         const normalizedEmail = email.trim().toLowerCase();
         rememberApprovedEmail(normalizedEmail);
-        setApprovedEmail(normalizedEmail);
-        setGateState("ready");
-        setStatus("Access is ready. Sign in with this same email to continue.");
+        setGateState("approved");
         return;
       }
 
       const result = await joinWaitlist(email);
       if (result.ok) {
-        setApprovedEmail(null);
         setGateState("pending");
         setStatus("You're on the list. We'll let you know when your access opens.");
         return;
@@ -163,8 +79,8 @@ export function AccessGate({ children }: { children: ReactNode }) {
               Your savings, with a chance to win.
             </h1>
             <p className="max-w-xl text-base leading-relaxed text-muted md:text-lg">
-              Kettigo is opening gradually. Check your email first, then sign in with that same email when your
-              access is ready.
+              Kettigo is opening gradually. Check your email first, then create or open your account when access
+              is ready.
             </p>
           </div>
         </section>
@@ -191,13 +107,6 @@ export function AccessGate({ children }: { children: ReactNode }) {
               {submitting ? "Checking..." : "Continue"}
             </button>
           </form>
-
-          {(gateState === "ready" || session) && (
-            <div className="space-y-3 rounded-[22px] border border-[var(--cobalt-dark)] bg-white/35 p-4">
-              <p className="label">Sign in</p>
-              <ConnectButton fullWidth />
-            </div>
-          )}
 
           <p className="text-sm leading-relaxed text-muted" role="status" aria-live="polite">
             {status}

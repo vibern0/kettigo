@@ -140,7 +140,7 @@ Where to find them:
 
 - Zama's forum, Discord, Developer Program, product users, and community calls.
 - Stablecoin and Ethereum communities where promotional posts are welcome.
-- Complementary Safe, Web3Auth, Pimlico, Morpho, and Circle developer
+- Complementary Safe, WebAuthn, Pimlico, Morpho, and Circle developer
   ecosystems.
 - ETHGlobal, FHE, and privacy hackathon alumni.
 - The team's direct network and referrals from qualified early members.
@@ -452,7 +452,7 @@ participant counts, draw cadence, and operations until the technology matures.
 
 ### Week 4: Add complementary partners
 
-- Approach Zama first, followed by Safe, Web3Auth, Pimlico, Morpho, Circle, and
+- Approach Zama first, followed by Safe, WebAuthn, Pimlico, Morpho, Circle, and
   ETHGlobal communities where there is a genuine integration story.
 - Prefer co-hosted walkthroughs and useful technical content over paid promotion.
 - Give every partner a distinct source link and compare qualified-user rates.
@@ -484,7 +484,7 @@ the invited product experience separate:
 
 This controls the exact preview cohort without adding invite-code logic or an
 application database. It is appropriate for the first 20-100 research
-participants. The tradeoff is an extra authentication step before Web3Auth,
+participants. The tradeoff is an extra authentication step before the app's passkey,
 which is acceptable for a guided preview but can distort measurements of the
 eventual consumer onboarding flow.
 

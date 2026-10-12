@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
-import Script from "next/script";
 import { Providers } from "./providers";
 import { Header } from "@/components/Header";
 import "./globals.css";
@@ -55,9 +54,33 @@ const interphasesMono = localFont({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://app.kettigo.xyz"),
   title: "Kettigo — Savings with a chance to win",
   description:
     "Your savings, with weekly prizes. 100% of your principal, always.",
+  openGraph: {
+    type: "website",
+    url: "/",
+    siteName: "Kettigo",
+    title: "Kettigo — Savings with a chance to win",
+    description:
+      "Your savings, with weekly prizes. 100% of your principal, always.",
+    images: [
+      {
+        url: "/kettigo-share.png",
+        width: 1734,
+        height: 907,
+        alt: "Kettigo — Save. Win. Keep it all.",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Kettigo — Savings with a chance to win",
+    description:
+      "Your savings, with weekly prizes. 100% of your principal, always.",
+    images: ["/kettigo-share.png"],
+  },
   manifest: "/manifest.json",
   icons: {
     icon: "/kettigo-mark.svg",
@@ -82,7 +105,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${ramillas.variable} ${interphasesMono.variable}`}>
       <body className="font-sans">
-        <Script src="/config.js" strategy="beforeInteractive" />
         <Providers>
           <div className="app-shell flex flex-col">
             <Header />

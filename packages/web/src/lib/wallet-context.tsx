@@ -10,24 +10,33 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import {
-  connectSmartAccount,
-  restoreSmartAccount,
-  type SmartSession,
-  isWeb3AuthConfigured,
-  isPimlicoConfigured,
-} from "./web3auth";
+
 import { decryptConfidentialBalances } from "./confidential-balances";
-import { getWalletErrorMessage } from "./wallet-errors";
+import { PIMLICO_API_KEY } from "./contracts";
+import { readPasskeyMetadata } from "./passkey-metadata";
+import { createPasskeyAccount, restorePasskeyAccount } from "./passkey-safe";
+import { isPasskeySupported } from "./passkey-webauthn";
+import { publicConfig } from "./runtime-config";
+import type { PasskeySmartSession } from "./smart-session";
+import { getWalletError, type WalletFailureStatus } from "./wallet-errors";
+
+export type WalletStatus =
+  | "checking"
+  | "no-account"
+  | "creating"
+  | "awaiting-verification"
+  | "ready"
+  | WalletFailureStatus;
 
 type WalletState = {
-  session: SmartSession | null;
-  connecting: boolean;
+  session: PasskeySmartSession | null;
+  status: WalletStatus;
   error: string | null;
-  ready: boolean;
+  hasSavedAccount: boolean;
 };
 
 type WalletContextValue = WalletState & {
+  connecting: boolean;
   confidentialBalance: bigint | undefined;
   principal: bigint | undefined;
   confidentialBalancesLoading: boolean;
@@ -35,7 +44,7 @@ type WalletContextValue = WalletState & {
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   refreshConfidentialBalances: () => Promise<void>;
-  web3AuthReady: boolean;
+  passkeyReady: boolean;
   pimlicoReady: boolean;
 };
 
@@ -44,9 +53,9 @@ const WalletContext = createContext<WalletContextValue | null>(null);
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<WalletState>({
     session: null,
-    connecting: false,
+    status: "checking",
     error: null,
-    ready: false,
+    hasSavedAccount: false,
   });
   const [confidentialBalance, setConfidentialBalance] = useState<bigint | undefined>();
   const [principal, setPrincipal] = useState<bigint | undefined>();
@@ -54,7 +63,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [confidentialBalancesError, setConfidentialBalancesError] = useState<string | null>(null);
   const balanceLoadId = useRef(0);
 
-  const loadConfidentialBalances = useCallback(async (currentSession: SmartSession) => {
+  const loadConfidentialBalances = useCallback(async (currentSession: PasskeySmartSession) => {
     const loadId = balanceLoadId.current + 1;
     balanceLoadId.current = loadId;
     setConfidentialBalancesLoading(true);
@@ -64,7 +73,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (balanceLoadId.current !== loadId) return;
       setConfidentialBalance(balances.confidentialBalance);
       setPrincipal(balances.principal);
-    } catch {
+    } catch (error) {
+      console.error("Could not load account balances", error);
       if (balanceLoadId.current !== loadId) return;
       setConfidentialBalancesError("Could not load your savings balance.");
     } finally {
@@ -76,69 +86,114 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function restoreSession() {
-      if (!isWeb3AuthConfigured()) {
-        setState((s) => ({ ...s, connecting: false, ready: true }));
+      if (!isPasskeySupported()) {
+        setState({
+          session: null,
+          status: "unsupported",
+          error: "This browser or device cannot open your account.",
+          hasSavedAccount: false,
+        });
+        return;
+      }
+
+      const stored = readPasskeyMetadata();
+      if (stored.status === "missing") {
+        setState({ session: null, status: "no-account", error: null, hasSavedAccount: false });
+        return;
+      }
+      if (stored.status === "invalid") {
+        setState({
+          session: null,
+          status: "invalid-metadata",
+          error: "Saved account details cannot be used. Creating another account will give you a different address.",
+          hasSavedAccount: true,
+        });
+        return;
+      }
+      if (!PIMLICO_API_KEY) {
+        setState({
+          session: null,
+          status: "service-unavailable",
+          error: "Account service is unavailable right now. Try again.",
+          hasSavedAccount: true,
+        });
         return;
       }
 
       try {
-        const session = await restoreSmartAccount();
-        if (cancelled) return;
-        setState({ session, connecting: false, error: null, ready: true });
-      } catch {
-        if (cancelled) return;
-        setState({
-          session: null,
-          connecting: false,
-          error: "Could not restore your login.",
-          ready: true,
+        const session = await restorePasskeyAccount({
+          metadata: stored.metadata,
+          rpId: passkeyConfig().rpId,
         });
+        if (!cancelled) setState({ session, status: "ready", error: null, hasSavedAccount: true });
+      } catch (error) {
+        console.error("Could not restore passkey account", error);
+        if (!cancelled) {
+          const failure = getWalletError(error);
+          setState({
+            session: null,
+            status: failure.status,
+            error: failure.message,
+            hasSavedAccount: true,
+          });
+        }
       }
     }
 
     void restoreSession();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const connect = useCallback(async () => {
-    if (!isWeb3AuthConfigured()) {
-      setState((s) => ({
-        ...s,
-        error: "Sign-in is unavailable right now.",
+    if (!isPasskeySupported()) {
+      setState((current) => ({
+        ...current,
+        status: "unsupported",
+        error: "This browser or device cannot create your account.",
       }));
       return;
     }
-    setState((s) => ({ ...s, connecting: true, error: null }));
+    if (!PIMLICO_API_KEY) {
+      setState((current) => ({
+        ...current,
+        status: "service-unavailable",
+        error: "Account service is unavailable right now. Try again.",
+      }));
+      return;
+    }
+
+    const replacingInvalidAccount = state.status === "invalid-metadata";
+    const stored = replacingInvalidAccount ? { status: "missing" as const } : readPasskeyMetadata();
+    setState((current) => ({ ...current, status: "creating", error: null }));
     try {
-      const session = await connectSmartAccount();
-      setState({ session, connecting: false, error: null, ready: true });
+      let session: PasskeySmartSession;
+      if (stored.status === "valid") {
+        session = await restorePasskeyAccount({ metadata: stored.metadata, rpId: passkeyConfig().rpId });
+      } else {
+        setState((current) => ({ ...current, status: "awaiting-verification", error: null }));
+        session = await createPasskeyAccount(passkeyConfig());
+      }
+      setState({ session, status: "ready", error: null, hasSavedAccount: true });
     } catch (error) {
-      setState((s) => ({
-        ...s,
-        connecting: false,
-        error: getWalletErrorMessage(error),
+      console.error("Could not open passkey account", error);
+      const failure = getWalletError(error);
+      setState((current) => ({
+        ...current,
+        session: null,
+        status: failure.status,
+        error: failure.message,
       }));
     }
-  }, []);
+  }, [state.status]);
 
   const disconnect = useCallback(async () => {
-    if (state.session) {
-      try {
-        await state.session.logout();
-      } catch {
-        // best-effort
-      }
-    }
     balanceLoadId.current += 1;
     setConfidentialBalance(undefined);
     setPrincipal(undefined);
     setConfidentialBalancesError(null);
     setConfidentialBalancesLoading(false);
-    setState({ session: null, connecting: false, error: null, ready: true });
-  }, [state.session]);
+    setState({ session: null, status: "no-account", error: null, hasSavedAccount: true });
+  }, []);
 
   useEffect(() => {
     if (!state.session) {
@@ -149,45 +204,55 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setConfidentialBalancesLoading(false);
       return;
     }
-
     void loadConfidentialBalances(state.session);
   }, [state.session, loadConfidentialBalances]);
 
   const refreshConfidentialBalances = useCallback(async () => {
-    if (!state.session) return;
-    await loadConfidentialBalances(state.session);
+    if (state.session) await loadConfidentialBalances(state.session);
   }, [state.session, loadConfidentialBalances]);
 
-  const value = useMemo<WalletContextValue>(
-    () => ({
-      ...state,
-      confidentialBalance,
-      principal,
-      confidentialBalancesLoading,
-      confidentialBalancesError,
-      connect,
-      disconnect,
-      refreshConfidentialBalances,
-      web3AuthReady: isWeb3AuthConfigured(),
-      pimlicoReady: isPimlicoConfigured(),
-    }),
-    [
-      state,
-      confidentialBalance,
-      principal,
-      confidentialBalancesLoading,
-      confidentialBalancesError,
-      connect,
-      disconnect,
-      refreshConfidentialBalances,
-    ]
-  );
+  const connecting = ["checking", "creating", "awaiting-verification"].includes(state.status);
+  const passkeyReady = isPasskeySupported();
+  const pimlicoReady = Boolean(PIMLICO_API_KEY);
+  const value = useMemo<WalletContextValue>(() => ({
+    ...state,
+    connecting,
+    confidentialBalance,
+    principal,
+    confidentialBalancesLoading,
+    confidentialBalancesError,
+    connect,
+    disconnect,
+    refreshConfidentialBalances,
+    passkeyReady,
+    pimlicoReady,
+  }), [
+    state,
+    connecting,
+    confidentialBalance,
+    principal,
+    confidentialBalancesLoading,
+    confidentialBalancesError,
+    connect,
+    disconnect,
+    refreshConfidentialBalances,
+    passkeyReady,
+    pimlicoReady,
+  ]);
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }
 
 export function useWallet() {
-  const ctx = useContext(WalletContext);
-  if (!ctx) throw new Error("useWallet must be used inside <WalletProvider>");
-  return ctx;
+  const context = useContext(WalletContext);
+  if (!context) throw new Error("useWallet must be used inside <WalletProvider>");
+  return context;
+}
+
+function passkeyConfig() {
+  const configuredRpId = publicConfig("NEXT_PUBLIC_PASSKEY_RP_ID", process.env.NEXT_PUBLIC_PASSKEY_RP_ID);
+  return {
+    rpId: configuredRpId || window.location.hostname,
+    rpName: publicConfig("NEXT_PUBLIC_PASSKEY_RP_NAME", process.env.NEXT_PUBLIC_PASSKEY_RP_NAME) || "Kettigo",
+  };
 }

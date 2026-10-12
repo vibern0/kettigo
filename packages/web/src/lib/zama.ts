@@ -24,7 +24,7 @@ import {
 } from "viem";
 import { sepolia } from "viem/chains";
 import { RPC_URL } from "./contracts";
-import type { SmartSession } from "./web3auth";
+import type { PasskeySmartSession } from "./smart-session";
 
 const ZERO_HANDLE = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -40,14 +40,10 @@ function signerStore(address: Address) {
   return createWalletAccountStore({ address, chainId: sepolia.id });
 }
 
-function typedDataPayload(typedData: EIP712TypedData) {
-  return JSON.stringify(typedData, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
-}
-
 class SmartAccountZamaSigner implements GenericSigner {
   readonly walletAccount: ReturnType<typeof createWalletAccountStore>;
 
-  constructor(private readonly session: SmartSession) {
+  constructor(private readonly session: PasskeySmartSession) {
     this.walletAccount = signerStore(getAddress(session.address));
   }
 
@@ -56,37 +52,15 @@ class SmartAccountZamaSigner implements GenericSigner {
   }
 
   signTypedData(typedData: EIP712TypedData) {
-    return this.session.smartAccountClient.signTypedData(typedData as any) as Promise<ZamaHex>;
+    return this.session.signTypedData(typedData) as Promise<ZamaHex>;
   }
 
   writeContract(config: any) {
-    return this.session.smartAccountClient.sendTransaction({
-      calls: [{
+    return this.session.sendTransaction([{
         to: getAddress(config.address),
         data: encodeFunctionData(config as any),
         value: config.value,
-      }],
-    }) as Promise<ZamaHex>;
-  }
-}
-
-class OwnerZamaSigner implements GenericSigner {
-  readonly walletAccount: ReturnType<typeof createWalletAccountStore>;
-
-  constructor(private readonly session: SmartSession) {
-    this.walletAccount = signerStore(getAddress(session.ownerAddress));
-  }
-
-  requireWalletAccount() {
-    return this.walletAccount.getSnapshot() ?? { address: getAddress(this.session.ownerAddress), chainId: sepolia.id };
-  }
-
-  async signTypedData(typedData: EIP712TypedData) {
-    return this.session.signOwnerTypedData(typedDataPayload(typedData)) as Promise<ZamaHex>;
-  }
-
-  async writeContract(): Promise<ZamaHex> {
-    throw new Error("The owner signer is only used for Kettigo reveal permissions.");
+      }]) as Promise<ZamaHex>;
   }
 }
 
@@ -131,12 +105,8 @@ export function createPublicZamaSDK() {
   return new ZamaSDK(configFor());
 }
 
-export function createSmartZamaSDK(session: SmartSession) {
+export function createSmartZamaSDK(session: PasskeySmartSession) {
   return new ZamaSDK(configFor(new SmartAccountZamaSigner(session)));
-}
-
-export function createOwnerZamaSDK(session: SmartSession) {
-  return new ZamaSDK(configFor(new OwnerZamaSigner(session)));
 }
 
 export async function encryptUint64(

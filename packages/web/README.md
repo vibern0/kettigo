@@ -1,20 +1,20 @@
 # Kettigo — Web (PWA)
 
-Mobile-first PWA. Next.js 14 (App Router) + Tailwind + wagmi v2 + Web3Auth +
-permissionless (Safe smart account) + Pimlico.
+Mobile-first PWA. Next.js 15 (App Router) + Tailwind + wagmi v2 + Safe
+passkeys + Pimlico.
 
-Live app: https://kettigo.netlify.app
+Live app: https://kettigo.xyz
 
 ## Stack
 
-- **Next.js 14** — App Router, RSC where it makes sense, `"use client"` for
+- **Next.js 15** — App Router, RSC where it makes sense, `"use client"` for
   anything wallet-related.
 - **Tailwind 3** — custom design tokens in `tailwind.config.ts` (dark theme,
   mobile-first `.app-shell`).
 - **wagmi v2** + **viem v2** — chain reads, contract calls, event watching.
-- **Web3Auth modal** — Google + Apple sign-in used to derive the smart account.
-- **permissionless** + **Safe** — Safe smart account with EntryPoint v0.7.
-  Pimlico is the bundler + paymaster.
+- **WebAuthn passkeys** — a discoverable ES256 credential is the sole owner.
+- **Safe Protocol Kit** — deterministic Safe 1.4.1 account with the Safe
+  ERC-4337 module and EntryPoint v0.7. Pimlico is the bundler + paymaster.
 
 ## Pages
 
@@ -33,9 +33,9 @@ cp .env.example .env.local
 # fill in:
 #   NEXT_PUBLIC_USDC_ADDRESS, NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS
 #   NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS
-#   NEXT_PUBLIC_WEB3AUTH_CLIENT_ID
+#   NEXT_PUBLIC_PASSKEY_RP_ID, NEXT_PUBLIC_PASSKEY_RP_NAME
 #   NEXT_PUBLIC_PIMLICO_API_KEY
-npm run dev
+pnpm run dev
 ```
 
 Netlify also runs the Morpho keeper as a Scheduled Function. Configure these as
@@ -65,14 +65,14 @@ as the landing Worker, while its assets and entry point remain package-local.
 Build and deploy from the repository root:
 
 ```bash
-npm run cf:build
-npx wrangler deploy --config packages/web/wrangler.jsonc
+pnpm run cf:build
+pnpm exec wrangler deploy --config packages/web/wrangler.jsonc
 ```
 
 Apply the shared landing migrations to the configured remote database with:
 
 ```bash
-npx wrangler d1 migrations apply kettigo --remote --config packages/web/wrangler.jsonc
+pnpm exec wrangler d1 migrations apply kettigo --remote --config packages/web/wrangler.jsonc
 ```
 
 ## Where things live
@@ -89,12 +89,13 @@ src/
     profile/page.tsx     # account info
   components/
     Header.tsx           # top nav + connect button
-    ConnectButton.tsx    # social-login CTA
+    ConnectButton.tsx    # create/open passkey account CTA
     Countdown.tsx        # draw countdown timer
   lib/
     contracts.ts         # addresses, ABIs, RPC, Pimlico URL
     wagmi.ts             # wagmi config (Sepolia)
-    web3auth.ts          # AA flow — Web3Auth + Safe + Pimlico
+    passkey-safe.ts      # passkey-owned Safe + Pimlico flow
+    passkey-webauthn.ts  # browser credential creation and assertion
     wallet-context.tsx   # React context exposing session
     usePoolData.ts       # wagmi hooks for prize-pool reads
     morpho-keeper.ts     # scheduled keeper decision logic
@@ -105,6 +106,23 @@ src/
 
 ## Notes
 
-- All contract calls go through `smartAccountClient.sendTransaction` (Pimlico
-  bundler + paymaster), so the user signs UserOps through the Safe account.
+- All contract calls go through the passkey-owned Safe (Pimlico bundler +
+  paymaster), so the user signs sponsored UserOperations through the Safe.
 - USDC `approve` is a one-time setup per session, sent as its own UserOp.
+
+## Passkey acceptance run
+
+Configure a deployed contract set and a funded Pimlico account before this
+manual browser gate:
+
+1. Use an approved email and create a passkey. Record the checksum Safe address.
+2. Submit a sponsored transaction and confirm Safe 1.4.1 is deployed through
+   EntryPoint v0.7.
+3. Deposit, then use the Safe-backed Zama signer to complete balance decryption.
+4. Reload the app, open the saved account, and confirm it derives the same Safe address
+   before completing another sponsored action.
+
+Passkey recovery and migration from older account types are not supported in
+this phase. Clearing site data or losing access to the passkey can make the Safe
+inaccessible. The app stores only public credential metadata needed to derive
+the account; it never stores the credential secret.

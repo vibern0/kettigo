@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
-import { createPublicClient, encodeAbiParameters, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
+import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
 import { sepolia } from "viem/chains";
 import {
   CONTRACTS,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/contracts";
 import { formatUSDC, parseUSDC } from "@/lib/format";
 import { useWallet } from "@/lib/wallet-context";
-import { sendSmartTransaction, sendSmartTransactionBatch, type SmartSession } from "@/lib/web3auth";
+import { sendSmartTransaction, sendSmartTransactionBatch, type PasskeySmartSession } from "@/lib/smart-session";
 import {
   asChecksumAddress,
   createPublicZamaSDK,
@@ -277,7 +277,7 @@ export default function SavingsPage() {
     setAllowance(approved);
   }
 
-  async function sendTx(currentSession: SmartSession, to: `0x${string}`, data: `0x${string}`) {
+  async function sendTx(currentSession: PasskeySmartSession, to: `0x${string}`, data: `0x${string}`) {
     const tx = await sendSmartTransaction(currentSession, to, data);
     return publicClient.waitForTransactionReceipt({ hash: tx });
   }
@@ -483,7 +483,7 @@ export default function SavingsPage() {
         pool,
         encrypted.handle,
         encrypted.inputProof,
-        encodeAbiParameters([{ type: "address" }], [currentSession.ownerAddress]),
+        "0x",
       ],
     });
     const data = encodeFunctionData({

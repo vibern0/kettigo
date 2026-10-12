@@ -11,10 +11,10 @@ import {
 import { Countdown } from "@/components/Countdown";
 import { formatUSDC } from "@/lib/format";
 import { useWallet } from "@/lib/wallet-context";
-import { sendSmartTransaction, type SmartSession } from "@/lib/web3auth";
+import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
 import {
   asChecksumAddress,
-  createOwnerZamaSDK,
+  createSmartZamaSDK,
   decryptUint64,
   isZeroEncryptedHandle,
 } from "@/lib/zama";
@@ -225,7 +225,7 @@ export default function DrawPage() {
     return session;
   }
 
-  async function sendTx(currentSession: SmartSession, to: `0x${string}`, data: `0x${string}`) {
+  async function sendTx(currentSession: PasskeySmartSession, to: `0x${string}`, data: `0x${string}`) {
     const tx = await sendSmartTransaction(currentSession, to, data);
     await publicClient.waitForTransactionReceipt({ hash: tx });
   }
@@ -252,7 +252,7 @@ export default function DrawPage() {
       return;
     }
 
-    const sdk = createOwnerZamaSDK(currentSession);
+    const sdk = createSmartZamaSDK(currentSession);
     try {
       setWinnings(await decryptUint64(sdk, handle as `0x${string}`, pool));
     } finally {

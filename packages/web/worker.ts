@@ -1,6 +1,4 @@
 import {
-  JOINED_MESSAGE,
-  claimApprovedAccess,
   isValidEmail,
   normalizeEmail,
   readAccessStatus,
@@ -15,6 +13,10 @@ import { normalizeKeeperMaxTransactions } from "./src/lib/morpho-keeper";
 import { sanitizeKeeperError } from "./src/lib/morpho-keeper";
 import { runMorphoKeeper } from "./netlify/functions/morpho-keeper";
 import { runWithdrawalKeeper } from "./netlify/functions/withdrawal-keeper";
+import {
+  runtimeConfigScript,
+  type PublicRuntimeEnv,
+} from "./worker/runtime-config-bootstrap";
 
 type D1StatementLike = {
   bind(...values: unknown[]): D1StatementLike;
@@ -22,7 +24,7 @@ type D1StatementLike = {
   run(): Promise<unknown>;
 };
 
-type Env = {
+type Env = PublicRuntimeEnv & {
   ASSETS: {
     fetch(request: Request): Promise<Response>;
   };
@@ -32,10 +34,11 @@ type Env = {
   NEXT_PUBLIC_CHAIN_ID?: string;
   NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS?: string;
   NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS?: string;
+  NEXT_PUBLIC_PASSKEY_RP_ID?: string;
+  NEXT_PUBLIC_PASSKEY_RP_NAME?: string;
   NEXT_PUBLIC_PIMLICO_API_KEY?: string;
   NEXT_PUBLIC_RPC_URL?: string;
   NEXT_PUBLIC_USDC_ADDRESS?: string;
-  NEXT_PUBLIC_WEB3AUTH_CLIENT_ID?: string;
   DRAW_KEEPER_TRIGGER_TOKEN?: string;
   KEEPER_PRIVATE_KEY?: string;
   MORPHO_KEEPER_MAX_TXS?: string;
@@ -43,29 +46,13 @@ type Env = {
   SEPOLIA_RPC_URL?: string;
 };
 
-const PUBLIC_KEYS = [
-  "NEXT_PUBLIC_CHAIN_ID",
-  "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS",
-  "NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS",
-  "NEXT_PUBLIC_PIMLICO_API_KEY",
-  "NEXT_PUBLIC_RPC_URL",
-  "NEXT_PUBLIC_USDC_ADDRESS",
-  "NEXT_PUBLIC_WEB3AUTH_CLIENT_ID",
-] as const;
-
-function runtimeConfig(env: Env): Record<string, string> {
-  return Object.fromEntries(
-    PUBLIC_KEYS.map((key) => [key, env[key] ?? ""]),
-  );
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/config.js") {
       return new Response(
-        `window.__KETTIGO_CONFIG__ = ${JSON.stringify(runtimeConfig(env))};\n`,
+        runtimeConfigScript(env),
         {
           headers: {
             "content-type": "application/javascript; charset=utf-8",
@@ -77,10 +64,6 @@ export default {
 
     if (url.pathname === "/api/waitlist" && request.method === "POST") {
       return handleWaitlist(request, env);
-    }
-
-    if (url.pathname === "/api/access/claim" && request.method === "POST") {
-      return handleAccessClaim(request, env);
     }
 
     if (url.pathname === "/api/access/status" && request.method === "POST") {
@@ -99,7 +82,19 @@ export default {
       return json({ ok: false, status: "invalid_request" }, 404);
     }
 
-    return env.ASSETS.fetch(request);
+    const asset = await env.ASSETS.fetch(request);
+    if (!asset.headers.get("content-type")?.toLowerCase().includes("text/html")) {
+      return asset;
+    }
+
+    const bootstrap = runtimeConfigScript(env);
+    return new HTMLRewriter()
+      .on("head", {
+        element(element) {
+          element.prepend(`<script>${bootstrap}</script>`, { html: true });
+        },
+      })
+      .transform(asset);
   },
 
   scheduled(_controller: { cron: string }, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }) {
@@ -127,19 +122,6 @@ async function handleAccessStatus(request: Request, env: Env): Promise<Response>
     const email = typeof body.email === "string" ? body.email : "";
     const result = await readAccessStatus(env.DB, email);
     return json(result, result.status === "invalid_request" ? 400 : 200);
-  } catch {
-    return json({ ok: false, status: "temporarily_unavailable" }, 503);
-  }
-}
-
-async function handleAccessClaim(request: Request, env: Env): Promise<Response> {
-  try {
-    const body = await readJsonBody(request);
-    const email = typeof body.email === "string" ? body.email : "";
-    const walletAddress = typeof body.walletAddress === "string" ? body.walletAddress : "";
-    const signature = typeof body.signature === "string" ? body.signature : "";
-    const result = await claimApprovedAccess(env.DB, email, walletAddress, signature);
-    return json({ ...result, message: JOINED_MESSAGE }, result.ok ? 200 : result.status === "invalid_request" ? 400 : 403);
   } catch {
     return json({ ok: false, status: "temporarily_unavailable" }, 503);
   }

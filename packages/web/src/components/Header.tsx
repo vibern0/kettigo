@@ -17,7 +17,7 @@ const NAV = [
 
 export function Header() {
   const path = usePathname();
-  const { session, connect, connecting, disconnect, web3AuthReady } = useWallet();
+  const { session, connect, connecting, disconnect, passkeyReady, pimlicoReady, hasSavedAccount } = useWallet();
   const [accountSheetOpen, setAccountSheetOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const navItems = NAV;
@@ -114,10 +114,10 @@ export function Header() {
           ) : (
             <button
               onClick={() => void connect()}
-              disabled={connecting || !web3AuthReady}
+              disabled={connecting || !passkeyReady || !pimlicoReady}
               className="btn-secondary !py-2 !px-4 !text-sm"
             >
-              {connecting ? "Signing in..." : "Sign in"}
+              {connecting ? "Opening..." : hasSavedAccount ? "Open account" : "Create account"}
             </button>
           )}
         </div>

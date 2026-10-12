@@ -5,11 +5,13 @@ import test from "node:test";
 const webWrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 const rootWrangler = readFileSync(new URL("../../../wrangler.toml", import.meta.url), "utf8");
 const rootWorker = readFileSync(new URL("../worker.ts", import.meta.url), "utf8");
+const webConfig = JSON.parse(webWrangler);
 const publicRuntimeVars = [
   ["NEXT_PUBLIC_CHAIN_ID", "11155111"],
   ["NEXT_PUBLIC_RPC_URL", "https://ethereum-sepolia-rpc.publicnode.com"],
   ["NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS", "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b"],
   ["NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS", "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a"],
+  ["NEXT_PUBLIC_PASSKEY_RP_NAME", "Kettigo"],
   ["NEXT_PUBLIC_USDC_ADDRESS", "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"],
 ];
 
@@ -20,6 +22,15 @@ test("web Worker config binds the shared waitlist D1 database", () => {
   assert.match(webWrangler, /"database_id": "f6f8c304-fa39-495d-8307-d01f3899968a"/);
   assert.match(webWrangler, /"migrations_dir": "\.\.\/landing\/migrations"/);
   assert.match(webWrangler, /"previews"\s*:/);
+  assert.deepEqual(webConfig.assets.run_worker_first, [
+    "/",
+    "/draw",
+    "/draw/",
+    "/profile",
+    "/profile/",
+    "/savings",
+    "/savings/",
+  ]);
 });
 
 test("root app Worker config binds the shared waitlist D1 database", () => {
@@ -29,6 +40,7 @@ test("root app Worker config binds the shared waitlist D1 database", () => {
   assert.match(rootWrangler, /database_id = "f6f8c304-fa39-495d-8307-d01f3899968a"/);
   assert.match(rootWrangler, /migrations_dir = "packages\/landing\/migrations"/);
   assert.match(rootWrangler, /\[\[previews\.d1_databases\]\]/);
+  assert.match(rootWrangler, /run_worker_first = \["\/", "\/draw", "\/draw\/", "\/profile", "\/profile\/", "\/savings", "\/savings\/"\]/);
 });
 
 test("web Worker config preserves public runtime variables across deploys", () => {
@@ -47,6 +59,22 @@ test("root app Worker config preserves public runtime variables across deploys",
     const assignment = `${name} = "${value}"`;
     assert.equal(rootWrangler.split(assignment).length, 3, `${name} should be set for production and previews`);
   }
+});
+
+test("Worker previews use their workers.dev account domain as the passkey relying party", () => {
+  const rootProductionVars = rootWrangler.slice(
+    rootWrangler.indexOf("[vars]"),
+    rootWrangler.indexOf("[[d1_databases]]"),
+  );
+  const rootPreviewVars = rootWrangler.slice(
+    rootWrangler.indexOf("[previews.vars]"),
+    rootWrangler.indexOf("[[previews.d1_databases]]"),
+  );
+
+  assert.equal(webConfig.vars.NEXT_PUBLIC_PASSKEY_RP_ID, "kettigo.xyz");
+  assert.equal(webConfig.previews.vars.NEXT_PUBLIC_PASSKEY_RP_ID, "blvieira5.workers.dev");
+  assert.match(rootProductionVars, /NEXT_PUBLIC_PASSKEY_RP_ID = "kettigo\.xyz"/);
+  assert.match(rootPreviewVars, /NEXT_PUBLIC_PASSKEY_RP_ID = "blvieira5\.workers\.dev"/);
 });
 
 test("web Worker configs run the keeper every minute", () => {

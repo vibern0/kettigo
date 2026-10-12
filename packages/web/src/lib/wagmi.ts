@@ -2,8 +2,7 @@ import { createConfig, http } from "wagmi";
 import { sepolia } from "wagmi/chains";
 import { CHAIN_ID, RPC_URL } from "./contracts";
 
-// We use Web3Auth only to derive the Safe smart account. wagmi is here for
-// read-side ergonomics
+// wagmi is used for read-side ergonomics
 // (`useReadContracts`, `useBlockNumber`, etc.) — no wagmi connectors needed.
 
 export const wagmiConfig = createConfig({

@@ -11,7 +11,7 @@ import { balanceBucketLabels } from "@/lib/withdrawal-state";
 export default function ProfilePage() {
   const {
     session,
-    web3AuthReady,
+    passkeyReady,
     pimlicoReady,
     disconnect,
     confidentialBalance,
@@ -76,8 +76,8 @@ export default function ProfilePage() {
 
       <div className="card space-y-2 text-sm">
         <div className="flex justify-between">
-          <span className="text-muted">Social login</span>
-          <span>{web3AuthReady ? "✓" : "—"}</span>
+          <span className="text-muted">Account access</span>
+          <span>{passkeyReady ? "✓" : "—"}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-muted">Transaction fees</span>

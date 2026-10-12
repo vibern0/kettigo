@@ -1,34 +1,56 @@
-const GENERIC_SIGN_IN_ERROR = "Could not sign you in.";
-const GOOGLE_FETCH_ERROR =
-  "Could not reach Google sign-in. Check your connection or content blocker, then try again.";
+import { classifyPasskeyError } from "./passkey-webauthn.ts";
 
-function collectMessages(error: unknown, messages: string[] = []): string[] {
-  if (!error) return messages;
+export type WalletFailureStatus =
+  | "unsupported"
+  | "cancelled"
+  | "invalid-metadata"
+  | "service-unavailable";
 
-  if (error instanceof Error) {
-    messages.push(error.message);
-    collectMessages(error.cause, messages);
-    return messages;
+export type WalletFailure = {
+  status: WalletFailureStatus;
+  message: string;
+};
+
+export function getWalletError(error: unknown): WalletFailure {
+  const passkeyKind = classifyPasskeyError(error);
+  if (passkeyKind === "cancelled") {
+    return { status: "cancelled", message: "Verification was cancelled. You can try again." };
+  }
+  if (passkeyKind === "unsupported") {
+    return { status: "unsupported", message: "This browser or device cannot create your account." };
   }
 
-  if (typeof error === "object" && error !== null) {
-    const maybeMessage = (error as { message?: unknown }).message;
-    const maybeCause = (error as { cause?: unknown }).cause;
-    if (typeof maybeMessage === "string") messages.push(maybeMessage);
-    collectMessages(maybeCause, messages);
-    return messages;
+  const details = collectMessages(error).join(" ");
+  if (/invalid passkey metadata|saved account|does not match/i.test(details)) {
+    return {
+      status: "invalid-metadata",
+      message: "Saved account details cannot be used. Creating another account will give you a different address.",
+    };
   }
-
-  messages.push(String(error));
-  return messages;
+  if (/pimlico|bundler|paymaster|sponsored transaction/i.test(details)) {
+    return {
+      status: "service-unavailable",
+      message: "Account service is unavailable right now. Try again.",
+    };
+  }
+  return { status: "service-unavailable", message: "Could not open your account. Try again." };
 }
 
 export function getWalletErrorMessage(error: unknown): string {
-  const text = collectMessages(error).join(" ");
+  return getWalletError(error).message;
+}
 
-  if (text.includes("Failed to fetch") && text.includes("www.googleapis.com")) {
-    return GOOGLE_FETCH_ERROR;
+function collectMessages(error: unknown, messages: string[] = []): string[] {
+  if (!error) return messages;
+  if (error instanceof Error) {
+    messages.push(error.message);
+    collectMessages(error.cause, messages);
+  } else if (typeof error === "object" && error !== null) {
+    const value = error as { message?: unknown; cause?: unknown };
+    if (typeof value.message === "string") messages.push(value.message);
+    collectMessages(value.cause, messages);
+  } else {
+    messages.push(String(error));
   }
-
-  return GENERIC_SIGN_IN_ERROR;
+  return messages;
 }

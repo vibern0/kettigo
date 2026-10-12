@@ -21,7 +21,7 @@ official PoolTogether protocol.
 
 **What's in the box**
 
-- **Web3 abstraction** — Social login (Google, Apple) via Web3Auth → Safe smart
+- **Passkey account** — A browser passkey solely owns a deterministic Safe 1.4.1
   account (ERC-4337, EntryPoint v0.7).
 - **Gasless** — Pimlico as bundler + paymaster. Users never see a gas popup.
 - **Fiat on-ramp** — out of scope for this MVP. Add Onramper / Wert / Stripe
@@ -30,7 +30,7 @@ official PoolTogether protocol.
   `ConfidentialPrizePool` and unwrap it back to USDC. The visible global prize
   is currently mocked by sponsor/admin funding until a real yield source is
   plugged in.
-- **Mobile-first PWA** — Next.js 14, Tailwind, and no crypto jargon in the UI
+- **Mobile-first PWA** — Next.js 15, Tailwind, and no crypto jargon in the UI
   ("Save", "Tickets", "Draw", "Withdraw").
 
 ## Repo layout
@@ -41,41 +41,42 @@ kettigo/
     contracts/   # Hardhat — ConfidentialUSDC, ConfidentialPrizePool, mocks
     landing/     # Vite + Cloudflare Worker — see [Landing site operations](packages/landing/README.md)
     morpho-lab/  # Vite — local technical Morpho operator playground
-    web/         # Next.js 14 PWA — Web3Auth + Safe + Pimlico + Zama SDK v3
+    web/         # Next.js 15 PWA — passkeys + Safe + Pimlico + Zama SDK v3
   package.json   # npm workspaces root
 ```
 
 ## Quick start
 
 ```bash
-# 1. Install everything (workspaces).
-npm install
+# 1. Install everything with the pinned package manager.
+corepack pnpm install --frozen-lockfile
 
 # 2. Deploy confidential contracts to Sepolia.
 cd packages/contracts
 cp .env.example .env  # fill PRIVATE_KEY + SEPOLIA_RPC_URL
-npm run deploy:confidential-usdc
+pnpm run deploy:confidential-usdc
 # -> prints Circle Sepolia USDC + ConfidentialUSDC addresses
-CONFIDENTIAL_USDC_ADDRESS=0x... npm run deploy:confidential-pool
+CONFIDENTIAL_USDC_ADDRESS=0x... pnpm run deploy:confidential-pool
 # -> prints ConfidentialPrizePool address
 
 # Optional: deploy and connect Morpho yield adapter.
 CONFIDENTIAL_USDC_ADDRESS=0x... \
 CONFIDENTIAL_PRIZE_POOL_ADDRESS=0x... \
 MORPHO_UNWRAP_INTERVAL_SECONDS=300 \
-npm run deploy:morpho-yield-adapter
+pnpm run deploy:morpho-yield-adapter
 
 # 3. Configure the web app.
 cd ../web
 cp .env.example .env.local
 # fill NEXT_PUBLIC_USDC_ADDRESS, NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS,
 #       NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS,
-#       NEXT_PUBLIC_WEB3AUTH_CLIENT_ID, NEXT_PUBLIC_PIMLICO_API_KEY
+#       NEXT_PUBLIC_PASSKEY_RP_ID, NEXT_PUBLIC_PASSKEY_RP_NAME,
+#       NEXT_PUBLIC_PIMLICO_API_KEY
 # On Netlify, also set private keeper env vars:
 #       SEPOLIA_RPC_URL, KEEPER_PRIVATE_KEY, MORPHO_KEEPER_START_BLOCK
 
 # 4. Run.
-npm run dev
+pnpm run dev
 # → http://localhost:3000
 ```
 
@@ -83,7 +84,7 @@ npm run dev
 
 ```bash
 cd packages/contracts
-npm test
+pnpm test
 ```
 
 Contract tests cover confidential deposits, encrypted principal decryption,
@@ -300,13 +301,13 @@ Current confidential architecture:
 
 ```
                         ┌─────────────────────┐
-                        │      Web3Auth       │
-                        │  (Google / Apple)   │
+                        │      Passkey        │
+                        │ (WebAuthn / ES256)  │
                         └──────────┬──────────┘
                                    │ owner signer
                                    ▼
                         ┌─────────────────────┐
-                        │   Safe smart acct   │ ← permissionless + viem
+                        │   Safe smart acct   │ ← Protocol Kit + viem
                         │  (ERC-4337, EP 0.7) │
                         └──────────┬──────────┘
                                    │ signed UserOp
@@ -403,9 +404,8 @@ Important current limitations:
   normalizes user and contract addresses with `viem.getAddress()` before they
   enter `sdk.encrypt()`, `sdk.decryption.decryptValues()`, or public-decryption
   helpers.
-- **Zama EIP-712 signing** is isolated inside the v3 SDK signer adapters. The
-  Safe smart account signs for its cUSDC balance; the Web3Auth owner signs for
-  pool principal and winnings.
+- **Zama EIP-712 signing** is isolated inside the v3 SDK signer adapter. The
+  passkey-owned Safe signs for its cUSDC balance, pool principal, and winnings.
 - **Morpho yield adapter exists but is not the live judge fallback.** Users
   still deposit only `cUSDC` into `ConfidentialPrizePool`; the keeper requests
   timed principal unwraps to `MorphoYieldAdapter`, the adapter supplies USDC to
