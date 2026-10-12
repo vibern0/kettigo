@@ -97,8 +97,18 @@ export default {
       .transform(asset);
   },
 
-  scheduled(_controller: { cron: string }, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }) {
-    ctx.waitUntil(runKeeperAll(env, "cron"));
+  scheduled(controller: { cron: string }, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }) {
+    switch (controller.cron) {
+      case "* * * * *":
+        ctx.waitUntil(runDrawKeeper(env, "cron"));
+        break;
+      case "1-59/5 * * * *":
+        ctx.waitUntil(runScheduledWithdrawalKeeper(env));
+        break;
+      case "3-59/5 * * * *":
+        ctx.waitUntil(runScheduledMorphoKeeper(env));
+        break;
+    }
   },
 };
 
@@ -198,6 +208,36 @@ async function runKeeperLane(name: string, run: () => Promise<unknown>) {
   } catch (error) {
     return { ok: false, name, error: sanitizeKeeperError(error) };
   }
+}
+
+async function runScheduledWithdrawalKeeper(env: Env) {
+  return runScheduledKeeperLane(env, "withdrawal", (context) => runWithdrawalKeeper(context));
+}
+
+async function runScheduledMorphoKeeper(env: Env) {
+  return runScheduledKeeperLane(env, "morpho", (context) => runMorphoKeeper({
+    ...context,
+    maxTransactions: normalizeKeeperMaxTransactions(env.MORPHO_KEEPER_MAX_TXS),
+    startBlock: parseRequiredBigint(env.MORPHO_KEEPER_START_BLOCK, "MORPHO_KEEPER_START_BLOCK"),
+  }));
+}
+
+async function runScheduledKeeperLane(
+  env: Env,
+  name: "morpho" | "withdrawal",
+  run: (context: NonNullable<ReturnType<typeof createKeeperContext>>) => Promise<unknown>,
+) {
+  const context = createKeeperContext(env);
+  if (!context) {
+    const result = { ok: false, source: "cron" as const, status: "not_configured" as const, name };
+    console.log(JSON.stringify(result));
+    return result;
+  }
+
+  const lane = await runKeeperLane(name, () => run(context));
+  const result = { ok: lane.ok, source: "cron" as const, status: "ran" as const, lane };
+  console.log(JSON.stringify(result));
+  return result;
 }
 
 async function runDrawKeeper(env: Env, source: "cron" | "manual") {

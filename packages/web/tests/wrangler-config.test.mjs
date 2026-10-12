@@ -77,25 +77,24 @@ test("Worker previews use their workers.dev account domain as the passkey relyin
   assert.match(rootPreviewVars, /NEXT_PUBLIC_PASSKEY_RP_ID = "blvieira5\.workers\.dev"/);
 });
 
-test("web Worker configs run the keeper every minute", () => {
+test("web Worker configs isolate keeper lanes into separate cron invocations", () => {
   assert.match(webWrangler, /"triggers"\s*:/);
-  assert.match(webWrangler, /"crons": \["\* \* \* \* \*"\]/);
+  assert.deepEqual(webConfig.triggers.crons, [
+    "* * * * *",
+    "1-59/5 * * * *",
+    "3-59/5 * * * *",
+  ]);
   assert.equal(webWrangler.split('"MORPHO_KEEPER_START_BLOCK": "11864127"').length, 3);
 
   assert.match(rootWrangler, /\[triggers\]/);
-  assert.match(rootWrangler, /crons = \["\* \* \* \* \*"\]/);
+  assert.match(rootWrangler, /crons = \["\* \* \* \* \*", "1-59\/5 \* \* \* \*", "3-59\/5 \* \* \* \*"\]/);
   assert.equal(rootWrangler.split('MORPHO_KEEPER_START_BLOCK = "11864127"').length, 3);
 });
 
-test("Worker configs reserve enough CPU for scheduled keeper runs", () => {
-  assert.deepEqual(webConfig.limits, { cpu_ms: 30_000 });
-  assert.match(rootWrangler, /\[limits\]\s+cpu_ms = 30_000/);
-});
-
-test("root app Worker cron runs every keeper lane", () => {
-  assert.match(rootWorker, /runKeeperAll\(env, "cron"\)/);
-  assert.match(rootWorker, /runMorphoKeeper/);
-  assert.match(rootWorker, /runWithdrawalKeeper/);
-  assert.match(rootWorker, /runDrawKeeper/);
-  assert.doesNotMatch(rootWorker, /ctx\.waitUntil\(runDrawKeeper\(env, "cron"\)\)/);
+test("root app Worker routes each cron to one asynchronous keeper lane", () => {
+  assert.match(rootWorker, /switch \(controller\.cron\)/);
+  assert.match(rootWorker, /ctx\.waitUntil\(runDrawKeeper\(env, "cron"\)\)/);
+  assert.match(rootWorker, /ctx\.waitUntil\(runScheduledMorphoKeeper\(env\)\)/);
+  assert.match(rootWorker, /ctx\.waitUntil\(runScheduledWithdrawalKeeper\(env\)\)/);
+  assert.doesNotMatch(rootWorker, /ctx\.waitUntil\(runKeeperAll\(env, "cron"\)\)/);
 });
