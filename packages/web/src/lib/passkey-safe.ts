@@ -6,7 +6,7 @@ import Safe, {
   type ExtractedPasskeyData,
   type PasskeyArgType,
 } from "@safe-global/protocol-kit";
-import { Safe4337Pack } from "@safe-global/relay-kit";
+import { PimlicoFeeEstimator, Safe4337Pack } from "@safe-global/relay-kit";
 import { getSafeWebAuthnShareSignerDeployment } from "@safe-global/safe-modules-deployments";
 import {
   createPublicClient,
@@ -36,6 +36,8 @@ const SAFE_MODULES_VERSION = "0.3.0";
 const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
+const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
+const ERC4337_MAX_VERIFICATION_GAS = 500_000n;
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
@@ -59,6 +61,7 @@ type RelayLike = {
   protocolKit: ProtocolKitLike;
   createTransaction(input: {
     transactions: Array<{ to: string; data: string; value: string }>;
+    options?: { feeEstimator?: ReturnType<typeof createPasskeyFeeEstimator> };
   }): Promise<unknown>;
   signSafeOperation(operation: unknown): Promise<unknown>;
   executeTransaction(input: { executable: unknown }): Promise<string>;
@@ -151,6 +154,46 @@ export function buildPasskeySigner(
   };
 }
 
+type PimlicoFeeEstimatorLike = Pick<
+  PimlicoFeeEstimator,
+  "preEstimateUserOperationGas" | "postEstimateUserOperationGas"
+>;
+
+export function createPasskeyFeeEstimator(
+  baseEstimator: PimlicoFeeEstimatorLike = new PimlicoFeeEstimator(),
+) {
+  return {
+    preEstimateUserOperationGas: (
+      input: Parameters<PimlicoFeeEstimator["preEstimateUserOperationGas"]>[0],
+    ) => baseEstimator.preEstimateUserOperationGas(input),
+    async postEstimateUserOperationGas(
+      input: Parameters<PimlicoFeeEstimator["postEstimateUserOperationGas"]>[0],
+    ) {
+      const minimumVerificationGas = BigInt(input.userOperation.verificationGasLimit)
+        + PASSKEY_VERIFICATION_GAS_MARGIN;
+      if (minimumVerificationGas >= ERC4337_MAX_VERIFICATION_GAS) {
+        throw new Error(
+          "The passkey verification margin reaches the ERC-4337 verification gas limit.",
+        );
+      }
+      const sponsored = await baseEstimator.postEstimateUserOperationGas({
+        ...input,
+        userOperation: {
+          ...input.userOperation,
+          verificationGasLimit: minimumVerificationGas,
+        },
+      });
+      const sponsoredVerificationGas = sponsored.verificationGasLimit == null
+        ? 0n
+        : BigInt(sponsored.verificationGasLimit);
+      if (sponsoredVerificationGas < minimumVerificationGas) {
+        throw new Error("The paymaster returned insufficient verification gas for the passkey.");
+      }
+      return sponsored;
+    },
+  };
+}
+
 export async function signSafeTypedData(
   protocolKit: Pick<ProtocolKitLike, "getSafeMessageHash" | "signHash">,
   typedData: unknown,
@@ -235,6 +278,7 @@ async function sendCalls(
       data: call.data,
       value: (call.value ?? 0n).toString(),
     })),
+    options: { feeEstimator: createPasskeyFeeEstimator() },
   });
   const signed = await relay.signSafeOperation(operation);
   const userOperationHash = await relay.executeTransaction({ executable: signed });
