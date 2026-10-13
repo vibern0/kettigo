@@ -73,7 +73,7 @@ cp .env.example .env.local
 #       NEXT_PUBLIC_PASSKEY_RP_ID, NEXT_PUBLIC_PASSKEY_RP_NAME,
 #       NEXT_PUBLIC_PIMLICO_API_KEY
 # For the scheduled GitHub Actions keeper, also set repository secrets:
-#       SEPOLIA_RPC_URL, KEEPER_PRIVATE_KEY
+#       SEPOLIA_RPC_URL, SEPOLIA_WRITE_RPC_URL, KEEPER_PRIVATE_KEY
 
 # 4. Run.
 pnpm run dev
@@ -242,6 +242,7 @@ Keeper runtime values:
 
 ```bash
 SEPOLIA_RPC_URL=https://...
+SEPOLIA_WRITE_RPC_URL=https://... # optional dedicated transaction endpoint
 KEEPER_PRIVATE_KEY=0x...
 MORPHO_KEEPER_START_BLOCK=11711000
 MORPHO_KEEPER_MAX_TXS=1
@@ -272,8 +273,10 @@ The savings screen refreshes pending delivery and wallet USDC automatically.
 Unknown amounts display as pending, never as zero USDC.
 
 The `Production keepers` GitHub Actions workflow runs every five minutes and can
-also be dispatched manually. It requires the `SEPOLIA_RPC_URL` and
-`KEEPER_PRIVATE_KEY` repository secrets. The Cloudflare web Worker intentionally
+also be dispatched manually. It requires the `SEPOLIA_RPC_URL`,
+`SEPOLIA_WRITE_RPC_URL`, and `KEEPER_PRIVATE_KEY` repository secrets. Separate
+read and write endpoints let the free runner use historical log access without
+depending on that provider for transaction broadcasts. The Cloudflare web Worker intentionally
 has no Cron Trigger because the free plan's CPU budget cannot safely execute the
 onchain keeper. Local one-shot commands do not establish a background service.
 The previous pool at `0x92938dbFFa6A7De3dd2a009e10f5d2100fA594e6` cannot perform
