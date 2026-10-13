@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { URL } from "node:url";
 
 const webWrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 const webConfig = JSON.parse(webWrangler);
@@ -47,8 +48,8 @@ test("Worker previews use their workers.dev account domain as the passkey relyin
   assert.equal(webConfig.previews.vars.NEXT_PUBLIC_PASSKEY_RP_ID, "blvieira5.workers.dev");
 });
 
-test("web Worker leaves keeper scheduling to the external runner", () => {
-  assert.deepEqual(webConfig.triggers?.crons, []);
+test("web Worker schedules only the lightweight keeper dispatcher", () => {
+  assert.deepEqual(webConfig.triggers?.crons, ["*/5 * * * *"]);
   assert.equal(webWrangler.split('"DRAW_KEEPER_MINIMUM_PRIZE": "1000000"').length, 3);
   assert.equal(webWrangler.split('"MORPHO_KEEPER_START_BLOCK": "11864127"').length, 3);
 });

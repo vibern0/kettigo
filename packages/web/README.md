@@ -38,8 +38,9 @@ cp .env.example .env.local
 pnpm run dev
 ```
 
-GitHub Actions runs the production keepers every five minutes. Configure these
-as repository secrets, not `NEXT_PUBLIC_*`:
+The Cloudflare app Worker dispatches GitHub Actions every five minutes, and
+GitHub runs the production keepers. Configure these as repository secrets, not
+`NEXT_PUBLIC_*`:
 
 ```bash
 SEPOLIA_RPC_URL=https://...
@@ -49,6 +50,9 @@ MORPHO_KEEPER_START_BLOCK=11730807
 MORPHO_KEEPER_MAX_TXS=1
 WITHDRAWAL_KEEPER_LOOKBACK_BATCHES=8
 ```
+
+Configure `GITHUB_WORKFLOW_AUTH` as a Cloudflare Worker secret. It must be a
+fine-grained GitHub token limited to this repository with `Actions: write`.
 
 The Morpho lane checks deposit-routing work every five minutes and limits
 idle Morpho interest accrual to once per hour to reduce extra base-unit rounding

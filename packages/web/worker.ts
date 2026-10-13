@@ -8,6 +8,7 @@ import {
   runtimeConfigScript,
   type PublicRuntimeEnv,
 } from "./worker/runtime-config-bootstrap";
+import { dispatchKeeperWorkflow } from "./worker/github-keeper-dispatch";
 
 type D1StatementLike = {
   bind(...values: unknown[]): D1StatementLike;
@@ -22,6 +23,7 @@ type Env = PublicRuntimeEnv & {
   DB: {
     prepare(sql: string): D1StatementLike;
   };
+  GITHUB_WORKFLOW_AUTH: string;
 };
 
 export default {
@@ -65,6 +67,20 @@ export default {
         },
       })
       .transform(asset);
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    try {
+      const status = await dispatchKeeperWorkflow(env.GITHUB_WORKFLOW_AUTH);
+      console.log(JSON.stringify({ event: "keeper_dispatch", outcome: "accepted", status }));
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "keeper_dispatch",
+        outcome: "failed",
+        error: error instanceof Error ? error.message : "Unknown error",
+      }));
+      throw error;
+    }
   },
 };
 

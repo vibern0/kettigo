@@ -69,8 +69,8 @@ Keep its `database_name` and `database_id` synchronized with this config so
 both Workers use the same `DB` binding and schema.
 
 The landing Worker explicitly sets an empty Cron Trigger list. Keep this in
-place: the app Worker owns scheduled keeper work, while the landing Worker
-only serves the site and waitlist. Wrangler otherwise leaves an existing
+place: the app Worker owns the lightweight GitHub Actions dispatch schedule,
+while the landing Worker only serves the site and waitlist. Wrangler otherwise leaves an existing
 dashboard Cron Trigger attached when `crons` is omitted. Its no-op scheduled
 handler is only a rollout safeguard; it must not replace removing accidental
 triggers.

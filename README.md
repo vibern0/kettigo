@@ -72,8 +72,10 @@ cp .env.example .env.local
 #       NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS,
 #       NEXT_PUBLIC_PASSKEY_RP_ID, NEXT_PUBLIC_PASSKEY_RP_NAME,
 #       NEXT_PUBLIC_PIMLICO_API_KEY
-# For the scheduled GitHub Actions keeper, also set repository secrets:
+# For the GitHub Actions keeper, also set repository secrets:
 #       SEPOLIA_RPC_URL, SEPOLIA_WRITE_RPC_URL, KEEPER_PRIVATE_KEY
+# Set a fine-grained GitHub token with Actions: write for this repository as the
+# GITHUB_WORKFLOW_AUTH secret on the Cloudflare app Worker.
 
 # 4. Run.
 pnpm run dev
@@ -272,13 +274,15 @@ durable cursor and pending-work index before batch history grows large.
 The savings screen refreshes pending delivery and wallet USDC automatically.
 Unknown amounts display as pending, never as zero USDC.
 
-The `Production keepers` GitHub Actions workflow runs every five minutes and can
-also be dispatched manually. It requires the `SEPOLIA_RPC_URL`,
+The Cloudflare app Worker dispatches the `Production keepers` GitHub Actions
+workflow every five minutes. The workflow can also be dispatched manually and requires the `SEPOLIA_RPC_URL`,
 `SEPOLIA_WRITE_RPC_URL`, and `KEEPER_PRIVATE_KEY` repository secrets. Separate
 read and write endpoints let the free runner use historical log access without
-depending on that provider for transaction broadcasts. The Cloudflare web Worker intentionally
-has no Cron Trigger because the free plan's CPU budget cannot safely execute the
-onchain keeper. Local one-shot commands do not establish a background service.
+depending on that provider for transaction broadcasts. Cloudflare performs only
+the lightweight workflow dispatch; the onchain keeper remains on GitHub because
+the Cloudflare free plan's CPU budget cannot safely execute it. Store a fine-grained
+GitHub token with `Actions: write` access to this repository as the app Worker's
+`GITHUB_WORKFLOW_AUTH` secret. Local one-shot commands do not establish a background service.
 The previous pool at `0x92938dbFFa6A7De3dd2a009e10f5d2100fA594e6` cannot perform
 the new permissionless payout. It is no longer selected by the local app. Old
 requests are not migrated into the replacement pool.
