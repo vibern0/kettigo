@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { runDrawKeeper } from "../netlify/functions/draw-keeper.ts";
@@ -83,4 +84,33 @@ test("draw keeper submits one close transaction when the draw is eligible", asyn
       minimumPrize: "1000000",
     },
   });
+});
+
+test("production draw keeper closes an overdue round with a nonzero prize", async () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/keepers.yml", import.meta.url), "utf8");
+  const configuredMinimum = workflow.match(/DRAW_KEEPER_MINIMUM_PRIZE: "(\d+)"/)?.[1];
+  assert.ok(configuredMinimum, "production keeper minimum is configured");
+
+  const writes = [];
+  const result = await runDrawKeeper({
+    publicClient: fakePublicClient({
+      now: 1_001n,
+      nextDrawAt: 1_000n,
+      participantCount: 3n,
+      publicPrizeReserve: 0n,
+      morphoAccruedYieldAssets: 223n,
+    }),
+    walletClient: {
+      async writeContract(request) {
+        writes.push(request);
+        return "0xabc";
+      },
+    },
+    account,
+    pool,
+    minimumPrize: BigInt(configuredMinimum),
+  });
+
+  assert.equal(result.status, "submitted");
+  assert.equal(writes.length, 1);
 });
