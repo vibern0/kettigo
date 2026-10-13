@@ -19,15 +19,18 @@ test("builds the production keeper workflow request on main", async () => {
   assert.equal(await request.text(), '{"ref":"main"}');
 });
 
-test("returns GitHub's accepted dispatch status", async () => {
-  const status = await dispatchKeeperWorkflow("test-token", async () => ({ ok: true, status: 204 }));
+test("returns GitHub's accepted dispatch status", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => ({ ok: true, status: 204 }));
+  const status = await dispatchKeeperWorkflow("test-token");
 
   assert.equal(status, 204);
 });
 
-test("fails the scheduled invocation when GitHub rejects the dispatch", async () => {
+test("fails the scheduled invocation when GitHub rejects the dispatch", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => ({ ok: false, status: 401 }));
+
   await assert.rejects(
-    dispatchKeeperWorkflow("test-token", async () => ({ ok: false, status: 401 })),
+    dispatchKeeperWorkflow("test-token"),
     /GitHub workflow dispatch failed with status 401/,
   );
 });
