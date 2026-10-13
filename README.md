@@ -75,7 +75,7 @@ cp .env.example .env.local
 # For the GitHub Actions keeper, also set repository secrets:
 #       SEPOLIA_RPC_URL, SEPOLIA_WRITE_RPC_URL, KEEPER_PRIVATE_KEY
 # Set a fine-grained GitHub token with Actions: write for this repository as the
-# GITHUB_ACTIONS_TOKEN secret on the Cloudflare app Worker.
+# GITHUB_WORKFLOW_AUTH secret on the Cloudflare app Worker.
 
 # 4. Run.
 pnpm run dev
@@ -282,7 +282,7 @@ depending on that provider for transaction broadcasts. Cloudflare performs only
 the lightweight workflow dispatch; the onchain keeper remains on GitHub because
 the Cloudflare free plan's CPU budget cannot safely execute it. Store a fine-grained
 GitHub token with `Actions: write` access to this repository as the app Worker's
-`GITHUB_ACTIONS_TOKEN` secret. Local one-shot commands do not establish a background service.
+`GITHUB_WORKFLOW_AUTH` secret. Local one-shot commands do not establish a background service.
 The previous pool at `0x92938dbFFa6A7De3dd2a009e10f5d2100fA594e6` cannot perform
 the new permissionless payout. It is no longer selected by the local app. Old
 requests are not migrated into the replacement pool.

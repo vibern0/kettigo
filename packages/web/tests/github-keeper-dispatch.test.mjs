@@ -1,33 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { dispatchKeeperWorkflow } from "../worker/github-keeper-dispatch.ts";
+import {
+  buildKeeperWorkflowRequest,
+  dispatchKeeperWorkflow,
+} from "../worker/github-keeper-dispatch.ts";
 
-test("dispatches the production keeper workflow on main", async () => {
-  const requests = [];
+test("builds the production keeper workflow request on main", async () => {
+  const request = buildKeeperWorkflowRequest("test-token");
 
-  const status = await dispatchKeeperWorkflow("test-token", async (input, init) => {
-    requests.push({ input, init });
-    return { ok: true, status: 204 };
-  });
+  assert.equal(request.url, "https://api.github.com/repos/vibern0/kettigo/actions/workflows/keepers.yml/dispatches");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers.get("Accept"), "application/vnd.github+json");
+  assert.equal(request.headers.get("Authorization"), "Bearer test-token");
+  assert.equal(request.headers.get("Content-Type"), "application/json");
+  assert.equal(request.headers.get("User-Agent"), "kettigo-cloudflare-keeper-dispatcher");
+  assert.equal(request.headers.get("X-GitHub-Api-Version"), "2026-03-10");
+  assert.equal(await request.text(), '{"ref":"main"}');
+});
+
+test("returns GitHub's accepted dispatch status", async () => {
+  const status = await dispatchKeeperWorkflow("test-token", async () => ({ ok: true, status: 204 }));
 
   assert.equal(status, 204);
-  assert.deepEqual(requests, [
-    {
-      input: "https://api.github.com/repos/vibern0/kettigo/actions/workflows/keepers.yml/dispatches",
-      init: {
-        method: "POST",
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: "Bearer test-token",
-          "Content-Type": "application/json",
-          "User-Agent": "kettigo-cloudflare-keeper-dispatcher",
-          "X-GitHub-Api-Version": "2026-03-10",
-        },
-        body: '{"ref":"main"}',
-      },
-    },
-  ]);
 });
 
 test("fails the scheduled invocation when GitHub rejects the dispatch", async () => {

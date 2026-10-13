@@ -23,7 +23,7 @@ type Env = PublicRuntimeEnv & {
   DB: {
     prepare(sql: string): D1StatementLike;
   };
-  GITHUB_ACTIONS_TOKEN: string;
+  GITHUB_WORKFLOW_AUTH: string;
 };
 
 export default {
@@ -71,7 +71,7 @@ export default {
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     try {
-      const status = await dispatchKeeperWorkflow(env.GITHUB_ACTIONS_TOKEN);
+      const status = await dispatchKeeperWorkflow(env.GITHUB_WORKFLOW_AUTH);
       console.log(JSON.stringify({ event: "keeper_dispatch", outcome: "accepted", status }));
     } catch (error) {
       console.error(JSON.stringify({

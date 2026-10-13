@@ -51,7 +51,7 @@ MORPHO_KEEPER_MAX_TXS=1
 WITHDRAWAL_KEEPER_LOOKBACK_BATCHES=8
 ```
 
-Configure `GITHUB_ACTIONS_TOKEN` as a Cloudflare Worker secret. It must be a
+Configure `GITHUB_WORKFLOW_AUTH` as a Cloudflare Worker secret. It must be a
 fine-grained GitHub token limited to this repository with `Actions: write`.
 
 The Morpho lane checks deposit-routing work every five minutes and limits

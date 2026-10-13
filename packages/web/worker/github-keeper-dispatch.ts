@@ -1,13 +1,10 @@
 const KEEPER_WORKFLOW_URL =
   "https://api.github.com/repos/vibern0/kettigo/actions/workflows/keepers.yml/dispatches";
 
-type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
+type WorkflowSender = () => Promise<Pick<Response, "ok" | "status">>;
 
-export async function dispatchKeeperWorkflow(
-  token: string,
-  fetcher: Fetcher = (input, init) => fetch(input, init),
-): Promise<number> {
-  const response = await fetcher(KEEPER_WORKFLOW_URL, {
+export function buildKeeperWorkflowRequest(token: string): Request {
+  return new Request(KEEPER_WORKFLOW_URL, {
     method: "POST",
     headers: {
       Accept: "application/vnd.github+json",
@@ -18,6 +15,13 @@ export async function dispatchKeeperWorkflow(
     },
     body: JSON.stringify({ ref: "main" }),
   });
+}
+
+export async function dispatchKeeperWorkflow(
+  token: string,
+  send: WorkflowSender = () => fetch(buildKeeperWorkflowRequest(token)),
+): Promise<number> {
+  const response = await send();
 
   if (!response.ok) {
     throw new Error(`GitHub workflow dispatch failed with status ${response.status}`);
