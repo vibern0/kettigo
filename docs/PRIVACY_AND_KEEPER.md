@@ -63,6 +63,11 @@ finalizations. This prevents a delayed request from aging out of discovery. A
 temporarily unavailable Zama public-decryption proof leaves the request pending
 for the next scheduled run instead of submitting a transaction.
 
+The scheduled runner may use `SEPOLIA_RPC_URL` for historical reads and
+`SEPOLIA_WRITE_RPC_URL` for transaction submission. Keeping those endpoints
+separate avoids requiring a paid RPC tier when one free provider does not offer
+both capabilities.
+
 `MORPHO_KEEPER_MAX_TXS` is retained for configuration compatibility, but the
 scheduled runtime hard-caps every run to one transaction. When reusing a wrapper for a fresh pool, set
 `MORPHO_KEEPER_START_BLOCK` at or before the new pool deployment, before any
