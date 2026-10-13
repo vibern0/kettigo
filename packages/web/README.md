@@ -38,8 +38,8 @@ cp .env.example .env.local
 pnpm run dev
 ```
 
-Netlify also runs the Morpho keeper as a Scheduled Function. Configure these as
-private Netlify environment variables, not `NEXT_PUBLIC_*`:
+GitHub Actions runs the production keepers every five minutes. Configure these
+as repository secrets, not `NEXT_PUBLIC_*`:
 
 ```bash
 SEPOLIA_RPC_URL=https://...
@@ -49,11 +49,11 @@ MORPHO_KEEPER_MAX_TXS=1
 WITHDRAWAL_KEEPER_LOOKBACK_BATCHES=8
 ```
 
-The Morpho function checks deposit-routing work every five minutes and limits
+The Morpho lane checks deposit-routing work every five minutes and limits
 idle Morpho interest accrual to once per hour to reduce extra base-unit rounding
 in a small market. Each ready `closeDraw()` separately accrues interest and
-harvests the resulting surplus for that draw. The withdrawal function runs every
-minute, scans recent batches, closes expired nonempty batches, and settles closed
+harvests the resulting surplus for that draw. The withdrawal lane runs every
+five minutes, scans recent batches, closes expired nonempty batches, and settles closed
 batches once their public-decryption proof is available.
 
 ## Cloudflare Worker deployment
@@ -61,6 +61,8 @@ batches once their public-decryption proof is available.
 The web Worker owns its deployment configuration in
 `packages/web/wrangler.jsonc`. Its `DB` binding points to the same D1 database
 as the landing Worker, while its assets and entry point remain package-local.
+The web Worker has an explicit empty Cron Trigger list; keeper computation runs
+outside Cloudflare so the deployment remains compatible with the free plan.
 
 Build and deploy from the repository root:
 

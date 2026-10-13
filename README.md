@@ -72,8 +72,8 @@ cp .env.example .env.local
 #       NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS,
 #       NEXT_PUBLIC_PASSKEY_RP_ID, NEXT_PUBLIC_PASSKEY_RP_NAME,
 #       NEXT_PUBLIC_PIMLICO_API_KEY
-# On Netlify, also set private keeper env vars:
-#       SEPOLIA_RPC_URL, KEEPER_PRIVATE_KEY, MORPHO_KEEPER_START_BLOCK
+# For the scheduled GitHub Actions keeper, also set repository secrets:
+#       SEPOLIA_RPC_URL, KEEPER_PRIVATE_KEY
 
 # 4. Run.
 pnpm run dev
@@ -238,7 +238,7 @@ MORPHO_MARKET_ID=0x8c561f0929c3a3e2b20fba99c2ae15fc57b4d0599e4371b67c9a58388a27b
 MORPHO_UNWRAP_INTERVAL_SECONDS=300
 ```
 
-Netlify keeper env values:
+Keeper runtime values:
 
 ```bash
 SEPOLIA_RPC_URL=https://...
@@ -258,8 +258,8 @@ The user does not need to keep the app open or approve another transaction.
 
 From the repository root, run `pnpm keeper:watch` for continuous local processing
 (Ctrl+C stops it). `pnpm keeper:all` performs one pass. The watcher runs the
-Morpho and withdrawal keepers sequentially, retries every 15 seconds after each
-pass, and continues with withdrawals even if the Morpho keeper fails.
+Morpho, withdrawal, and draw keepers sequentially, retries every 15 seconds after
+each pass, and continues with later lanes if an earlier keeper fails.
 Node 24 and the local keeper environment are required. Check configuration
 without sending transactions with `npm run keeper:withdrawal -- --check`.
 
@@ -271,9 +271,11 @@ durable cursor and pending-work index before batch history grows large.
 The savings screen refreshes pending delivery and wallet USDC automatically.
 Unknown amounts display as pending, never as zero USDC.
 
-The Netlify function is scheduled every minute, but automatic delivery requires
-that scheduled service to be deployed and running, or the local watcher to remain
-running. Local one-shot commands do not establish a background service.
+The `Production keepers` GitHub Actions workflow runs every five minutes and can
+also be dispatched manually. It requires the `SEPOLIA_RPC_URL` and
+`KEEPER_PRIVATE_KEY` repository secrets. The Cloudflare web Worker intentionally
+has no Cron Trigger because the free plan's CPU budget cannot safely execute the
+onchain keeper. Local one-shot commands do not establish a background service.
 The previous pool at `0x92938dbFFa6A7De3dd2a009e10f5d2100fA594e6` cannot perform
 the new permissionless payout. It is no longer selected by the local app. Old
 requests are not migrated into the replacement pool.

@@ -40,7 +40,7 @@ separate liquidity buffers, and more careful keeper scheduling.
 
 ## Keeper safety
 
-The Netlify keepers are intentionally idempotent. Each run reads current onchain
+The GitHub Actions keepers are intentionally idempotent. Each run reads current onchain
 state and executes at most one transaction, continuing the state machine on the
 next scheduled run. The Morpho keeper runs every five minutes:
 
@@ -64,12 +64,11 @@ temporarily unavailable Zama public-decryption proof leaves the request pending
 for the next scheduled run instead of submitting a transaction.
 
 `MORPHO_KEEPER_MAX_TXS` is retained for configuration compatibility, but the
-scheduled runtime hard-caps every run to one transaction to stay inside Netlify's
-execution limit. When reusing a wrapper for a fresh pool, set
+scheduled runtime hard-caps every run to one transaction. When reusing a wrapper for a fresh pool, set
 `MORPHO_KEEPER_START_BLOCK` at or before the new pool deployment, before any
 requests can originate from it. The current deployment uses `11730807`.
 
-The withdrawal keeper runs every minute. It scans the current and recent
+The withdrawal keeper runs every five minutes. It scans the current and recent
 withdrawal batch ids, closes expired nonempty open batches, and settles closed
 batches after Zama public decryption returns the aggregate withdrawal amount and
 the aggregate Morpho restore amount. `WITHDRAWAL_KEEPER_LOOKBACK_BATCHES`
