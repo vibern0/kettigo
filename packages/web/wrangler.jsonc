@@ -6,7 +6,7 @@
   "workers_dev": true,
   "preview_urls": true,
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": []
   },
   "assets": {
     "binding": "ASSETS",

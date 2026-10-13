@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const webWrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-const rootWorker = readFileSync(new URL("../worker.ts", import.meta.url), "utf8");
 const webConfig = JSON.parse(webWrangler);
 const publicRuntimeVars = [
   ["NEXT_PUBLIC_CHAIN_ID", "11155111"],
@@ -48,17 +47,8 @@ test("Worker previews use their workers.dev account domain as the passkey relyin
   assert.equal(webConfig.previews.vars.NEXT_PUBLIC_PASSKEY_RP_ID, "blvieira5.workers.dev");
 });
 
-test("web Worker configs run the keeper every minute", () => {
-  assert.match(webWrangler, /"triggers"\s*:/);
-  assert.match(webWrangler, /"crons": \["\* \* \* \* \*"\]/);
+test("web Worker leaves keeper scheduling to the external runner", () => {
+  assert.deepEqual(webConfig.triggers?.crons, []);
   assert.equal(webWrangler.split('"DRAW_KEEPER_MINIMUM_PRIZE": "1000000"').length, 3);
   assert.equal(webWrangler.split('"MORPHO_KEEPER_START_BLOCK": "11864127"').length, 3);
-});
-
-test("web Worker cron runs every keeper lane", () => {
-  assert.match(rootWorker, /runKeeperAll\(env, "cron"\)/);
-  assert.match(rootWorker, /runMorphoKeeper/);
-  assert.match(rootWorker, /runWithdrawalKeeper/);
-  assert.match(rootWorker, /runDrawKeeper/);
-  assert.doesNotMatch(rootWorker, /ctx\.waitUntil\(runDrawKeeper\(env, "cron"\)\)/);
 });

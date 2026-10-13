@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { test } from "node:test";
+import { runtimeConfig } from "../worker/runtime-config-bootstrap.ts";
 
 const webRoot = new URL("../", import.meta.url);
 const repoRoot = new URL("../../../", import.meta.url);
@@ -27,15 +28,14 @@ test("production source and direct dependencies contain no Web3Auth path", () =>
 });
 
 test("runtime config exposes passkey relying-party values", () => {
-  for (const config of [
-    read(".env.example"),
-    read("worker.ts"),
-    read("wrangler.jsonc"),
-  ]) {
-    assert.match(config, /NEXT_PUBLIC_PASSKEY_RP_ID/);
-    assert.match(config, /NEXT_PUBLIC_PASSKEY_RP_NAME/);
-    assert.doesNotMatch(config, /WEB3AUTH/i);
-  }
+  const config = runtimeConfig({
+    NEXT_PUBLIC_PASSKEY_RP_ID: "kettigo.xyz",
+    NEXT_PUBLIC_PASSKEY_RP_NAME: "Kettigo",
+  });
+
+  assert.equal(config.NEXT_PUBLIC_PASSKEY_RP_ID, "kettigo.xyz");
+  assert.equal(config.NEXT_PUBLIC_PASSKEY_RP_NAME, "Kettigo");
+  assert.equal(Object.keys(config).some((key) => /WEB3AUTH/i.test(key)), false);
 });
 
 test("deployments use the repository's pinned package manager", () => {
