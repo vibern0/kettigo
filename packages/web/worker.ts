@@ -69,7 +69,18 @@ export default {
       .transform(asset);
   },
 
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    const scheduledMinute = Math.floor(controller.scheduledTime / 60_000);
+    if (scheduledMinute % 5 !== 0) {
+      console.log(JSON.stringify({
+        event: "keeper_dispatch",
+        outcome: "skipped_off_cycle",
+        cron: controller.cron,
+        scheduledTime: controller.scheduledTime,
+      }));
+      return;
+    }
+
     try {
       const status = await dispatchKeeperWorkflow(env.GITHUB_WORKFLOW_AUTH);
       console.log(JSON.stringify({ event: "keeper_dispatch", outcome: "accepted", status }));
