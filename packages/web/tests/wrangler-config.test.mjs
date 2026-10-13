@@ -48,6 +48,29 @@ test("Worker previews use their workers.dev account domain as the passkey relyin
   assert.equal(webConfig.previews.vars.NEXT_PUBLIC_PASSKEY_RP_ID, "blvieira5.workers.dev");
 });
 
+test("web Worker enables full observability only in production", () => {
+  assert.deepEqual(webConfig.observability, {
+    enabled: false,
+    head_sampling_rate: 1,
+    redact_query_string: false,
+    logs: {
+      enabled: true,
+      head_sampling_rate: 1,
+      invocation_logs: true,
+      persist: true,
+    },
+    traces: {
+      enabled: true,
+      head_sampling_rate: 1,
+      persist: true,
+    },
+    issues: {
+      enabled: true,
+    },
+  });
+  assert.equal(webConfig.previews.observability, undefined);
+});
+
 test("web Worker configs run the keeper every minute", () => {
   assert.match(webWrangler, /"triggers"\s*:/);
   assert.match(webWrangler, /"crons": \["\* \* \* \* \*"\]/);
