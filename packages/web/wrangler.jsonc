@@ -6,7 +6,7 @@
   "workers_dev": true,
   "preview_urls": true,
   "triggers": {
-    "crons": []
+    "crons": ["*/5 * * * *"]
   },
   "assets": {
     "binding": "ASSETS",
@@ -31,6 +31,11 @@
     "NEXT_PUBLIC_USDC_ADDRESS": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     "DRAW_KEEPER_MINIMUM_PRIZE": "1000000",
     "MORPHO_KEEPER_START_BLOCK": "11864127"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
   },
   "d1_databases": [
     {

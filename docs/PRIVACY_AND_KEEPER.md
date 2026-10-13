@@ -40,9 +40,11 @@ separate liquidity buffers, and more careful keeper scheduling.
 
 ## Keeper safety
 
-The GitHub Actions keepers are intentionally idempotent. Each run reads current onchain
-state and executes at most one transaction, continuing the state machine on the
-next scheduled run. The Morpho keeper runs every five minutes:
+The GitHub Actions keepers are intentionally idempotent. A lightweight
+Cloudflare Cron Trigger dispatches each run every five minutes; Cloudflare does
+not execute the onchain keeper. Each run reads current onchain state and executes
+at most one transaction, continuing the state machine on the next scheduled run.
+The Morpho keeper runs every five minutes:
 
 1. supply finalized adapter USDC to Morpho;
 2. finalize the oldest ready Morpho-bound unwrap;
