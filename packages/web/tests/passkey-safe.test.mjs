@@ -311,7 +311,7 @@ test("returns a mined transaction and retries a failed relay refresh before the 
   assert.equal(deployedCalls, 1);
 });
 
-test("refreshes a deployed relay after an AA24 signature rejection", async () => {
+test("refreshes a deployed relay before signing a transaction", async () => {
   const metadata = {
     rawId: RAW_ID,
     coordinates: COORDINATES,
@@ -319,10 +319,6 @@ test("refreshes a deployed relay after an AA24 signature rejection", async () =>
     safeAddress: SAFE_ADDRESS,
   };
   let initCount = 0;
-  const rejectedRelay = relay();
-  rejectedRelay.executeTransaction = async () => {
-    throw new Error("RPC Request failed: AA24 signature error");
-  };
   const freshRelay = relay();
 
   const session = await restorePasskeyAccount(
@@ -333,11 +329,12 @@ test("refreshes a deployed relay after an AA24 signature rejection", async () =>
       },
       async initRelay() {
         initCount += 1;
-        return initCount === 1 ? relay() : initCount === 2 ? rejectedRelay : freshRelay;
+        return initCount === 1 ? relay() : initCount === 2 ? relay() : freshRelay;
       },
     }),
   );
 
+  assert.equal(initCount, 2);
   assert.equal(
     await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
     `0x${"44".repeat(32)}`,
