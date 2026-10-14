@@ -256,20 +256,13 @@ function createSession(
       return signSafeTypedData(relay.protocolKit, typedData);
     },
     sendTransaction: async (calls) => {
+      // Rebuild the deployed relay immediately before signing. A session can
+      // outlive the relay's cached Safe/module state, which makes an otherwise
+      // valid passkey assertion fail AA24. Refreshing before signing avoids a
+      // second WebAuthn prompt and keeps the claim to one user confirmation.
+      if (!usingCounterfactualRelay) refreshRequired = true;
       await ensureDeployedRelay();
-      let transactionHash: Hex;
-      try {
-        transactionHash = await sendCalls(relay, calls, deps);
-      } catch (error) {
-        // A deployed Safe can keep a stale relay-kit instance after a tab has
-        // been open across a Safe/module or bundler refresh. Pimlico rejects
-        // the resulting UserOperation with AA24 before it can execute. The
-        // operation is safe to retry because AA24 is a pre-execution failure.
-        if (usingCounterfactualRelay || !isSignatureRejection(error)) throw error;
-        refreshRequired = true;
-        await ensureDeployedRelay();
-        transactionHash = await sendCalls(relay, calls, deps);
-      }
+      const transactionHash = await sendCalls(relay, calls, deps);
       if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
