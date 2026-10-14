@@ -257,7 +257,19 @@ function createSession(
     },
     sendTransaction: async (calls) => {
       await ensureDeployedRelay();
-      const transactionHash = await sendCalls(relay, calls, deps);
+      let transactionHash: Hex;
+      try {
+        transactionHash = await sendCalls(relay, calls, deps);
+      } catch (error) {
+        // A deployed Safe can keep a stale relay-kit instance after a tab has
+        // been open across a Safe/module or bundler refresh. Pimlico rejects
+        // the resulting UserOperation with AA24 before it can execute. The
+        // operation is safe to retry because AA24 is a pre-execution failure.
+        if (usingCounterfactualRelay || !isSignatureRejection(error)) throw error;
+        refreshRequired = true;
+        await ensureDeployedRelay();
+        transactionHash = await sendCalls(relay, calls, deps);
+      }
       if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
@@ -265,6 +277,11 @@ function createSession(
       return transactionHash;
     },
   };
+}
+
+function isSignatureRejection(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /AA24\s+signature\s+error|signature\s+error/i.test(message);
 }
 
 async function sendCalls(

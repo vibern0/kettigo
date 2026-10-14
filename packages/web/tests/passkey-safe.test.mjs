@@ -311,6 +311,40 @@ test("returns a mined transaction and retries a failed relay refresh before the 
   assert.equal(deployedCalls, 1);
 });
 
+test("refreshes a deployed relay after an AA24 signature rejection", async () => {
+  const metadata = {
+    rawId: RAW_ID,
+    coordinates: COORDINATES,
+    verifierAddress: VERIFIER_ADDRESS,
+    safeAddress: SAFE_ADDRESS,
+  };
+  let initCount = 0;
+  const rejectedRelay = relay();
+  rejectedRelay.executeTransaction = async () => {
+    throw new Error("RPC Request failed: AA24 signature error");
+  };
+  const freshRelay = relay();
+
+  const session = await restorePasskeyAccount(
+    { metadata, rpId: "app.kettigo.xyz" },
+    dependencies({
+      async getCode() {
+        return "0x6000";
+      },
+      async initRelay() {
+        initCount += 1;
+        return initCount === 1 ? relay() : initCount === 2 ? rejectedRelay : freshRelay;
+      },
+    }),
+  );
+
+  assert.equal(
+    await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    `0x${"44".repeat(32)}`,
+  );
+  assert.equal(initCount, 3);
+});
+
 test("waits for a successful UserOperation receipt and returns the transaction hash", async () => {
   let attempts = 0;
   const result = await waitForUserOperationTransaction(
