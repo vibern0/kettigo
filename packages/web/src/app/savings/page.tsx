@@ -19,6 +19,7 @@ import {
   createPublicZamaSDK,
   decryptPublicUint64,
   encryptUint64,
+  prepareSmartReadSession,
   withSmartZamaSDK,
 } from "@/lib/zama";
 import { afterNextPaint } from "@/lib/paint";
@@ -240,7 +241,7 @@ export default function SavingsPage() {
     if (!sheetOpen) return;
 
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !confirmingAction) {
         setDepositSheetStep(undefined);
         setWithdrawSheetStep(undefined);
       }
@@ -248,7 +249,7 @@ export default function SavingsPage() {
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [sheetOpen]);
+  }, [sheetOpen, confirmingAction]);
 
   function activeSession() {
     if (!session) throw new Error("Connect your smart account first.");
@@ -459,7 +460,7 @@ export default function SavingsPage() {
     await refreshPendingWithdrawals(user);
   }
 
-  async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void) {
+  async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Valor invalido.");
@@ -507,17 +508,22 @@ export default function SavingsPage() {
     calls.push({ to: token, data });
 
     update({ status: "waiting-wallet" });
-    const tx = await sendSmartTransactionBatch(currentSession, calls);
+    await prepareSmartReadSession(currentSession);
+    const tx = await sendSmartTransactionBatch(currentSession, calls, {
+      onSigned: () => {
+        setDepositAmount("");
+        onSigned();
+      },
+    });
     update({ status: "submitted", txHash: tx });
     update({ status: "confirming" });
     await publicClient.waitForTransactionReceipt({ hash: tx });
     update({ status: "updating" });
-    setDepositAmount("");
     await refreshConfidentialBalances();
     await refreshBalances(user);
   }
 
-  async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void) {
+  async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Valor invalido.");
@@ -533,14 +539,19 @@ export default function SavingsPage() {
       args: [encrypted.handle, encrypted.inputProof],
     });
     update({ status: "waiting-wallet" });
-    const tx = await sendSmartTransaction(currentSession, pool, data);
+    await prepareSmartReadSession(currentSession);
+    const tx = await sendSmartTransaction(currentSession, pool, data, {
+      onSigned: () => {
+        setWithdrawAmount("");
+        onSigned();
+      },
+    });
     update({ status: "submitted", txHash: tx });
     update({ status: "confirming" });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
     update({ status: "updating" });
     rememberWithdrawalRequest(receipt, user, value);
     await refreshBalances(user);
-    setWithdrawAmount("");
     await refreshConfidentialBalances();
     await refreshPendingWithdrawals(user);
   }
@@ -788,18 +799,12 @@ export default function SavingsPage() {
   async function runTrackedTransaction(
     label: string,
     type: "deposit" | "withdraw",
-    action: (update: (patch: ActionPatch) => void) => Promise<void>,
+    action: (update: (patch: ActionPatch) => void, onSigned: () => void) => Promise<void>,
     ok: string,
   ) {
     flushSync(() => {
       setConfirmingAction(type);
     });
-    await afterNextPaint();
-    window.setTimeout(() => {
-      setConfirmingAction(undefined);
-      setDepositSheetStep(undefined);
-      setWithdrawSheetStep(undefined);
-    }, 150);
     runAction(
       {
         label,
@@ -807,14 +812,24 @@ export default function SavingsPage() {
         account: session?.address,
       },
       async ({ update }) => {
+        let signed = false;
         try {
-          await action(update);
+          await action(update, () => {
+            signed = true;
+            setDepositSheetStep(undefined);
+            setWithdrawSheetStep(undefined);
+            setConfirmingAction(undefined);
+            update({ status: "confirming" });
+            toast({ tone: "success", title: "Approved. Follow progress in Activity." });
+          });
           update({ status: "completed" });
           toast({ tone: "success", title: ok });
         } catch (error) {
           const errorMessage = getErrorMessage(error);
           update({ status: "failed", error: errorMessage });
           toast({ tone: "error", title: "Transaction failed", description: errorMessage });
+        } finally {
+          if (!signed) setConfirmingAction(undefined);
         }
       },
     );
@@ -1031,6 +1046,7 @@ export default function SavingsPage() {
                     type="button"
                     className="btn-secondary !px-3"
                     onClick={() => setDepositSheetStep("entry")}
+                    disabled={Boolean(confirmingAction)}
                   >
                     Back
                   </button>
@@ -1042,7 +1058,7 @@ export default function SavingsPage() {
                       void runTrackedTransaction(
                         `Deposit ${formatUSDC(parsedDepositAmount)} USDC`,
                         "deposit",
-                        (update) => depositConfidential(parsedDepositAmount, update),
+                        (update, onSigned) => depositConfidential(parsedDepositAmount, update, onSigned),
                         "Deposit complete.",
                       )
                     }
@@ -1057,6 +1073,11 @@ export default function SavingsPage() {
                     )}
                   </button>
                 </div>
+                {confirmingAction === "deposit" && (
+                  <p role="status" className="text-sm text-muted">
+                    Approve with your passkey when asked. Your deposit will then continue in Activity.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -1151,6 +1172,7 @@ export default function SavingsPage() {
                     type="button"
                     className="btn-secondary !px-3"
                     onClick={() => setWithdrawSheetStep("entry")}
+                    disabled={Boolean(confirmingAction)}
                   >
                     Back
                   </button>
@@ -1162,7 +1184,7 @@ export default function SavingsPage() {
                       void runTrackedTransaction(
                         `Withdraw ${formatUSDC(parsedWithdrawAmount)} USDC`,
                         "withdraw",
-                        (update) => withdrawConfidential(parsedWithdrawAmount, update),
+                        (update, onSigned) => withdrawConfidential(parsedWithdrawAmount, update, onSigned),
                         "Withdrawal requested.",
                       )
                     }

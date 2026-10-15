@@ -252,6 +252,15 @@ export async function decryptWithSmartReadSession(
   );
 }
 
+// Collect any balance-access approval before handing a transaction to the background.
+export async function prepareSmartReadSession(session: PasskeySmartSession) {
+  const contracts = [
+    asChecksumAddress(CONTRACTS.confidentialUsdc, "Savings token"),
+    asChecksumAddress(CONTRACTS.confidentialPrizePool, "Prize pool"),
+  ];
+  await delegatedZamaSessions.run(session, contracts, async () => {});
+}
+
 export async function clearSmartZamaSession(session: PasskeySmartSession) {
   await Promise.all([
     smartZamaSessions.clear(session),
