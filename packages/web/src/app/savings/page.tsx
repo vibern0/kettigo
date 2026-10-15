@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
 import { sepolia } from "viem/chains";
 import {
@@ -940,8 +940,8 @@ export default function SavingsPage() {
         </button>
       </div>
 
-      {depositSheetStep && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 px-4 pb-4 backdrop-blur-sm">
+      {depositSheetStep && createPortal(
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 backdrop-blur-sm sm:px-4 sm:pb-4">
           <button
             type="button"
             aria-label="Close deposit sheet"
@@ -952,7 +952,7 @@ export default function SavingsPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="deposit-sheet-title"
-            className="glass-surface relative max-h-[86vh] w-full max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
+            className="glass-surface relative max-h-[86dvh] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
           >
             <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
             <div className="flex items-center justify-between gap-3">
@@ -1060,11 +1060,12 @@ export default function SavingsPage() {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {withdrawSheetStep && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 px-4 pb-4 backdrop-blur-sm">
+      {withdrawSheetStep && createPortal(
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 backdrop-blur-sm sm:px-4 sm:pb-4">
           <button
             type="button"
             aria-label="Close withdrawal sheet"
@@ -1075,7 +1076,7 @@ export default function SavingsPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="withdraw-sheet-title"
-            className="glass-surface relative max-h-[86vh] w-full max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
+            className="glass-surface relative max-h-[86dvh] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
           >
             <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
             <div className="flex items-center justify-between gap-3">
@@ -1277,7 +1278,8 @@ export default function SavingsPage() {
 
             {!showWithdraw && <p className="text-sm text-muted">No deposited funds or pending withdrawals yet.</p>}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
     </div>
