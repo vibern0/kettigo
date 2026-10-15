@@ -29,7 +29,7 @@ import {
   getKettigoCredential,
 } from "./passkey-webauthn.ts";
 import { publicConfig } from "./runtime-config.ts";
-import type { PasskeySmartSession, SmartAccountCall } from "./smart-session.ts";
+import type { PasskeySmartSession, SmartAccountCall, SmartTransactionOptions } from "./smart-session.ts";
 
 const SAFE_VERSION = "1.4.1" as const;
 const SAFE_MODULES_VERSION = "0.3.0";
@@ -255,14 +255,14 @@ function createSession(
       await ensureDeployedRelay();
       return signSafeTypedData(relay.protocolKit, typedData);
     },
-    sendTransaction: async (calls) => {
+    sendTransaction: async (calls, options) => {
       // Rebuild the deployed relay immediately before signing. A session can
       // outlive the relay's cached Safe/module state, which makes an otherwise
       // valid passkey assertion fail AA24. Refreshing before signing avoids a
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
       await ensureDeployedRelay();
-      const transactionHash = await sendCalls(relay, calls, deps);
+      const transactionHash = await sendCalls(relay, calls, deps, options);
       if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
@@ -281,6 +281,7 @@ async function sendCalls(
   relay: RelayLike,
   calls: SmartAccountCall[],
   deps: PasskeySafeDependencies,
+  options?: SmartTransactionOptions,
 ): Promise<Hex> {
   const operation = await relay.createTransaction({
     transactions: calls.map((call) => ({
@@ -291,6 +292,7 @@ async function sendCalls(
     options: { feeEstimator: createPasskeyFeeEstimator() },
   });
   const signed = await relay.signSafeOperation(operation);
+  options?.onSigned?.();
   const userOperationHash = await relay.executeTransaction({ executable: signed });
   return waitForUserOperationTransaction(relay, userOperationHash, { sleep: deps.sleep });
 }

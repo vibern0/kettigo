@@ -247,6 +247,46 @@ test("blocks a deployed restored signer when independent Safe derivation no long
   );
 });
 
+test("reports signing before submission and receipt polling finish", async () => {
+  let release;
+  const submission = new Promise((resolve) => { release = resolve; });
+  const instance = relay();
+  let signed = false;
+  instance.executeTransaction = async () => {
+    assert.equal(signed, true);
+    await submission;
+    return `0x${"33".repeat(32)}`;
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({ async initRelay() { return instance; } }),
+  );
+  const pending = session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
+    onSigned() { signed = true; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(signed, true);
+  release();
+  assert.equal(await pending, `0x${"44".repeat(32)}`);
+});
+
+test("does not hand off or submit when signing is cancelled", async () => {
+  const instance = relay();
+  let signed = false;
+  let submitted = false;
+  instance.signSafeOperation = async () => { throw new Error("Approval cancelled"); };
+  instance.executeTransaction = async () => { submitted = true; return "0x"; };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({ async initRelay() { return instance; } }),
+  );
+  await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
+    onSigned() { signed = true; },
+  }), /Approval cancelled/);
+  assert.equal(signed, false);
+  assert.equal(submitted, false);
+});
+
 test("reconnects through the deployed Safe after the first mined action", async () => {
   const storage = createStorage();
   const initOptions = [];
