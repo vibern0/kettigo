@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { useWallet } from "@/lib/wallet-context";
 import { shortAddress } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { TestnetWarning } from "@/components/TestnetWarning";
 
 const NAV = [
   { href: "/", label: "Home" },
@@ -50,6 +51,7 @@ export function Header() {
             >
               <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-text/20" />
               <div className="space-y-3">
+                <TestnetWarning />
                 <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
                   <p className="font-display text-sm font-semibold text-text">Account</p>
                   <p className="mt-2 break-all font-mono text-xs leading-relaxed text-muted">

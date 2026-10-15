@@ -25,6 +25,7 @@ import { afterNextPaint } from "@/lib/paint";
 import { useToast } from "@/components/Toast";
 import { AmountInput } from "@/components/AmountInput";
 import { LoadingAmount } from "@/components/LoadingAmount";
+import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
 import type { ActionPatch } from "@/lib/action-center-model";
 import {
@@ -851,6 +852,8 @@ export default function SavingsPage() {
           Your wallet, savings, and pending withdrawals.
         </p>
       </section>
+
+      <TestnetWarning />
 
       <div className="card space-y-3">
         <p className="label">Personal status</p>
