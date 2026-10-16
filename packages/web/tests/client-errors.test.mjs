@@ -20,3 +20,18 @@ test("caught errors reach the configured error source without RPC secrets or amo
   assert.match(events[0].error.stack, /savings.js:12:34/);
   assert.doesNotMatch(events[0].error.stack, /apikey|secret/);
 });
+
+test("error toast messages reach the configured error source", async () => {
+  const source = await readFile(new URL("../src/lib/client-errors.ts", import.meta.url), "utf8");
+  const events = [];
+  const context = vm.createContext({
+    window: {},
+    Sentry: { init: () => {}, captureException: (error, options) => events.push({ error, options }) },
+  });
+  vm.runInContext(stripTypeScriptTypes(source.replace(/^import .*;\n/gm, "").replace(/export /g, "")), context);
+  vm.runInContext(`reportClientToast({ title: 'Amount is above your wallet balance.' }, { action: 'deposit', stage: 'validation' })`, context);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].error.message, "Amount is above your wallet balance.");
+  assert.equal(events[0].options.tags.action, "deposit");
+  assert.equal(events[0].options.tags.stage, "validation");
+});

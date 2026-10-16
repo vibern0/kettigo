@@ -49,3 +49,17 @@ export function reportClientError(error: unknown, context: { action: string; sta
     // Reporting must not interrupt the retry path or hide the original error.
   }
 }
+
+export function reportClientToast(
+  toast: { title: string; description?: string },
+  context: { action: string; stage: string },
+  cause?: unknown,
+) {
+  const toastMessage = [toast.title, toast.description].filter(Boolean).join(": ");
+  const error = cause instanceof Error
+    ? cause
+    : cause === undefined
+      ? new Error(toastMessage)
+      : new Error(`${toastMessage}: ${String(cause)}`);
+  reportClientError(error, context);
+}

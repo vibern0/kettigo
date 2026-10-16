@@ -35,7 +35,7 @@ function fixture() {
       return "deposit-action";
     },
     toast: (value) => state.toasts.push(value),
-    reportClientError: (error, context) => state.reports.push({ error, context }),
+    reportClientToast: (_toast, context, cause) => state.reports.push({ error: cause, context }),
     getErrorMessage: (error) => error.message,
   });
   return { state, run, elapse: () => timers.splice(0).forEach((callback) => callback()), done: () => running };

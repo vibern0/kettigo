@@ -23,7 +23,7 @@ import {
   prepareSmartReadSessionCalls,
   withSmartZamaSDK,
 } from "@/lib/zama";
-import { reportClientError } from "@/lib/client-errors";
+import { reportClientToast } from "@/lib/client-errors";
 import { afterNextPaint } from "@/lib/paint";
 import { useToast } from "@/components/Toast";
 import { SheetViewport } from "@/components/SheetViewport";
@@ -816,14 +816,17 @@ export default function SavingsPage() {
 
   async function reviewDeposit() {
     if (parsedDepositAmount === 0n) {
+      reportClientToast({ title: "Enter an amount first." }, { action: "deposit", stage: "validation" });
       toast({ tone: "error", title: "Enter an amount first." });
       return;
     }
     if (usdcBalance !== undefined && parsedDepositAmount > usdcBalance) {
+      reportClientToast({ title: "Amount is above your wallet balance." }, { action: "deposit", stage: "validation" });
       toast({ tone: "error", title: "Amount is above your wallet balance." });
       return;
     }
     if (parsedDepositAmount > remainingDepositCapacity()) {
+      reportClientToast({ title: "Amount is above the current account limit." }, { action: "deposit", stage: "validation" });
       toast({ tone: "error", title: "Amount is above the current account limit." });
       return;
     }
@@ -839,9 +842,14 @@ export default function SavingsPage() {
       preparedDeposit.current = { session: currentSession, value: parsedDepositAmount, transaction, preparedAt: Date.now() };
       setDepositSheetStep("confirm");
     } catch (error) {
-      reportClientError(error, { action: "deposit", stage: "preparation" });
+      const errorMessage = getErrorMessage(error);
+      reportClientToast(
+        { title: "Could not prepare deposit", description: errorMessage },
+        { action: "deposit", stage: "preparation" },
+        error,
+      );
       if (requestId === depositPreparationId.current) {
-        toast({ tone: "error", title: "Could not prepare deposit", description: getErrorMessage(error) });
+        toast({ tone: "error", title: "Could not prepare deposit", description: errorMessage });
       }
     } finally {
       if (requestId === depositPreparationId.current) setPreparingDeposit(false);
@@ -855,10 +863,12 @@ export default function SavingsPage() {
 
   function reviewWithdraw() {
     if (parsedWithdrawAmount === 0n) {
+      reportClientToast({ title: "Enter an amount first." }, { action: "withdraw", stage: "validation" });
       toast({ tone: "error", title: "Enter an amount first." });
       return;
     }
     if (principal !== undefined && parsedWithdrawAmount > principal) {
+      reportClientToast({ title: "Amount is above your pool balance." }, { action: "withdraw", stage: "validation" });
       toast({ tone: "error", title: "Amount is above your pool balance." });
       return;
     }
@@ -894,8 +904,12 @@ export default function SavingsPage() {
           update({ status: "completed" });
           toast({ tone: "success", title: ok });
         } catch (error) {
-          reportClientError(error, { action: type, stage: signed ? "submission-or-confirmation" : "approval" });
           const errorMessage = getErrorMessage(error);
+          reportClientToast(
+            { title: "Transaction failed", description: errorMessage },
+            { action: type, stage: signed ? "submission-or-confirmation" : "approval" },
+            error,
+          );
           update({ status: "failed", error: errorMessage });
           toast({ tone: "error", title: "Transaction failed", description: errorMessage });
         } finally {
@@ -917,6 +931,11 @@ export default function SavingsPage() {
       toast({ tone: "success", title: ok });
     } catch (error) {
       const errorMessage = getErrorMessage(error);
+      reportClientToast(
+        { title: "Transaction failed", description: errorMessage },
+        { action: currentAction ?? "savings", stage: "execution" },
+        error,
+      );
       setStatus("error");
       toast({ tone: "error", title: "Transaction failed", description: errorMessage });
     } finally {

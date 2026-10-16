@@ -17,6 +17,7 @@ import {
   decryptSmartUint64,
   isZeroEncryptedHandle,
 } from "@/lib/zama";
+import { reportClientToast } from "@/lib/client-errors";
 import { useToast } from "@/components/Toast";
 import { getPrizeActions, type PrizeActionId } from "@/lib/prize-actions";
 import {
@@ -332,6 +333,11 @@ export default function DrawPage() {
       toast({ tone: "success", title: ok });
     } catch (error) {
       const errorMessage = getErrorMessage(error);
+      reportClientToast(
+        { title: "Transaction failed", description: errorMessage },
+        { action: currentAction ?? "draw", stage: "execution" },
+        error,
+      );
       setStatus("error");
       toast({ tone: "error", title: "Transaction failed", description: errorMessage });
     } finally {
