@@ -401,6 +401,41 @@ test("refreshes a deployed relay before signing a transaction", async () => {
   assert.equal(initCount, 3);
 });
 
+test("rebuilds and retries a deployed relay after an AA24 signature rejection", async () => {
+  const metadata = {
+    rawId: RAW_ID,
+    coordinates: COORDINATES,
+    verifierAddress: VERIFIER_ADDRESS,
+    safeAddress: SAFE_ADDRESS,
+  };
+  const firstRelay = relay();
+  firstRelay.executeTransaction = async () => {
+    throw new Error("RpcRequestError: UserOperation reverted with reason: AA24 signature error");
+  };
+  const secondRelay = relay();
+  let initCount = 0;
+
+  const session = await restorePasskeyAccount(
+    { metadata, rpId: "app.kettigo.xyz" },
+    dependencies({
+      async getCode() {
+        return "0x6000";
+      },
+      async initRelay() {
+        initCount += 1;
+        if (initCount < 3) return relay();
+        return initCount === 3 ? firstRelay : secondRelay;
+      },
+    }),
+  );
+
+  assert.equal(
+    await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    `0x${"44".repeat(32)}`,
+  );
+  assert.equal(initCount, 4);
+});
+
 test("waits for a successful UserOperation receipt and returns the transaction hash", async () => {
   let attempts = 0;
   const result = await waitForUserOperationTransaction(

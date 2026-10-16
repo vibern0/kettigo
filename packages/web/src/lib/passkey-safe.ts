@@ -318,7 +318,17 @@ function createSession(
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
       await ensureDeployedRelay();
-      const transactionHash = await sendCalls(relay, calls, deps, options);
+      let transactionHash: Hex;
+      try {
+        transactionHash = await sendCalls(relay, calls, deps, options);
+      } catch (error) {
+        // AA24 is rejected before Safe execution, so it is safe to rebuild the
+        // deployed relay and retry with a fresh Safe operation.
+        if (usingCounterfactualRelay || !isSignatureRejection(error)) throw error;
+        refreshRequired = true;
+        await ensureDeployedRelay();
+        transactionHash = await sendCalls(relay, calls, deps, options);
+      }
       if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
