@@ -4,6 +4,16 @@ import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
 import test from "node:test";
 
+test("uses same-origin ingestion and reports repeated retry failures", async () => {
+  const source = await readFile(new URL("../src/lib/client-errors.ts", import.meta.url), "utf8");
+  let options;
+  const context = vm.createContext({ window: {}, Sentry: { init: (value) => { options = value; } } });
+  vm.runInContext(stripTypeScriptTypes(source.replace(/^import .*;\n/gm, "").replace(/export /g, "")), context);
+  vm.runInContext("initializeClientErrors()", context);
+  assert.equal(options.tunnel, "/api/client-events");
+  assert.deepEqual(Array.from(options.integrations([{ name: "Dedupe" }, { name: "Other" }]), (x) => x.name), ["Other"]);
+});
+
 test("caught errors reach the configured error source without RPC secrets or amounts", async () => {
   const source = await readFile(new URL("../src/lib/client-errors.ts", import.meta.url), "utf8");
   const events = [];

@@ -13,6 +13,10 @@ export function initializeClientErrors() {
   Sentry.init({
     // Browser ingestion DSN, not an account API credential.
     dsn: "https://1wUDLFc7g8tpcchuQ2CXZTyJ@s2796372.us-west-2a.betterstackdata.com/2796373",
+    // Brave blocks direct ingestion. Forward through our Worker instead.
+    tunnel: "/api/client-events",
+    // Every failed retry matters, even when its stack matches the last attempt.
+    integrations: (defaults) => defaults.filter((integration) => integration.name !== "Dedupe"),
     environment: "production",
     beforeSend(event) {
       // RPC exceptions can contain calldata, keys in URLs, and account amounts.

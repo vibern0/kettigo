@@ -9,6 +9,7 @@ import {
   type PublicRuntimeEnv,
 } from "./worker/runtime-config-bootstrap";
 import { dispatchKeeperWorkflow } from "./worker/github-keeper-dispatch";
+import { handleClientEvents } from "./worker/client-events";
 
 type D1StatementLike = {
   bind(...values: unknown[]): D1StatementLike;
@@ -29,6 +30,10 @@ type Env = PublicRuntimeEnv & {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/client-events") {
+      return handleClientEvents(request);
+    }
 
     if (url.pathname === "/config.js") {
       return new Response(
