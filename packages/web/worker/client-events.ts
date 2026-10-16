@@ -40,12 +40,19 @@ export async function handleClientEvents(request: Request, forward: typeof fetch
       method: "POST",
       headers: { "content-type": "application/x-sentry-envelope" },
       body,
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      return new Response(null, { status: 502, headers });
+    }
     // Do not forward browser cookies or upstream response headers.
     return new Response(upstream.body, { status: upstream.status, headers });
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "client_event_delivery_failed",
+      error: error instanceof Error ? error.message.replace(/https?:\/\/\S+/g, "[redacted-url]") : "Unknown error",
+    }));
     return new Response(null, { status: 502, headers });
   }
 }

@@ -11,6 +11,7 @@ function request(payload = body, origin = "https://app.kettigo.xyz") {
 test("forwards the envelope to the fixed Better Stack project without cookies", async () => {
   let forwarded;
   const result = await handleClientEvents(request(), async (url, options) => {
+    assert.equal(options.redirect, "manual");
     forwarded = new Request(url, options);
     return new Response("{}", { status: 200 });
   });
@@ -29,6 +30,7 @@ test("rejects other origins, projects and oversized envelopes without forwarding
 });
 
 test("preserves upstream failure so browser delivery is not falsely acknowledged", async () => {
+  assert.equal((await handleClientEvents(request(), async () => new Response(null, { status: 302, headers: { location: "https://other.example" } }))).status, 502);
   assert.equal((await handleClientEvents(request(), async () => new Response(null, { status: 429 }))).status, 429);
   assert.equal((await handleClientEvents(request(), async () => { throw new Error("offline"); })).status, 502);
 });
