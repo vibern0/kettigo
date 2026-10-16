@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
 import { sepolia } from "viem/chains";
@@ -13,15 +13,17 @@ import {
 } from "@/lib/contracts";
 import { formatUSDC, parseUSDC } from "@/lib/format";
 import { useWallet } from "@/lib/wallet-context";
-import { sendSmartTransaction, sendSmartTransactionBatch, type PasskeySmartSession } from "@/lib/smart-session";
+import { sendSmartTransaction, sendSmartTransactionBatch, type PasskeySmartSession, type PreparedSmartTransaction } from "@/lib/smart-session";
 import {
   asChecksumAddress,
   createPublicZamaSDK,
   decryptPublicUint64,
   encryptUint64,
   prepareSmartReadSession,
+  prepareSmartReadSessionCalls,
   withSmartZamaSDK,
 } from "@/lib/zama";
+import { reportClientError } from "@/lib/client-errors";
 import { afterNextPaint } from "@/lib/paint";
 import { useToast } from "@/components/Toast";
 import { SheetViewport } from "@/components/SheetViewport";
@@ -179,6 +181,30 @@ export default function SavingsPage() {
   const [withdrawalRefreshError, setWithdrawalRefreshError] = useState(false);
   const [depositSheetStep, setDepositSheetStep] = useState<SheetStep>();
   const [withdrawSheetStep, setWithdrawSheetStep] = useState<SheetStep>();
+  const preparedDeposit = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const [preparingDeposit, setPreparingDeposit] = useState(false);
+  const depositPreparationId = useRef(0);
+
+  useEffect(() => {
+    depositPreparationId.current += 1;
+    preparedDeposit.current?.transaction.cancel();
+    preparedDeposit.current = undefined;
+    setPreparingDeposit(false);
+  }, [session, depositAmount]);
+
+  useEffect(() => {
+    if (depositSheetStep === "confirm") return;
+    depositPreparationId.current += 1;
+    preparedDeposit.current?.transaction.cancel();
+    preparedDeposit.current = undefined;
+    setPreparingDeposit(false);
+  }, [depositSheetStep]);
+
+  useEffect(() => () => {
+    depositPreparationId.current += 1;
+    preparedDeposit.current?.transaction.cancel();
+  }, []);
+
   const [confirmingAction, setConfirmingAction] = useState<"deposit" | "withdraw">();
 
   const addresses = useMemo(
@@ -461,7 +487,7 @@ export default function SavingsPage() {
     await refreshPendingWithdrawals(user);
   }
 
-  async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+  async function prepareDeposit(value: bigint) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Valor invalido.");
@@ -508,17 +534,41 @@ export default function SavingsPage() {
     }
     calls.push({ to: token, data });
 
+    const readCalls = await prepareSmartReadSessionCalls(currentSession);
+    return currentSession.prepareTransaction([...readCalls, ...calls]);
+  }
+
+  async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+    const currentSession = activeSession();
+    const prepared = preparedDeposit.current;
+    if (!prepared || prepared.session !== currentSession || prepared.value !== value || Date.now() - prepared.preparedAt > 60_000) {
+      preparedDeposit.current?.transaction.cancel();
+      preparedDeposit.current = undefined;
+      setDepositSheetStep("entry");
+      throw new Error("Please review your deposit again.");
+    }
     update({ status: "waiting-wallet" });
-    await prepareSmartReadSession(currentSession);
-    const tx = await sendSmartTransactionBatch(currentSession, calls, {
-      onSigned: () => {
-        setDepositAmount("");
-        onSigned();
-      },
-    });
+    let tx: `0x${string}`;
+    try {
+      tx = await prepared.transaction.send({
+        onSigned: () => {
+          preparedDeposit.current = undefined;
+          setDepositAmount("");
+          onSigned();
+        },
+      });
+    } catch (error) {
+      if (preparedDeposit.current === prepared) {
+        preparedDeposit.current = undefined;
+        setDepositSheetStep("entry");
+      }
+      throw error;
+    }
+    const user = currentSession.address;
     update({ status: "submitted", txHash: tx });
     update({ status: "confirming" });
-    await publicClient.waitForTransactionReceipt({ hash: tx });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+    if (receipt.status !== "success") throw new Error("The deposit could not be completed.");
     update({ status: "updating" });
     await refreshConfidentialBalances();
     await refreshBalances(user);
@@ -764,7 +814,7 @@ export default function SavingsPage() {
   const withdrawPoolAfter =
     principal === undefined || parsedWithdrawAmount > principal ? undefined : principal - parsedWithdrawAmount;
 
-  function reviewDeposit() {
+  async function reviewDeposit() {
     if (parsedDepositAmount === 0n) {
       toast({ tone: "error", title: "Enter an amount first." });
       return;
@@ -777,7 +827,25 @@ export default function SavingsPage() {
       toast({ tone: "error", title: "Amount is above the current account limit." });
       return;
     }
-    setDepositSheetStep("confirm");
+    const requestId = ++depositPreparationId.current;
+    const currentSession = activeSession();
+    setPreparingDeposit(true);
+    try {
+      const transaction = await prepareDeposit(parsedDepositAmount);
+      if (requestId !== depositPreparationId.current) {
+        transaction.cancel();
+        return;
+      }
+      preparedDeposit.current = { session: currentSession, value: parsedDepositAmount, transaction, preparedAt: Date.now() };
+      setDepositSheetStep("confirm");
+    } catch (error) {
+      reportClientError(error, { action: "deposit", stage: "preparation" });
+      if (requestId === depositPreparationId.current) {
+        toast({ tone: "error", title: "Could not prepare deposit", description: getErrorMessage(error) });
+      }
+    } finally {
+      if (requestId === depositPreparationId.current) setPreparingDeposit(false);
+    }
   }
 
   function remainingDepositCapacity() {
@@ -826,6 +894,7 @@ export default function SavingsPage() {
           update({ status: "completed" });
           toast({ tone: "success", title: ok });
         } catch (error) {
+          reportClientError(error, { action: type, stage: signed ? "submission-or-confirmation" : "approval" });
           const errorMessage = getErrorMessage(error);
           update({ status: "failed", error: errorMessage });
           toast({ tone: "error", title: "Transaction failed", description: errorMessage });
@@ -1009,7 +1078,7 @@ export default function SavingsPage() {
                 const max = usdcBalance !== undefined && usdcBalance < remainingDeposit ? usdcBalance : remainingDeposit;
                 setDepositAmount(formatUSDC(max, 6));
               }}
-              disabled={depositSheetStep === "confirm"}
+              disabled={depositSheetStep === "confirm" || preparingDeposit}
             />
             <p className="rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
               Current account limit: 1,000.00 USDC.
@@ -1018,10 +1087,10 @@ export default function SavingsPage() {
             {depositSheetStep === "entry" ? (
               <button
                 onClick={reviewDeposit}
-                disabled={!session || !poolReady}
+                disabled={!session || !poolReady || preparingDeposit}
                 className="btn-primary w-full"
               >
-                Review deposit
+                {preparingDeposit ? "Preparing deposit..." : "Review deposit"}
               </button>
             ) : (
               <div className="space-y-4">

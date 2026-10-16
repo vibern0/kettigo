@@ -132,7 +132,7 @@ function browserStorage() {
   return window.localStorage;
 }
 
-async function ensureReadSessionDelegated(
+async function readSessionDelegationCalls(
   session: PasskeySmartSession,
   key: ZamaReadSessionKey,
   contracts: Address[],
@@ -165,9 +165,12 @@ async function ensureReadSessionDelegated(
     }];
   });
 
-  if (calls.length > 0) {
-    await session.sendTransaction(calls);
-  }
+  return calls;
+}
+
+async function ensureReadSessionDelegated(session: PasskeySmartSession, key: ZamaReadSessionKey, contracts: Address[]) {
+  const calls = await readSessionDelegationCalls(session, key, contracts);
+  if (calls.length > 0) await session.sendTransaction(calls);
 }
 
 const delegatedZamaSessions = createDelegatedZamaSessionManager({
@@ -250,6 +253,18 @@ export async function decryptWithSmartReadSession(
   return delegatedZamaSessions.run(session, delegationContracts, (sdk) =>
     sdk.decryption.delegatedDecryptValues(normalized, delegator, delegator),
   );
+}
+
+// Include balance access in the action's own batch, avoiding a separate approval.
+export async function prepareSmartReadSessionCalls(session: PasskeySmartSession) {
+  const key = getOrCreateZamaReadSessionKey(browserStorage(), session.address, Date.now(), {
+    generatePrivateKey,
+    getAccountAddress: (privateKey) => getAddress(privateKeyToAccount(privateKey).address),
+  });
+  return readSessionDelegationCalls(session, key, [
+    asChecksumAddress(CONTRACTS.confidentialUsdc, "Savings token"),
+    asChecksumAddress(CONTRACTS.confidentialPrizePool, "Prize pool"),
+  ]);
 }
 
 // Collect any balance-access approval before handing a transaction to the background.

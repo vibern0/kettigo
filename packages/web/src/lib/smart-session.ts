@@ -9,6 +9,7 @@ export type SmartAccountCall = {
 export type PasskeySmartSession = {
   address: Address;
   signTypedData: (typedData: unknown) => Promise<Hex>;
+  prepareTransaction: (calls: SmartAccountCall[]) => Promise<PreparedSmartTransaction>;
   sendTransaction: (calls: SmartAccountCall[], options?: SmartTransactionOptions) => Promise<Hex>;
 };
 
@@ -32,3 +33,8 @@ export async function sendSmartTransactionBatch(
 ): Promise<Hex> {
   return session.sendTransaction(calls, options);
 }
+
+export type PreparedSmartTransaction = {
+  cancel: () => void;
+  send: (options?: SmartTransactionOptions) => Promise<Hex>;
+};

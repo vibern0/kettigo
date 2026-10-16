@@ -23,6 +23,7 @@ import {
   type NewAsyncAction,
 } from "@/lib/action-center-model";
 import { SheetViewport } from "@/components/SheetViewport";
+import { reportClientError } from "@/lib/client-errors";
 import { cn } from "@/lib/cn";
 
 const STORAGE_KEY = "kettigo:actions";
@@ -135,6 +136,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
         id,
         update: (patch) => updateTrackedAction(id, patch),
       }).catch((error) => {
+        reportClientError(error, { action: "background-action", stage: "execution" });
         const message = error instanceof Error ? error.message : String(error);
         updateTrackedAction(id, {
           status: "failed",

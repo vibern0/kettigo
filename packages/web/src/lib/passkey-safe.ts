@@ -255,6 +255,66 @@ function createSession(
       await ensureDeployedRelay();
       return signSafeTypedData(relay.protocolKit, typedData);
     },
+    prepareTransaction: async (calls) => {
+      // Each prepared approval owns its relay and WebAuthn gate. Other wallet
+      // actions cannot consume this operation's challenge or assertion.
+      let requestAssertion: (() => Promise<Credential>) | undefined;
+      let ready!: () => void;
+      let failed!: (error: unknown) => void;
+      const assertionReady = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
+      let resolveAssertion!: (credential: Credential) => void;
+      let rejectAssertion!: (error: unknown) => void;
+      const signingDeps = {
+        ...deps,
+        getCredential(rawId: string, relyingParty: string, options?: CredentialRequestOptions) {
+          requestAssertion = () => deps.getCredential(rawId, relyingParty, options);
+          const assertion = new Promise<Credential>((resolve, reject) => {
+            resolveAssertion = resolve;
+            rejectAssertion = reject;
+          });
+          ready();
+          return assertion;
+        },
+      };
+      const preparedRelay = await deps.initRelay(relayOptions(
+        metadata,
+        usingCounterfactualRelay ? predictedOptions(metadata.rawId) : { safeAddress: getAddress(metadata.safeAddress) },
+        rpId,
+        signingDeps,
+      ));
+      const operation = await preparedRelay.createTransaction({
+        transactions: calls.map((call) => ({ to: getAddress(call.to), data: call.data, value: (call.value ?? 0n).toString() })),
+        options: { feeEstimator: createPasskeyFeeEstimator() },
+      });
+      const signedOperation = preparedRelay.signSafeOperation(operation);
+      // Run Safe's RPC checks now; pause only when its actual assertion is ready.
+      void signedOperation.then(ready, failed);
+      await assertionReady;
+      let used = false;
+      return {
+        cancel() {
+          if (used) return;
+          used = true;
+          rejectAssertion?.(new Error("Deposit review closed."));
+        },
+        async send(options?: SmartTransactionOptions): Promise<Hex> {
+          if (used) throw new Error("Please go back and review your deposit again.");
+          used = true;
+          if (requestAssertion) {
+            // Invoke credentials.get in the Confirm click's call stack.
+            try { requestAssertion().then(resolveAssertion, rejectAssertion); }
+            catch (error) { rejectAssertion(error); }
+          }
+          const signed = await signedOperation;
+          options?.onSigned?.();
+          const hash = await preparedRelay.executeTransaction({ executable: signed });
+          const tx = await waitForUserOperationTransaction(preparedRelay, hash, { sleep: deps.sleep });
+          usingCounterfactualRelay = false;
+          refreshRequired = true;
+          return tx;
+        },
+      };
+    },
     sendTransaction: async (calls, options) => {
       // Rebuild the deployed relay immediately before signing. A session can
       // outlive the relay's cached Safe/module state, which makes an otherwise

@@ -457,3 +457,71 @@ test("builds a passkey signer whose assertion callback is scoped to the stored c
   await signer.getFn({ publicKey: { challenge: new Uint8Array([1]) } });
   assert.equal(requestedRawId, RAW_ID);
 });
+
+test("prepared transactions start the real passkey request synchronously after Safe RPC checks", async () => {
+  const events = [];
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay(options) {
+        const instance = relay();
+        instance.createTransaction = async () => { events.push("prepare"); return { operation: true }; };
+        instance.signSafeOperation = async (operation) => {
+          events.push("rpc-checks");
+          await options.signer.getFn({ publicKey: { challenge: new Uint8Array([1, 2, 3]) } });
+          return operation;
+        };
+        return instance;
+      },
+      async getCredential(_id, _rp, options) {
+        events.push("passkey");
+        assert.deepEqual(options.publicKey.challenge, new Uint8Array([1, 2, 3]));
+        return { id: "credential" };
+      },
+    }),
+  );
+  const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+  assert.deepEqual(events, ["prepare", "rpc-checks"]);
+  const pending = prepared.send({ onSigned() { events.push("signed"); } });
+  assert.deepEqual(events, ["prepare", "rpc-checks", "passkey"]);
+  await pending;
+  assert.deepEqual(events, ["prepare", "rpc-checks", "passkey", "signed"]);
+  await assert.rejects(prepared.send(), /review your deposit/);
+});
+
+test("cancelling a prepared review never requests a credential or submits", async () => {
+  let credentials = 0;
+  let submissions = 0;
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay(options) {
+        const instance = relay();
+        instance.signSafeOperation = async (operation) => { await options.signer.getFn({}); return operation; };
+        instance.executeTransaction = async () => { submissions++; return "0x"; };
+        return instance;
+      },
+      async getCredential() { credentials++; return { id: "credential" }; },
+    }),
+  );
+  const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+  prepared.cancel();
+  await assert.rejects(prepared.send(), /review your deposit/);
+  assert.equal(credentials, 0);
+  assert.equal(submissions, 0);
+});
+
+test("a Safe preflight failure is returned during review before any passkey prompt", async () => {
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay() {
+        const instance = relay();
+        instance.signSafeOperation = async () => { throw new Error("RPC unavailable"); };
+        return instance;
+      },
+      async getCredential() { assert.fail("must not request credentials"); },
+    }),
+  );
+  await assert.rejects(session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), /RPC unavailable/);
+});
