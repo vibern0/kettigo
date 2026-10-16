@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { useWallet } from "@/lib/wallet-context";
 import { shortAddress } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { SheetViewport } from "@/components/SheetViewport";
 import { TestnetWarning } from "@/components/TestnetWarning";
 
 const NAV = [
@@ -37,13 +38,13 @@ export function Header() {
   const accountSheet =
     session && accountSheetOpen && typeof document !== "undefined"
       ? createPortal(
-          <div
+          <SheetViewport
             className="fixed inset-0 z-50 flex items-end justify-center bg-text/20 px-3 pb-3 backdrop-blur-sm"
             role="presentation"
             onClick={() => setAccountSheetOpen(false)}
           >
             <div
-              className="glass-surface w-full max-w-[456px] rounded-[28px] p-4 shadow-2xl"
+              className="glass-surface max-h-full overflow-y-auto w-full max-w-[456px] rounded-[28px] p-4 shadow-2xl"
               role="dialog"
               aria-modal="true"
               aria-label="Account"
@@ -78,7 +79,7 @@ export function Header() {
                 {error && <p className="text-sm text-danger">{error}</p>}
               </div>
             </div>
-          </div>,
+          </SheetViewport>,
           document.body
         )
       : null;

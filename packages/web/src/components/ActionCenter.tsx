@@ -22,6 +22,7 @@ import {
   type AsyncActionStatus,
   type NewAsyncAction,
 } from "@/lib/action-center-model";
+import { SheetViewport } from "@/components/SheetViewport";
 import { cn } from "@/lib/cn";
 
 const STORAGE_KEY = "kettigo:actions";
@@ -215,7 +216,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
       )}
 
       {sheetOpen && liveCount > 0 && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-text/30 px-4 pb-4 backdrop-blur-sm">
+        <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/30 px-4 pb-4 backdrop-blur-sm">
           <button
             type="button"
             aria-label="Close activity"
@@ -226,7 +227,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-labelledby="activity-sheet-title"
-            className="glass-surface relative max-h-[82vh] w-full max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
+            className="glass-surface relative max-h-[min(82vh,100%)] w-full max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
           >
             <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
             <div className="flex items-start justify-between gap-3">
@@ -275,7 +276,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
               </div>
             )}
           </div>
-        </div>
+        </SheetViewport>
       )}
     </ActionCenterContext.Provider>
   );
