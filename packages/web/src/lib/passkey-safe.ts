@@ -38,6 +38,7 @@ const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
 const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
 const ERC4337_MAX_VERIFICATION_GAS = 500_000n;
+const ERC4337_MAX_USABLE_VERIFICATION_GAS = ERC4337_MAX_VERIFICATION_GAS - 1n;
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
@@ -169,13 +170,16 @@ export function createPasskeyFeeEstimator(
     async postEstimateUserOperationGas(
       input: Parameters<PimlicoFeeEstimator["postEstimateUserOperationGas"]>[0],
     ) {
-      const minimumVerificationGas = BigInt(input.userOperation.verificationGasLimit)
-        + PASSKEY_VERIFICATION_GAS_MARGIN;
-      if (minimumVerificationGas >= ERC4337_MAX_VERIFICATION_GAS) {
+      const estimatedVerificationGas = BigInt(input.userOperation.verificationGasLimit);
+      if (estimatedVerificationGas >= ERC4337_MAX_VERIFICATION_GAS) {
         throw new Error(
           "The passkey verification margin reaches the ERC-4337 verification gas limit.",
         );
       }
+      const minimumVerificationGas = estimatedVerificationGas + PASSKEY_VERIFICATION_GAS_MARGIN
+        >= ERC4337_MAX_VERIFICATION_GAS
+        ? ERC4337_MAX_USABLE_VERIFICATION_GAS
+        : estimatedVerificationGas + PASSKEY_VERIFICATION_GAS_MARGIN;
       const sponsored = await baseEstimator.postEstimateUserOperationGas({
         ...input,
         userOperation: {

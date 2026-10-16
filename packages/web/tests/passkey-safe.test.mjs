@@ -108,7 +108,27 @@ test("does not alter sponsor-signed gas fields", async () => {
   );
 });
 
-test("rejects a passkey gas margin at the ERC-4337 ceiling", async () => {
+test("caps passkey verification gas below the ERC-4337 ceiling", async () => {
+  let sponsoredVerificationGas;
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() {
+      return {};
+    },
+    async postEstimateUserOperationGas(input) {
+      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
+      return { verificationGasLimit: sponsoredVerificationGas };
+    },
+  });
+
+  const result = await estimator.postEstimateUserOperationGas({
+    userOperation: { verificationGasLimit: 450_000n },
+  });
+
+  assert.equal(sponsoredVerificationGas, 499_999n);
+  assert.equal(result.verificationGasLimit, 499_999n);
+});
+
+test("rejects a passkey estimate already at the ERC-4337 ceiling", async () => {
   let sponsorshipRequested = false;
   const estimator = createPasskeyFeeEstimator({
     async preEstimateUserOperationGas() {
@@ -122,7 +142,7 @@ test("rejects a passkey gas margin at the ERC-4337 ceiling", async () => {
 
   await assert.rejects(
     estimator.postEstimateUserOperationGas({
-      userOperation: { verificationGasLimit: 450_000n },
+      userOperation: { verificationGasLimit: 500_000n },
     }),
     /ERC-4337 verification gas limit/i,
   );
