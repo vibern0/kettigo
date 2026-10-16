@@ -19,7 +19,7 @@ function deferred() {
 }
 
 function fixture() {
-  const state = { confirming: undefined, deposit: "confirm", withdraw: undefined, patches: [], toasts: [] };
+  const state = { confirming: undefined, deposit: "confirm", withdraw: undefined, patches: [], toasts: [], reports: [] };
   const timers = [];
   let running;
   const run = vm.runInNewContext(`(${handler.trim()})`, {
@@ -35,6 +35,7 @@ function fixture() {
       return "deposit-action";
     },
     toast: (value) => state.toasts.push(value),
+    reportClientError: (error, context) => state.reports.push({ error, context }),
     getErrorMessage: (error) => error.message,
   });
   return { state, run, elapse: () => timers.splice(0).forEach((callback) => callback()), done: () => running };
@@ -87,4 +88,14 @@ test("leaves the deposit form available to retry after cancelled approval", asyn
   assert.equal(flow.state.confirming, undefined);
   assert.equal(flow.state.patches.at(-1).status, "failed");
   assert.equal(flow.state.toasts.at(-1).tone, "error");
+});
+
+ test("reports caught deposit failures with action context", async () => {
+  const flow = fixture();
+  const failure = new Error("Encryption service unavailable");
+  await flow.run("Deposit 10 USDC", "deposit", async () => { throw failure; }, "Deposit complete.");
+  await flow.done();
+  assert.equal(flow.state.reports.length, 1);
+  assert.equal(flow.state.reports[0].error, failure);
+  assert.equal(flow.state.reports[0].context.action, "deposit");
 });
