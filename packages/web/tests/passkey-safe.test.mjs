@@ -108,7 +108,7 @@ test("does not alter sponsor-signed gas fields", async () => {
   );
 });
 
-test("caps passkey verification gas below the ERC-4337 ceiling", async () => {
+test("preserves the full passkey margin at 500,000 gas", async () => {
   let sponsoredVerificationGas;
   const estimator = createPasskeyFeeEstimator({
     async preEstimateUserOperationGas() {
@@ -124,29 +124,28 @@ test("caps passkey verification gas below the ERC-4337 ceiling", async () => {
     userOperation: { verificationGasLimit: 450_000n },
   });
 
-  assert.equal(sponsoredVerificationGas, 499_999n);
-  assert.equal(result.verificationGasLimit, 499_999n);
+  assert.equal(sponsoredVerificationGas, 500_000n);
+  assert.equal(result.verificationGasLimit, 500_000n);
 });
 
-test("rejects a passkey estimate already at the ERC-4337 ceiling", async () => {
-  let sponsorshipRequested = false;
+test("sponsors the observed Samsung passkey deployment estimate without a local ceiling", async () => {
+  let sponsoredVerificationGas;
   const estimator = createPasskeyFeeEstimator({
     async preEstimateUserOperationGas() {
       return {};
     },
-    async postEstimateUserOperationGas() {
-      sponsorshipRequested = true;
-      return {};
+    async postEstimateUserOperationGas(input) {
+      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
+      return { verificationGasLimit: sponsoredVerificationGas, paymasterData: "0x1234" };
     },
   });
 
-  await assert.rejects(
-    estimator.postEstimateUserOperationGas({
-      userOperation: { verificationGasLimit: 500_000n },
-    }),
-    /ERC-4337 verification gas limit/i,
-  );
-  assert.equal(sponsorshipRequested, false);
+  const result = await estimator.postEstimateUserOperationGas({
+    userOperation: { verificationGasLimit: 2_968_567n },
+  });
+  assert.equal(sponsoredVerificationGas, 3_018_567n);
+  assert.equal(result.verificationGasLimit, 3_018_567n);
+  assert.equal(result.paymasterData, "0x1234");
 });
 
 function dependencies(overrides = {}) {
