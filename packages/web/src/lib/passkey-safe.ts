@@ -1,6 +1,7 @@
 "use client";
 
 import Safe, {
+  EthSafeSignature,
   buildSignatureBytes,
   getP256VerifierAddress,
   type ExtractedPasskeyData,
@@ -49,6 +50,11 @@ type ProtocolKitLike = {
   getAddress(): Promise<string>;
   getSafeMessageHash(messageHash: string): Promise<string>;
   signHash(hash: string): Promise<SafeSignature>;
+};
+
+type SafeOperationLike = {
+  signatures: Map<string, SafeSignature>;
+  addSignature(signature: SafeSignature): void;
 };
 
 type UserOperationReceiptLike = {
@@ -301,7 +307,7 @@ function createSession(
             try { requestAssertion().then(resolveAssertion, rejectAssertion); }
             catch (error) { rejectAssertion(error); }
           }
-          const signed = await signedOperation;
+          const signed = normalizePasskeySignature(await signedOperation);
           options?.onSigned?.();
           const hash = await preparedRelay.executeTransaction({ executable: signed });
           const tx = await waitForUserOperationTransaction(preparedRelay, hash, { sleep: deps.sleep });
@@ -357,10 +363,23 @@ async function sendCalls(
     })),
     options: { feeEstimator: createPasskeyFeeEstimator() },
   });
-  const signed = await relay.signSafeOperation(operation);
+  const signed = normalizePasskeySignature(await relay.signSafeOperation(operation));
   options?.onSigned?.();
   const userOperationHash = await relay.executeTransaction({ executable: signed });
   return waitForUserOperationTransaction(relay, userOperationHash, { sleep: deps.sleep });
+}
+
+function normalizePasskeySignature(operation: unknown): unknown {
+  const safeOperation = operation as Partial<SafeOperationLike>;
+  const signatures = safeOperation.signatures;
+  if (!(signatures instanceof Map) || signatures.size !== 1 || !safeOperation.addSignature) {
+    return operation;
+  }
+  const [signature] = signatures.values();
+  if (signature.isContractSignature) return operation;
+  signatures.clear();
+  safeOperation.addSignature(new EthSafeSignature(signature.signer, signature.data, true));
+  return operation;
 }
 
 function relayOptions(

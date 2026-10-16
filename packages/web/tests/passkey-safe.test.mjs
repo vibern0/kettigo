@@ -38,6 +38,13 @@ function createStorage() {
 }
 
 function relay(address = SAFE_ADDRESS) {
+  const signatures = new Map();
+  const operation = {
+    signatures,
+    addSignature(signature) {
+      signatures.set(signature.signer, signature);
+    },
+  };
   return {
     protocolKit: {
       async getAddress() {
@@ -45,10 +52,11 @@ function relay(address = SAFE_ADDRESS) {
       },
     },
     async createTransaction() {
-      return { operation: true };
+      return operation;
     },
     async signSafeOperation(operation) {
-      return { ...operation, signed: true };
+      operation.addSignature(new EthSafeSignature(SHARED_SIGNER_ADDRESS, "0x1234"));
+      return operation;
     },
     async executeTransaction() {
       return `0x${"33".repeat(32)}`;
@@ -346,7 +354,7 @@ test("returns a mined transaction and retries a failed relay refresh before the 
   let deployedCalls = 0;
   deployedRelay.createTransaction = async () => {
     deployedCalls += 1;
-    return { operation: true };
+    return relay().createTransaction();
   };
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage },
@@ -434,6 +442,38 @@ test("rebuilds and retries a deployed relay after an AA24 signature rejection", 
     `0x${"44".repeat(32)}`,
   );
   assert.equal(initCount, 4);
+});
+
+test("wraps a deployed passkey signature as a shared-signer contract signature", async () => {
+  const metadata = {
+    rawId: RAW_ID,
+    coordinates: COORDINATES,
+    verifierAddress: VERIFIER_ADDRESS,
+    safeAddress: SAFE_ADDRESS,
+  };
+  const instance = relay();
+  let submitted;
+  instance.executeTransaction = async ({ executable }) => {
+    submitted = [...executable.signatures.values()][0];
+    return `0x${"33".repeat(32)}`;
+  };
+
+  const session = await restorePasskeyAccount(
+    { metadata, rpId: "app.kettigo.xyz" },
+    dependencies({
+      async getCode() {
+        return "0x6000";
+      },
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+
+  await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+  assert.equal(submitted.signer, SHARED_SIGNER_ADDRESS);
+  assert.equal(submitted.data, "0x1234");
+  assert.equal(submitted.isContractSignature, true);
 });
 
 test("waits for a successful UserOperation receipt and returns the transaction hash", async () => {
