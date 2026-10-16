@@ -24,6 +24,7 @@ test("web Worker config binds the shared waitlist D1 database", () => {
   assert.deepEqual(webConfig.d1_databases, [expectedD1Binding]);
   assert.deepEqual(webConfig.previews.d1_databases, [expectedD1Binding]);
   assert.deepEqual(webConfig.assets.run_worker_first, [
+    "/api/client-events",
     "/",
     "/draw",
     "/draw/",
