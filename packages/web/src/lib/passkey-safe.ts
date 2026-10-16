@@ -50,6 +50,12 @@ type ProtocolKitLike = {
   getAddress(): Promise<string>;
   getSafeMessageHash(messageHash: string): Promise<string>;
   signHash(hash: string): Promise<SafeSignature>;
+  getSafeProvider?(): SafeProviderLike;
+};
+
+type SafeProviderLike = {
+  signer?: unknown;
+  getExternalSigner?(): Promise<unknown>;
 };
 
 type SafeOperationLike = {
@@ -100,7 +106,10 @@ const defaultDependencies: PasskeySafeDependencies = {
   createCredential: ({ rpId, rpName }) => createKettigoCredential({ rpId, rpName }),
   extractPasskeyData: (credential) => Safe.createPasskeySigner(credential),
   getVerifierAddress: getP256VerifierAddress,
-  initRelay: (options) => Safe4337Pack.init(options) as Promise<RelayLike>,
+  initRelay: async (options) => {
+    const relay = await Safe4337Pack.init(options) as RelayLike;
+    return "safeAddress" in options.options ? prepareDeployedRelay(relay) : relay;
+  },
   getCode: (address) => publicClient.getCode({ address }),
   getCredential: (rawId, rpId, options) => getKettigoCredential(rawId, { rpId }, options),
   sleep: (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds)),
@@ -141,7 +150,12 @@ export async function restorePasskeyAccount(
   const code = await deps.getCode(expectedAddress);
   const isDeployed = Boolean(code && code !== "0x");
   const relay = isDeployed
-    ? await deps.initRelay(relayOptions(input.metadata, { safeAddress: expectedAddress }, input.rpId, deps))
+    ? await prepareDeployedRelay(await deps.initRelay(relayOptions(
+      input.metadata,
+      { safeAddress: expectedAddress },
+      input.rpId,
+      deps,
+    )))
     : predictedRelay;
   return createSession(relay, input.metadata, input.rpId, deps, !isDeployed);
 }
@@ -241,12 +255,12 @@ function createSession(
 
   async function ensureDeployedRelay(): Promise<void> {
     if (!refreshRequired) return;
-    const refreshedRelay = await deps.initRelay(relayOptions(
+    const refreshedRelay = await prepareDeployedRelay(await deps.initRelay(relayOptions(
       metadata,
       { safeAddress: getAddress(metadata.safeAddress) },
       rpId,
       deps,
-    ));
+    )));
     relay = refreshedRelay;
     refreshRequired = false;
   }
@@ -324,17 +338,7 @@ function createSession(
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
       await ensureDeployedRelay();
-      let transactionHash: Hex;
-      try {
-        transactionHash = await sendCalls(relay, calls, deps, options);
-      } catch (error) {
-        // AA24 is rejected before Safe execution, so it is safe to rebuild the
-        // deployed relay and retry with a fresh Safe operation.
-        if (usingCounterfactualRelay || !isSignatureRejection(error)) throw error;
-        refreshRequired = true;
-        await ensureDeployedRelay();
-        transactionHash = await sendCalls(relay, calls, deps, options);
-      }
+      const transactionHash = await sendCalls(relay, calls, deps, options);
       if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
@@ -342,11 +346,6 @@ function createSession(
       return transactionHash;
     },
   };
-}
-
-function isSignatureRejection(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /AA24\s+signature\s+error|signature\s+error/i.test(message);
 }
 
 async function sendCalls(
@@ -376,10 +375,33 @@ function normalizePasskeySignature(operation: unknown): unknown {
     return operation;
   }
   const [signature] = signatures.values();
-  if (signature.isContractSignature) return operation;
+  if (
+    signature.isContractSignature &&
+    signature.signer.toLowerCase() === SHARED_SIGNER_ADDRESS.toLowerCase()
+  ) return operation;
   signatures.clear();
-  safeOperation.addSignature(new EthSafeSignature(signature.signer, signature.data, true));
+  safeOperation.addSignature(new EthSafeSignature(SHARED_SIGNER_ADDRESS, signature.data, true));
   return operation;
+}
+
+async function prepareDeployedRelay(relay: RelayLike): Promise<RelayLike> {
+  const safeProvider = relay.protocolKit.getSafeProvider?.();
+  const externalSigner = await safeProvider?.getExternalSigner?.();
+  if (!safeProvider || !externalSigner || typeof externalSigner !== "object") return relay;
+
+  const signer = externalSigner as {
+    key?: unknown;
+    account?: { address?: unknown };
+  };
+  if (signer.key !== "passkeyWallet" || !signer.account?.address) return relay;
+
+  // Relay Kit 6.1.1 initializes an existing Safe without passing its owners
+  // into Protocol Kit. That makes a shared WebAuthn signer look like the
+  // individual signer contract. Keep the same passkey client, but bind its
+  // account to the shared signer that is actually an owner of this Safe.
+  signer.account = { ...signer.account, address: SHARED_SIGNER_ADDRESS };
+  safeProvider.signer = externalSigner;
+  return relay;
 }
 
 function relayOptions(

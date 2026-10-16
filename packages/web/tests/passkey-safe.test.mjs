@@ -37,7 +37,7 @@ function createStorage() {
   };
 }
 
-function relay(address = SAFE_ADDRESS) {
+function relay(address = SAFE_ADDRESS, safeProvider) {
   const signatures = new Map();
   const operation = {
     signatures,
@@ -50,6 +50,7 @@ function relay(address = SAFE_ADDRESS) {
       async getAddress() {
         return address;
       },
+      ...(safeProvider ? { getSafeProvider() { return safeProvider; } } : {}),
     },
     async createTransaction() {
       return operation;
@@ -409,7 +410,7 @@ test("refreshes a deployed relay before signing a transaction", async () => {
   assert.equal(initCount, 3);
 });
 
-test("rebuilds and retries a deployed relay after an AA24 signature rejection", async () => {
+test("does not retry a deployed relay after an AA24 signature rejection", async () => {
   const metadata = {
     rawId: RAW_ID,
     coordinates: COORDINATES,
@@ -420,7 +421,6 @@ test("rebuilds and retries a deployed relay after an AA24 signature rejection", 
   firstRelay.executeTransaction = async () => {
     throw new Error("RpcRequestError: UserOperation reverted with reason: AA24 signature error");
   };
-  const secondRelay = relay();
   let initCount = 0;
 
   const session = await restorePasskeyAccount(
@@ -432,16 +432,46 @@ test("rebuilds and retries a deployed relay after an AA24 signature rejection", 
       async initRelay() {
         initCount += 1;
         if (initCount < 3) return relay();
-        return initCount === 3 ? firstRelay : secondRelay;
+        return firstRelay;
       },
     }),
   );
 
-  assert.equal(
-    await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
-    `0x${"44".repeat(32)}`,
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    /AA24 signature error/,
   );
-  assert.equal(initCount, 4);
+  assert.equal(initCount, 3);
+});
+
+test("binds a deployed passkey client to the Safe shared signer", async () => {
+  const metadata = {
+    rawId: RAW_ID,
+    coordinates: COORDINATES,
+    verifierAddress: VERIFIER_ADDRESS,
+    safeAddress: SAFE_ADDRESS,
+  };
+  const externalSigner = {
+    key: "passkeyWallet",
+    account: { address: getAddress("0x00000000000000000000000000000000000000cc") },
+    async signMessage() { return "0x"; },
+  };
+  const safeProvider = {
+    signer: { rawId: RAW_ID },
+    async getExternalSigner() { return externalSigner; },
+  };
+  const instance = relay(SAFE_ADDRESS, safeProvider);
+
+  await restorePasskeyAccount(
+    { metadata, rpId: "app.kettigo.xyz" },
+    dependencies({
+      async getCode() { return "0x6000"; },
+      async initRelay() { return instance; },
+    }),
+  );
+
+  assert.equal(safeProvider.signer, externalSigner);
+  assert.equal(externalSigner.account.address, SHARED_SIGNER_ADDRESS);
 });
 
 test("wraps a deployed passkey signature as a shared-signer contract signature", async () => {
