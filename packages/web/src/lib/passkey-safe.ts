@@ -38,6 +38,7 @@ const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
 const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
+const PASSKEY_MIN_VERIFICATION_GAS = 300_000n;
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
@@ -190,8 +191,11 @@ export function createPasskeyFeeEstimator(
     ) {
       // Let the bundler and paymaster validate their network's limits. Account
       // deployment estimates can exceed a locally assumed verification ceiling.
-      const minimumVerificationGas = BigInt(input.userOperation.verificationGasLimit)
+      const estimatedVerificationGas = BigInt(input.userOperation.verificationGasLimit)
         + PASSKEY_VERIFICATION_GAS_MARGIN;
+      const minimumVerificationGas = estimatedVerificationGas > PASSKEY_MIN_VERIFICATION_GAS
+        ? estimatedVerificationGas
+        : PASSKEY_MIN_VERIFICATION_GAS;
       const sponsored = await baseEstimator.postEstimateUserOperationGas({
         ...input,
         userOperation: {

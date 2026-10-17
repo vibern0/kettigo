@@ -96,6 +96,26 @@ test("adds passkey verification gas before paymaster sponsorship", async () => {
   assert.equal(result.paymasterData, "0x1234");
 });
 
+test("uses the Safe passkey verification gas floor for small bundler estimates", async () => {
+  let sponsoredVerificationGas;
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() {
+      return {};
+    },
+    async postEstimateUserOperationGas(input) {
+      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
+      return { verificationGasLimit: sponsoredVerificationGas };
+    },
+  });
+
+  const result = await estimator.postEstimateUserOperationGas({
+    userOperation: { verificationGasLimit: 200_000n },
+  });
+
+  assert.equal(sponsoredVerificationGas, 300_000n);
+  assert.equal(result.verificationGasLimit, 300_000n);
+});
+
 test("does not alter sponsor-signed gas fields", async () => {
   const estimator = createPasskeyFeeEstimator({
     async preEstimateUserOperationGas() {
