@@ -30,6 +30,7 @@ import {
   getKettigoCredential,
 } from "./passkey-webauthn.ts";
 import { publicConfig } from "./runtime-config.ts";
+import { createPasskeyVerifierGasProbe, withPasskeyStage, type PasskeyGasDiagnostics } from "./passkey-gas.ts";
 import type { PasskeySmartSession, SmartAccountCall, SmartTransactionOptions } from "./smart-session.ts";
 
 const SAFE_VERSION = "1.4.1" as const;
@@ -38,6 +39,7 @@ const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
 const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
+const PASSKEY_DISPATCH_GAS = 100_000n;
 // Sepolia's real P256 assertion needed ~417k for Safe.checkSignatures even
 // though the dummy-signature estimate was ~309k. The captured operation failed
 // validateUserOp at 358,778 gas and passed at 450k; leave headroom for the
@@ -93,6 +95,7 @@ type PasskeySafeDependencies = {
   initRelay(options: RelayInitOptions): Promise<RelayLike>;
   getCode(address: Address): Promise<Hex | undefined>;
   getCredential(rawId: string, rpId: string, options?: CredentialRequestOptions): Promise<Credential>;
+  estimateVerifierGas(address: Address): Promise<bigint>;
   sleep(milliseconds: number): Promise<void>;
 };
 
@@ -108,6 +111,7 @@ const publicClient = createPublicClient({
 });
 
 const defaultDependencies: PasskeySafeDependencies = {
+  estimateVerifierGas: createPasskeyVerifierGasProbe(publicClient),
   createCredential: ({ rpId, rpName }) => createKettigoCredential({ rpId, rpName }),
   extractPasskeyData: (credential) => Safe.createPasskeySigner(credential),
   getVerifierAddress: getP256VerifierAddress,
@@ -185,7 +189,9 @@ type PimlicoFeeEstimatorLike = Pick<
 
 export function createPasskeyFeeEstimator(
   baseEstimator: PimlicoFeeEstimatorLike = new PimlicoFeeEstimator(),
+  options: { estimateVerifierGas?: () => Promise<bigint>; diagnostics?: PasskeyGasDiagnostics } = {},
 ) {
+  const diagnostics = options.diagnostics ?? {};
   return {
     preEstimateUserOperationGas: (
       input: Parameters<PimlicoFeeEstimator["preEstimateUserOperationGas"]>[0],
@@ -195,11 +201,29 @@ export function createPasskeyFeeEstimator(
     ) {
       // Let the bundler and paymaster validate their network's limits. Account
       // deployment estimates can exceed a locally assumed verification ceiling.
-      const estimatedVerificationGas = BigInt(input.userOperation.verificationGasLimit)
-        + PASSKEY_VERIFICATION_GAS_MARGIN;
-      const minimumVerificationGas = estimatedVerificationGas > PASSKEY_MIN_VERIFICATION_GAS
-        ? estimatedVerificationGas
-        : PASSKEY_MIN_VERIFICATION_GAS;
+      const bundlerGas = BigInt(input.userOperation.verificationGasLimit);
+      diagnostics.bundlerVerificationGas = bundlerGas.toString();
+      const proportionalMargin = (bundlerGas + 3n) / 4n;
+      const estimatedVerificationGas = bundlerGas + (proportionalMargin > PASSKEY_VERIFICATION_GAS_MARGIN
+        ? proportionalMargin : PASSKEY_VERIFICATION_GAS_MARGIN);
+      let measuredVerificationGas = 0n;
+      diagnostics.verifierProbe = "fallback";
+      if (options.estimateVerifierGas) {
+        try {
+          const verifierGas = await options.estimateVerifierGas();
+          if (verifierGas <= 0n) throw new Error("Invalid verifier gas estimate.");
+          diagnostics.verifierGas = verifierGas.toString();
+          diagnostics.verifierProbe = "measured";
+          // Account for WebAuthn/Safe dispatch and signature-dependent P256 work.
+          measuredVerificationGas = verifierGas + (verifierGas + 3n) / 4n + PASSKEY_DISPATCH_GAS;
+        } catch {
+          // Probe availability must not prevent the proven fallback from working.
+        }
+      }
+      const minimumVerificationGas = [PASSKEY_MIN_VERIFICATION_GAS, estimatedVerificationGas, measuredVerificationGas]
+        .reduce((maximum, value) => value > maximum ? value : maximum);
+      diagnostics.requestedVerificationGas = minimumVerificationGas.toString();
+      diagnostics.phase = "sponsorship";
       const sponsored = await baseEstimator.postEstimateUserOperationGas({
         ...input,
         userOperation: {
@@ -210,6 +234,7 @@ export function createPasskeyFeeEstimator(
       const sponsoredVerificationGas = sponsored.verificationGasLimit == null
         ? 0n
         : BigInt(sponsored.verificationGasLimit);
+      diagnostics.sponsoredVerificationGas = sponsoredVerificationGas.toString();
       if (sponsoredVerificationGas < minimumVerificationGas) {
         throw new Error("The paymaster returned insufficient verification gas for the passkey.");
       }
@@ -306,11 +331,14 @@ function createSession(
         rpId,
         signingDeps,
       ));
-      const operation = await preparedRelay.createTransaction({
+      const diagnostics: PasskeyGasDiagnostics = {};
+      const operation = await withPasskeyStage(diagnostics, "estimation", () => preparedRelay.createTransaction({
         transactions: calls.map((call) => ({ to: getAddress(call.to), data: call.data, value: (call.value ?? 0n).toString() })),
-        options: { feeEstimator: createPasskeyFeeEstimator() },
-      });
-      const signedOperation = preparedRelay.signSafeOperation(operation);
+        options: { feeEstimator: createPasskeyFeeEstimator(undefined, {
+          estimateVerifierGas: () => deps.estimateVerifierGas(getAddress(metadata.verifierAddress)), diagnostics,
+        }) },
+      }));
+      const signedOperation = withPasskeyStage(diagnostics, "signing", () => preparedRelay.signSafeOperation(operation));
       // Run Safe's RPC checks now; pause only when its actual assertion is ready.
       void signedOperation.then(ready, failed);
       await assertionReady;
@@ -330,9 +358,7 @@ function createSession(
             catch (error) { rejectAssertion(error); }
           }
           const signed = normalizePasskeySignature(await signedOperation);
-          options?.onSigned?.();
-          const hash = await preparedRelay.executeTransaction({ executable: signed });
-          const tx = await waitForUserOperationTransaction(preparedRelay, hash, { sleep: deps.sleep });
+          const tx = await submitSignedOperation(preparedRelay, signed, deps, diagnostics, options);
           usingCounterfactualRelay = false;
           refreshRequired = true;
           return tx;
@@ -346,7 +372,7 @@ function createSession(
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
       await ensureDeployedRelay();
-      const transactionHash = await sendCalls(relay, calls, deps, options);
+      const transactionHash = await sendCalls(relay, calls, deps, getAddress(metadata.verifierAddress), options);
       if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
@@ -360,20 +386,47 @@ async function sendCalls(
   relay: RelayLike,
   calls: SmartAccountCall[],
   deps: PasskeySafeDependencies,
+  verifierAddress: Address,
   options?: SmartTransactionOptions,
 ): Promise<Hex> {
-  const operation = await relay.createTransaction({
+  const diagnostics: PasskeyGasDiagnostics = {};
+  const operation = await withPasskeyStage(diagnostics, "estimation", () => relay.createTransaction({
     transactions: calls.map((call) => ({
       to: getAddress(call.to),
       data: call.data,
       value: (call.value ?? 0n).toString(),
     })),
-    options: { feeEstimator: createPasskeyFeeEstimator() },
-  });
-  const signed = normalizePasskeySignature(await relay.signSafeOperation(operation));
+    options: { feeEstimator: createPasskeyFeeEstimator(undefined, {
+      estimateVerifierGas: () => deps.estimateVerifierGas(verifierAddress), diagnostics,
+    }) },
+  }));
+  const signed = normalizePasskeySignature(await withPasskeyStage(diagnostics, "signing", () => relay.signSafeOperation(operation)));
+  return submitSignedOperation(relay, signed, deps, diagnostics, options);
+}
+
+async function submitSignedOperation(
+  relay: RelayLike,
+  signed: unknown,
+  deps: PasskeySafeDependencies,
+  diagnostics: PasskeyGasDiagnostics,
+  options?: SmartTransactionOptions,
+): Promise<Hex> {
+  // Read the final signed gas fields only; never copy identity, calldata,
+  // paymaster data, or credential/signature material into diagnostics.
+  const operation = signed as { getUserOperation?: () => Record<string, unknown> };
+  const gas = operation.getUserOperation?.();
+  const fields = {
+    verificationGasLimit: "submittedVerificationGas", callGasLimit: "submittedCallGas",
+    preVerificationGas: "submittedPreVerificationGas", maxFeePerGas: "submittedMaxFeePerGas",
+    maxPriorityFeePerGas: "submittedMaxPriorityFeePerGas",
+  } as const;
+  for (const [field, diagnostic] of Object.entries(fields)) {
+    const value = gas?.[field];
+    if (typeof value === "bigint") diagnostics[diagnostic] = value.toString();
+  }
   options?.onSigned?.();
-  const userOperationHash = await relay.executeTransaction({ executable: signed });
-  return waitForUserOperationTransaction(relay, userOperationHash, { sleep: deps.sleep });
+  const hash = await withPasskeyStage(diagnostics, "submission", () => relay.executeTransaction({ executable: signed }));
+  return withPasskeyStage(diagnostics, "receipt", () => waitForUserOperationTransaction(relay, hash, { sleep: deps.sleep }));
 }
 
 function normalizePasskeySignature(operation: unknown): unknown {

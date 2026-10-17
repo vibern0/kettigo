@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { EthSafeSignature } from "@safe-global/protocol-kit";
+import { PimlicoFeeEstimator } from "@safe-global/relay-kit";
 import { getAddress, hashTypedData } from "viem";
 
 import {
@@ -91,8 +92,8 @@ test("adds passkey verification gas before paymaster sponsorship", async () => {
     userOperation: { verificationGasLimit: 613_085n },
   });
 
-  assert.equal(sponsoredVerificationGas, 663_085n);
-  assert.equal(result.verificationGasLimit, 663_085n);
+  assert.equal(sponsoredVerificationGas, 766_357n);
+  assert.equal(result.verificationGasLimit, 766_357n);
   assert.equal(result.paymasterData, "0x1234");
 });
 
@@ -157,8 +158,8 @@ test("preserves the full passkey margin above the verification floor", async () 
     userOperation: { verificationGasLimit: 700_000n },
   });
 
-  assert.equal(sponsoredVerificationGas, 750_000n);
-  assert.equal(result.verificationGasLimit, 750_000n);
+  assert.equal(sponsoredVerificationGas, 875_000n);
+  assert.equal(result.verificationGasLimit, 875_000n);
 });
 
 test("sponsors the observed Samsung passkey deployment estimate without a local ceiling", async () => {
@@ -176,9 +177,38 @@ test("sponsors the observed Samsung passkey deployment estimate without a local 
   const result = await estimator.postEstimateUserOperationGas({
     userOperation: { verificationGasLimit: 2_968_567n },
   });
-  assert.equal(sponsoredVerificationGas, 3_018_567n);
-  assert.equal(result.verificationGasLimit, 3_018_567n);
+  assert.equal(sponsoredVerificationGas, 3_710_709n);
+  assert.equal(result.verificationGasLimit, 3_710_709n);
   assert.equal(result.paymasterData, "0x1234");
+});
+
+test("a measured verifier cost can raise the budget above the fallback and bundler estimate", async () => {
+  const diagnostics = {};
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() { return {}; },
+    async postEstimateUserOperationGas(input) {
+      assert.equal(input.userOperation.verificationGasLimit, 912_500n);
+      return { verificationGasLimit: 950_000n };
+    },
+  }, { estimateVerifierGas: async () => 650_000n, diagnostics });
+  await estimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
+  assert.equal(diagnostics.verifierProbe, "measured");
+  assert.equal(diagnostics.verifierGas, "650000");
+  assert.equal(diagnostics.bundlerVerificationGas, "308778");
+  assert.equal(diagnostics.requestedVerificationGas, "912500");
+  assert.equal(diagnostics.sponsoredVerificationGas, "950000");
+});
+
+test("a probe outage preserves the proven fallback without blocking sponsorship", async () => {
+  const diagnostics = {};
+  const estimator = createPasskeyFeeEstimator({
+    async preEstimateUserOperationGas() { return {}; },
+    async postEstimateUserOperationGas(input) { return { verificationGasLimit: input.userOperation.verificationGasLimit }; },
+  }, { estimateVerifierGas: async () => { throw new Error("offline https://rpc.example/?apikey=secret"); }, diagnostics });
+  const result = await estimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
+  assert.equal(result.verificationGasLimit, 600_000n);
+  assert.equal(diagnostics.verifierProbe, "fallback");
+  assert.doesNotMatch(JSON.stringify(diagnostics), /secret|https/);
 });
 
 function dependencies(overrides = {}) {
@@ -466,6 +496,94 @@ test("does not retry a deployed relay after an AA24 signature rejection", async 
     /AA24 signature error/,
   );
   assert.equal(initCount, 3);
+});
+
+test("submission failures retain gas diagnostics and request only one signature", async () => {
+  const instance = relay();
+  let signatures = 0;
+  let submissions = 0;
+  instance.createTransaction = async () => ({ getUserOperation() { return {
+    verificationGasLimit: 650_000n, callGasLimit: 1_000_000n, preVerificationGas: 60_000n,
+    maxFeePerGas: 123n, maxPriorityFeePerGas: 100n,
+    sender: SAFE_ADDRESS, callData: "secret-calldata", signature: "secret-signature",
+  }; } });
+  instance.signSafeOperation = async (operation) => { signatures++; return operation; };
+  instance.executeTransaction = async () => { submissions++; throw new Error("AA24 signature error"); };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({ async initRelay() { return instance; } }),
+  );
+  await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), (error) => {
+    assert.equal(error.passkeyDiagnostics.phase, "submission");
+    assert.equal(error.passkeyDiagnostics.aaCode, "AA24");
+    assert.equal(error.passkeyDiagnostics.submittedVerificationGas, "650000");
+    assert.equal(error.passkeyDiagnostics.submittedMaxFeePerGas, "123");
+    assert.doesNotMatch(JSON.stringify(error.passkeyDiagnostics), /secret|sender|callData|signature|0x/);
+    return true;
+  });
+  assert.equal(signatures, 1);
+  assert.equal(submissions, 1);
+});
+
+test("estimation failures are identified before any passkey signature", async () => {
+  const instance = relay();
+  instance.createTransaction = async () => { throw new Error("RPC unavailable"); };
+  instance.signSafeOperation = async () => { assert.fail("must not sign"); };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({ async initRelay() { return instance; } }),
+  );
+  await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), (error) => {
+    assert.equal(error.passkeyDiagnostics.phase, "estimation");
+    return true;
+  });
+});
+
+test("immediate and prepared actions measure the configured verifier before signing once", async (t) => {
+  t.mock.method(PimlicoFeeEstimator.prototype, "postEstimateUserOperationGas", async ({ userOperation }) => ({
+    verificationGasLimit: userOperation.verificationGasLimit,
+  }));
+  for (const prepared of [false, true]) {
+    let measured = false;
+    let signatures = 0;
+    const instance = relay();
+    instance.createTransaction = async ({ options }) => {
+      const gas = await options.feeEstimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
+      assert.equal(gas.verificationGasLimit, 912_500n);
+      return { getUserOperation() { return gas; } };
+    };
+    instance.signSafeOperation = async (operation) => {
+      assert.equal(measured, true);
+      signatures++;
+      return operation;
+    };
+    const session = await createPasskeyAccount(
+      { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+      dependencies({
+        async initRelay() { return instance; },
+        async estimateVerifierGas(address) { assert.equal(address, VERIFIER_ADDRESS); measured = true; return 650_000n; },
+      }),
+    );
+    const calls = [{ to: SAFE_ADDRESS, data: "0x" }];
+    if (prepared) await (await session.prepareTransaction(calls)).send();
+    else await session.sendTransaction(calls);
+    assert.equal(signatures, 1);
+  }
+});
+
+test("paymaster failures retain the sponsorship phase and requested budget", async (t) => {
+  t.mock.method(PimlicoFeeEstimator.prototype, "postEstimateUserOperationGas", async () => { throw new Error("paymaster unavailable"); });
+  const instance = relay();
+  instance.createTransaction = async ({ options }) => options.feeEstimator.postEstimateUserOperationGas({userOperation:{verificationGasLimit:308_778n}});
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({ async initRelay() { return instance; }, async estimateVerifierGas() { return 356_759n; } }),
+  );
+  await assert.rejects(session.sendTransaction([{to: SAFE_ADDRESS, data: "0x"}]), (error) => {
+    assert.equal(error.passkeyDiagnostics.phase, "sponsorship");
+    assert.equal(error.passkeyDiagnostics.requestedVerificationGas, "600000");
+    return true;
+  });
 });
 
 test("binds a deployed passkey client to the Safe shared signer", async () => {

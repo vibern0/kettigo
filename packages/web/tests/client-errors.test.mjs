@@ -45,3 +45,37 @@ test("error toast messages reach the configured error source", async () => {
   assert.equal(events[0].options.tags.action, "deposit");
   assert.equal(events[0].options.tags.stage, "validation");
 });
+
+test("passkey gas diagnostics survive delivery while arbitrary metadata is excluded", async () => {
+  const source = await readFile(new URL("../src/lib/client-errors.ts", import.meta.url), "utf8");
+  const events = [];
+  let config;
+  const context = vm.createContext({
+    window: {},
+    Sentry: { init: (value) => { config = value; }, captureException: (error, options) => events.push({ error, options }) },
+  });
+  vm.runInContext(stripTypeScriptTypes(source.replace(/^import .*;\n/gm, "").replace(/export /g, "")), context);
+  vm.runInContext(`reportClientToast({title:'Transaction failed'}, {action:'claimPrize',stage:'execution'}, Object.assign(new Error('AA24 signature error'), {
+    passkeyDiagnostics: {phase:'submission',verifierProbe:'measured',verifierGas:'356759',bundlerVerificationGas:'308778',requestedVerificationGas:'600000',sponsoredVerificationGas:'600000',submittedVerificationGas:'600000',aaCode:'AA24',submittedMaxFeePerGas:'110000',sender:'0xabcdef1234567890',signature:'secret',callData:'secret',rpcUrl:'https://rpc.example/?apikey=secret'}
+  }))`, context);
+  const diagnostics = events[0].options.contexts.passkey_operation;
+  assert.equal(diagnostics.phase, "submission");
+  assert.equal(diagnostics.bundlerVerificationGas, "308778");
+  assert.equal(diagnostics.submittedVerificationGas, "600000");
+  assert.equal(diagnostics.aaCode, "AA24");
+  assert.doesNotMatch(JSON.stringify(diagnostics), /secret|sender|signature|callData|rpcUrl|apikey/);
+  const delivered = config.beforeSend({ contexts: events[0].options.contexts, request: { secret: true }, extra: { secret: true }, breadcrumbs: ["secret"] });
+  assert.equal(delivered.contexts.passkey_operation.submittedVerificationGas, "600000");
+  assert.equal(delivered.request, undefined);
+  assert.equal(delivered.extra, undefined);
+  assert.equal(delivered.breadcrumbs, undefined);
+});
+
+test("diagnostic values cannot smuggle URLs or signatures through allowed field names", async () => {
+  const source = await readFile(new URL("../src/lib/client-errors.ts", import.meta.url), "utf8");
+  const events = [];
+  const context = vm.createContext({ window: {}, Sentry: { init: () => {}, captureException: (error, options) => events.push({error,options}) } });
+  vm.runInContext(stripTypeScriptTypes(source.replace(/^import .*;\n/gm, "").replace(/export /g, "")), context);
+  vm.runInContext(`reportClientError(Object.assign(new Error('failed'), {passkeyDiagnostics:{phase:'https://secret',submittedVerificationGas:'0xdeadbeef',aaCode:'AA24 secret'}}), {action:'claimPrize',stage:'execution'})`, context);
+  assert.doesNotMatch(JSON.stringify(events[0].options), /secret|deadbeef/);
+});

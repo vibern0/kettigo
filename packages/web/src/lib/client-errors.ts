@@ -8,6 +8,25 @@ function redact(value: string) {
     .replace(/Request body:[^\n]*/gi, "Request body: [redacted]");
 }
 
+function passkeyDiagnostics(error: unknown): Record<string, string> | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const source = (error as { passkeyDiagnostics?: Record<string, unknown> }).passkeyDiagnostics;
+  if (!source || typeof source !== "object") return undefined;
+  const result: Record<string, string> = {};
+  for (const key of [
+    "verifierGas", "bundlerVerificationGas", "requestedVerificationGas", "sponsoredVerificationGas",
+    "submittedVerificationGas", "submittedCallGas", "submittedPreVerificationGas",
+    "submittedMaxFeePerGas", "submittedMaxPriorityFeePerGas",
+  ]) {
+    const value = source[key];
+    if (typeof value === "string" && /^\d{1,40}$/.test(value)) result[key] = value;
+  }
+  if (typeof source.phase === "string" && ["estimation", "sponsorship", "signing", "submission", "receipt"].includes(source.phase)) result.phase = source.phase;
+  if (source.verifierProbe === "measured" || source.verifierProbe === "fallback") result.verifierProbe = source.verifierProbe;
+  if (typeof source.aaCode === "string" && /^AA\d{2}$/.test(source.aaCode)) result.aaCode = source.aaCode;
+  return Object.keys(result).length ? result : undefined;
+}
+
 export function initializeClientErrors() {
   if (initialized || typeof window === "undefined") return;
   Sentry.init({
@@ -48,7 +67,11 @@ export function reportClientError(error: unknown, context: { action: string; sta
       );
       reported.stack = `${reported.name}: ${reported.message}\n${frames.join("\n")}`;
     }
-    Sentry.captureException(reported, { tags: context });
+    const diagnostics = passkeyDiagnostics(error);
+    Sentry.captureException(reported, {
+      tags: context,
+      ...(diagnostics ? { contexts: { passkey_operation: diagnostics } } : {}),
+    });
   } catch {
     // Reporting must not interrupt the retry path or hide the original error.
   }
