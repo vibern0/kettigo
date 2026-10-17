@@ -88,15 +88,15 @@ test("adds passkey verification gas before paymaster sponsorship", async () => {
 
   assert.deepEqual(await estimator.preEstimateUserOperationGas({}), { maxFeePerGas: 1n });
   const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 413_085n },
+    userOperation: { verificationGasLimit: 613_085n },
   });
 
-  assert.equal(sponsoredVerificationGas, 463_085n);
-  assert.equal(result.verificationGasLimit, 463_085n);
+  assert.equal(sponsoredVerificationGas, 663_085n);
+  assert.equal(result.verificationGasLimit, 663_085n);
   assert.equal(result.paymasterData, "0x1234");
 });
 
-test("uses the Safe passkey verification gas floor for small bundler estimates", async () => {
+test("covers real Sepolia passkey validation before paymaster sponsorship", async () => {
   let sponsoredVerificationGas;
   const estimator = createPasskeyFeeEstimator({
     async preEstimateUserOperationGas() {
@@ -108,12 +108,16 @@ test("uses the Safe passkey verification gas floor for small bundler estimates",
     },
   });
 
-  const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 200_000n },
-  });
+  // Captured production estimate: 308,778. The same real signature failed
+  // validation with 358,778 gas and succeeded with 450,000 gas on Sepolia.
+  for (const verificationGasLimit of [200_000n, 308_778n, 450_000n]) {
+    const result = await estimator.postEstimateUserOperationGas({
+      userOperation: { verificationGasLimit },
+    });
 
-  assert.equal(sponsoredVerificationGas, 300_000n);
-  assert.equal(result.verificationGasLimit, 300_000n);
+    assert.equal(sponsoredVerificationGas, 600_000n);
+    assert.equal(result.verificationGasLimit, 600_000n);
+  }
 });
 
 test("does not alter sponsor-signed gas fields", async () => {
@@ -137,7 +141,7 @@ test("does not alter sponsor-signed gas fields", async () => {
   );
 });
 
-test("preserves the full passkey margin at 500,000 gas", async () => {
+test("preserves the full passkey margin above the verification floor", async () => {
   let sponsoredVerificationGas;
   const estimator = createPasskeyFeeEstimator({
     async preEstimateUserOperationGas() {
@@ -150,11 +154,11 @@ test("preserves the full passkey margin at 500,000 gas", async () => {
   });
 
   const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 450_000n },
+    userOperation: { verificationGasLimit: 700_000n },
   });
 
-  assert.equal(sponsoredVerificationGas, 500_000n);
-  assert.equal(result.verificationGasLimit, 500_000n);
+  assert.equal(sponsoredVerificationGas, 750_000n);
+  assert.equal(result.verificationGasLimit, 750_000n);
 });
 
 test("sponsors the observed Samsung passkey deployment estimate without a local ceiling", async () => {

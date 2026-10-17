@@ -38,7 +38,11 @@ const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
 const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
-const PASSKEY_MIN_VERIFICATION_GAS = 300_000n;
+// Sepolia's real P256 assertion needed ~417k for Safe.checkSignatures even
+// though the dummy-signature estimate was ~309k. The captured operation failed
+// validateUserOp at 358,778 gas and passed at 450k; leave headroom for the
+// complete validation path and signature-dependent verifier cost.
+const PASSKEY_MIN_VERIFICATION_GAS = 600_000n;
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
