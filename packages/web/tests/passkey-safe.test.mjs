@@ -752,7 +752,7 @@ test("prepared transactions start the real passkey request synchronously after S
   assert.deepEqual(events, ["prepare", "rpc-checks", "passkey"]);
   await pending;
   assert.deepEqual(events, ["prepare", "rpc-checks", "passkey", "signed"]);
-  await assert.rejects(prepared.send(), /review your deposit/);
+  await assert.rejects(prepared.send(), /review your transaction/);
 });
 
 test("cancelling a prepared review never requests a credential or submits", async () => {
@@ -772,7 +772,7 @@ test("cancelling a prepared review never requests a credential or submits", asyn
   );
   const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
   prepared.cancel();
-  await assert.rejects(prepared.send(), /review your deposit/);
+  await assert.rejects(prepared.send(), /review your transaction/);
   assert.equal(credentials, 0);
   assert.equal(submissions, 0);
 });

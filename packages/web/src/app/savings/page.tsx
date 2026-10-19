@@ -19,7 +19,6 @@ import {
   createPublicZamaSDK,
   decryptPublicUint64,
   encryptUint64,
-  prepareSmartReadSession,
   prepareSmartReadSessionCalls,
   withSmartZamaSDK,
 } from "@/lib/zama";
@@ -203,6 +202,30 @@ export default function SavingsPage() {
   useEffect(() => () => {
     depositPreparationId.current += 1;
     preparedDeposit.current?.transaction.cancel();
+  }, []);
+
+  const preparedWithdrawal = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const [preparingWithdrawal, setPreparingWithdrawal] = useState(false);
+  const withdrawalPreparationId = useRef(0);
+
+  useEffect(() => {
+    withdrawalPreparationId.current += 1;
+    preparedWithdrawal.current?.transaction.cancel();
+    preparedWithdrawal.current = undefined;
+    setPreparingWithdrawal(false);
+  }, [session, withdrawAmount]);
+
+  useEffect(() => {
+    if (withdrawSheetStep === "confirm") return;
+    withdrawalPreparationId.current += 1;
+    preparedWithdrawal.current?.transaction.cancel();
+    preparedWithdrawal.current = undefined;
+    setPreparingWithdrawal(false);
+  }, [withdrawSheetStep]);
+
+  useEffect(() => () => {
+    withdrawalPreparationId.current += 1;
+    preparedWithdrawal.current?.transaction.cancel();
   }, []);
 
   const [confirmingAction, setConfirmingAction] = useState<"deposit" | "withdraw">();
@@ -574,29 +597,52 @@ export default function SavingsPage() {
     await refreshBalances(user);
   }
 
-  async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+  async function prepareWithdrawal(value: bigint) {
     const currentSession = activeSession();
     const user = currentSession.address;
-    if (value === 0n) throw new Error("Valor invalido.");
+    if (value === 0n) throw new Error("Enter an amount first.");
     if (!poolReady) throw new Error("Withdrawals are unavailable right now.");
 
     const pool = asAddress(addresses.pool, "Prize pool");
-    const encrypted = await withSmartZamaSDK(currentSession, (sdk) =>
-      encryptUint64(sdk, pool, user, value),
-    );
+    const [encrypted, readCalls] = await Promise.all([
+      withSmartZamaSDK(currentSession, (sdk) => encryptUint64(sdk, pool, user, value)),
+      prepareSmartReadSessionCalls(currentSession),
+    ]);
     const data = encodeFunctionData({
       abi: confidentialPrizePoolAbi,
       functionName: "requestWithdrawal",
       args: [encrypted.handle, encrypted.inputProof],
     });
+    return currentSession.prepareTransaction([...readCalls, { to: pool, data }]);
+  }
+
+  async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+    const currentSession = activeSession();
+    const prepared = preparedWithdrawal.current;
+    if (!prepared || prepared.session !== currentSession || prepared.value !== value || Date.now() - prepared.preparedAt > 60_000) {
+      preparedWithdrawal.current?.transaction.cancel();
+      preparedWithdrawal.current = undefined;
+      setWithdrawSheetStep("entry");
+      throw new Error("Please review your withdrawal again.");
+    }
     update({ status: "waiting-wallet" });
-    await prepareSmartReadSession(currentSession);
-    const tx = await sendSmartTransaction(currentSession, pool, data, {
-      onSigned: () => {
-        setWithdrawAmount("");
-        onSigned();
-      },
-    });
+    let tx: `0x${string}`;
+    try {
+      tx = await prepared.transaction.send({
+        onSigned: () => {
+          preparedWithdrawal.current = undefined;
+          setWithdrawAmount("");
+          onSigned();
+        },
+      });
+    } catch (error) {
+      if (preparedWithdrawal.current === prepared) {
+        preparedWithdrawal.current = undefined;
+        setWithdrawSheetStep("entry");
+      }
+      throw error;
+    }
+    const user = currentSession.address;
     update({ status: "submitted", txHash: tx });
     update({ status: "confirming" });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
@@ -861,7 +907,7 @@ export default function SavingsPage() {
     return principal >= MAX_USER_PRINCIPAL ? 0n : MAX_USER_PRINCIPAL - principal;
   }
 
-  function reviewWithdraw() {
+  async function reviewWithdraw() {
     if (parsedWithdrawAmount === 0n) {
       reportClientToast({ title: "Enter an amount first." }, { action: "withdraw", stage: "validation" });
       toast({ tone: "error", title: "Enter an amount first." });
@@ -872,7 +918,30 @@ export default function SavingsPage() {
       toast({ tone: "error", title: "Amount is above your pool balance." });
       return;
     }
-    setWithdrawSheetStep("confirm");
+    const requestId = ++withdrawalPreparationId.current;
+    const currentSession = activeSession();
+    setPreparingWithdrawal(true);
+    try {
+      const transaction = await prepareWithdrawal(parsedWithdrawAmount);
+      if (requestId !== withdrawalPreparationId.current) {
+        transaction.cancel();
+        return;
+      }
+      preparedWithdrawal.current = { session: currentSession, value: parsedWithdrawAmount, transaction, preparedAt: Date.now() };
+      setWithdrawSheetStep("confirm");
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      reportClientToast(
+        { title: "Could not prepare withdrawal", description: errorMessage },
+        { action: "withdraw", stage: "preparation" },
+        error,
+      );
+      if (requestId === withdrawalPreparationId.current) {
+        toast({ tone: "error", title: "Could not prepare withdrawal", description: errorMessage });
+      }
+    } finally {
+      if (requestId === withdrawalPreparationId.current) setPreparingWithdrawal(false);
+    }
   }
 
   async function runTrackedTransaction(
@@ -1232,10 +1301,10 @@ export default function SavingsPage() {
             {hasWithdrawablePrincipal && withdrawSheetStep === "entry" && (
               <button
                 onClick={reviewWithdraw}
-                disabled={!session || !poolReady || status === "working"}
+                disabled={!session || !poolReady || status === "working" || preparingWithdrawal}
                 className="btn-secondary w-full"
               >
-                Review withdrawal
+                {preparingWithdrawal ? "Preparing..." : "Review withdrawal"}
               </button>
             )}
 
