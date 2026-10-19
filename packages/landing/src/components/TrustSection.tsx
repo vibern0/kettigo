@@ -1,7 +1,7 @@
 const trustItems = [
   {
     title: "Clear prize rules",
-    body: "Your balance sets your chances, and each draw explains exactly how eligibility is checked.",
+    body: "Your balance sets your chances, with eligibility checked when a winner is selected.",
   },
   {
     title: "Yield powered by Morpho",
@@ -15,7 +15,7 @@ export function TrustSection() {
       <div className="section-inner trust-layout">
         <div className="section-copy">
           <p className="eyebrow">Why Kettigo</p>
-          <h2 id="why-kettigo-title">Built for people who like upside without losing the habit of saving.</h2>
+          <h2 id="why-kettigo-title">Built for people who like upside without losing.</h2>
         </div>
         <div className="trust-grid">
           {trustItems.map((item) => (

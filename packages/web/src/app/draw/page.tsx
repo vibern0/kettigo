@@ -350,20 +350,17 @@ export default function DrawPage() {
     <div className="space-y-5 animate-fade-in">
       <section className="space-y-3">
         <h1 className="font-display text-3xl font-bold leading-tight">
-          Global state.
-          <br />
-          Prizes and rounds.
+          Results and winnings.
         </h1>
         <p className="text-sm leading-relaxed text-muted">
-          See the draw schedule, how many accounts are participating, and claim
-          your prize when you have one.
+          See when results are expected and check whether you have winnings to claim.
         </p>
       </section>
 
       <TestnetWarning />
 
       <div className="card space-y-3">
-        <p className="label">Next draw</p>
+        <p className="label">Next result</p>
         <Countdown target={nextDrawAt} />
         <div className="grid gap-2 text-sm">
           <div className="flex items-center justify-between">
@@ -381,7 +378,7 @@ export default function DrawPage() {
         <p className="label">Global pool</p>
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-            <p className="text-xs text-muted">Active round</p>
+            <p className="text-xs text-muted">Selection ID</p>
             <p className="font-display text-2xl font-bold tabular-nums">
               #{activeDrawId === undefined ? "-" : activeDrawId.toString()}
             </p>
@@ -393,7 +390,7 @@ export default function DrawPage() {
             </p>
           </div>
           <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-            <p className="text-xs text-muted">Closed rounds</p>
+            <p className="text-xs text-muted">Past results</p>
             <p className="font-display text-2xl font-bold tabular-nums">
               {roundsClosed.toString()}
             </p>
@@ -411,8 +408,8 @@ export default function DrawPage() {
         <div>
           <p className="label">My winnings</p>
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            At the end of each draw, your account may be eligible for a prize.
-            Check here, then claim it when you have one.
+            Check your result once a winner has been selected.
+            If you’ve won, claim your winnings here.
           </p>
         </div>
         <div className="flex min-h-20 items-center justify-between gap-3 rounded-2xl border border-white/50 bg-white/35 px-4 py-3">

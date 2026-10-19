@@ -14,7 +14,7 @@ import { TestnetWarning } from "@/components/TestnetWarning";
 const NAV = [
   { href: "/", label: "Home" },
   { href: "/savings", label: "Save" },
-  { href: "/draw", label: "Draw" },
+  { href: "/draw", label: "Results" },
 ];
 
 export function Header() {

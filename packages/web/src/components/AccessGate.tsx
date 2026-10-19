@@ -76,7 +76,7 @@ export function AccessGate({ children }: { children: ReactNode }) {
           </div>
           <div className="space-y-4">
             <h1 className="font-display text-4xl font-bold leading-[0.95] tracking-tight md:text-6xl">
-              Your savings, with a chance to win.
+              Play for prizes. Keep your deposit.
             </h1>
             <p className="max-w-xl text-base leading-relaxed text-muted md:text-lg">
               Kettigo is opening gradually. Check your email first, then create or open your account when access

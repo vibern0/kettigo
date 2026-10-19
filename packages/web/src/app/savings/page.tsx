@@ -1323,7 +1323,7 @@ export default function SavingsPage() {
                     </div>
                   </div>
                   <p className="mt-3 rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
-                    Your draw chances update after this request.
+                    Your chances of winning update after this request.
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
