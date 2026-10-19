@@ -1,7 +1,7 @@
 const trustItems = [
   {
     title: "Clear prize rules",
-    body: "Your balance sets your chances, and each draw explains exactly how eligibility is checked.",
+    body: "Your balance sets your chances, with eligibility checked when a winner is selected.",
   },
   {
     title: "Yield powered by Morpho",

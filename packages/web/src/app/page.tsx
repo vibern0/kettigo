@@ -24,13 +24,12 @@ export default function HomePage() {
       {/* Hero */}
       <section className="space-y-3">
         <h1 className="font-display text-4xl font-bold leading-tight tracking-tight">
-          Your savings,
+          Play for prizes.
           <br />
-          with a chance to win.
+          Keep your deposit.
         </h1>
         <p className="text-muted leading-relaxed">
-          Put your money to work. Get tickets for a weekly draw. Your principal
-          stays available whenever you want to withdraw.
+          Your deposit is your entry.
         </p>
       </section>
 
@@ -73,9 +72,9 @@ export default function HomePage() {
         <p className="label">How it works</p>
         <ol className="space-y-3">
           {[
-            { n: 1, t: "Deposit", d: "USDC enters savings and stays available at any time." },
-            { n: 2, t: "Get tickets", d: "Each USDC counts as one ticket for the weekly draw." },
-            { n: 3, t: "Win without losing", d: "The prize comes from yield. Your principal always returns." },
+            { n: 1, t: "Deposit USDC", d: "Add savings when you are ready. Your balance remains the base for prize eligibility." },
+            { n: 2, t: "Stay eligible", d: "Your balance when the winner is selected sets your chances." },
+            { n: 3, t: "Check and claim", d: "Check your result. If you’ve won, claim your winnings or keep playing." },
           ].map((s) => (
             <li key={s.n} className="flex gap-3 card !p-4">
               <div className={`w-8 h-8 rounded-xl font-bold grid place-items-center flex-shrink-0 ${s.n % 2 === 0 ? "accent-cyan" : "accent-rose"}`}>
@@ -91,9 +90,9 @@ export default function HomePage() {
       </section>
 
       <p className="text-xs text-muted text-center pt-4">
-        Save, stay flexible, and check each draw for prizes.{" "}
+        Keep playing. Your deposit stays yours.{" "}
         <Link href="/draw" className="text-brand hover:underline">
-          View next draw
+          View results
         </Link>
       </p>
     </div>

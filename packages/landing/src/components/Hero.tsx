@@ -3,8 +3,8 @@ export function Hero() {
     <section className="hero" id="top" aria-labelledby="hero-title">
       <div className="section-inner hero-layout">
         <div className="hero-copy">
-          <p className="eyebrow">Prize draws funded by interest</p>
-          <h1 id="hero-title">Enter the draw. Keep your deposit.</h1>
+          <p className="eyebrow">Play with USDC</p>
+          <h1 id="hero-title">Play for prizes. Keep your deposit.</h1>
           <p>Your deposit is your entry.</p>
           <div className="hero-actions" aria-label="Landing actions">
             <a className="button button-primary" href="https://app.kettigo.xyz/">
@@ -16,7 +16,7 @@ export function Hero() {
           </div>
         </div>
 
-        <div className="prize-panel" aria-label="Prize draw overview">
+        <div className="prize-panel" aria-label="Prize overview">
           <div className="prize-orbit" aria-hidden="true">
             <span />
             <span />
@@ -24,12 +24,12 @@ export function Hero() {
           </div>
           <dl className="prize-list">
             <div>
-              <dt>Next draw</dt>
+              <dt>Next result</dt>
               <dd>Open to everyone</dd>
             </div>
             <div>
               <dt>Your savings set your chances</dt>
-              <dd>Eligibility is checked at the end of each draw.</dd>
+              <dd>Eligibility is checked when a winner is selected.</dd>
             </div>
             <div>
               <dt>Your money stays yours</dt>

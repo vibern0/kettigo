@@ -55,16 +55,16 @@ const interphasesMono = localFont({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://app.kettigo.xyz"),
-  title: "Kettigo — Savings with a chance to win",
+  title: "Kettigo | Play for prizes. Keep your deposit.",
   description:
-    "Your savings, with weekly prizes. 100% of your principal, always.",
+    "Play for prizes with USDC. Your balance when the winner is selected sets your chances. Check your result and claim any winnings.",
   openGraph: {
     type: "website",
     url: "/",
     siteName: "Kettigo",
-    title: "Kettigo — Savings with a chance to win",
+    title: "Kettigo | Play for prizes. Keep your deposit.",
     description:
-      "Your savings, with weekly prizes. 100% of your principal, always.",
+      "Play for prizes with USDC. Your balance when the winner is selected sets your chances. Check your result and claim any winnings.",
     images: [
       {
         url: "/kettigo-share.png",
@@ -76,9 +76,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Kettigo — Savings with a chance to win",
+    title: "Kettigo | Play for prizes. Keep your deposit.",
     description:
-      "Your savings, with weekly prizes. 100% of your principal, always.",
+      "Play for prizes with USDC. Your balance when the winner is selected sets your chances. Check your result and claim any winnings.",
     images: ["/kettigo-share.png"],
   },
   manifest: "/manifest.json",

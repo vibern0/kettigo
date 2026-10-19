@@ -8,8 +8,8 @@ describe("landing metadata", () => {
     const html = renderLandingHtmlMetadata(source, undefined);
 
     expect(html).toContain('href="https://kettigo.xyz"');
-    expect(html).toContain('<title>Kettigo | Enter the draw. Keep your deposit.</title>');
-    expect(html).toContain('content="Enter recurring prize draws with USDC. Interest funds the prizes. Your balance at draw close sets your entry weight, and each draw leaves your deposit intact."');
+    expect(html).toContain('<title>Kettigo | Play for prizes. Keep your deposit.</title>');
+    expect(html).toContain('content="Play for prizes with USDC. Your balance when the winner is selected sets your chances. Check your result and claim any winnings."');
     expect(html).toContain('property="og:site_name" content="Kettigo"');
     expect(html).toContain('property="og:image" content="https://kettigo.xyz/kettigo-share.png"');
     expect(html).toContain('property="og:image:width" content="1734"');

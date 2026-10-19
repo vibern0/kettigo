@@ -24,9 +24,9 @@ test("keeps toast messages on an opaque readable surface", () => {
   assert.match(toast, /glass-surface[\s\S]*toneClass\[toast\.tone\]/);
 });
 
-test("shows the testnet warning before the next draw details", () => {
+test("shows the testnet warning before the next result details", () => {
   assert.match(
     drawPage,
-    /<TestnetWarning\s*\/>[\s\S]*<p className="label">Next draw<\/p>/,
+    /<TestnetWarning\s*\/>[\s\S]*<p className="label">Next result<\/p>/,
   );
 });

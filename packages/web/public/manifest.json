@@ -1,7 +1,7 @@
 {
   "name": "Kettigo",
   "short_name": "Kettigo",
-  "description": "Your savings, with a chance to win.",
+  "description": "Play for prizes. Keep your deposit.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#E8E3E1",
