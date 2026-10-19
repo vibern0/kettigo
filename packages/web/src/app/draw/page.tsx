@@ -9,6 +9,7 @@ import {
   confidentialPrizePoolAbi,
 } from "@/lib/contracts";
 import { Countdown } from "@/components/Countdown";
+import { TestnetWarning } from "@/components/TestnetWarning";
 import { formatUSDC } from "@/lib/format";
 import { useWallet } from "@/lib/wallet-context";
 import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
@@ -358,6 +359,8 @@ export default function DrawPage() {
           your prize when you have one.
         </p>
       </section>
+
+      <TestnetWarning />
 
       <div className="card space-y-3">
         <p className="label">Next draw</p>
