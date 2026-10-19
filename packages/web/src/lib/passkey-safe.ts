@@ -347,10 +347,10 @@ function createSession(
         cancel() {
           if (used) return;
           used = true;
-          rejectAssertion?.(new Error("Deposit review closed."));
+          rejectAssertion?.(new Error("Transaction review closed."));
         },
         async send(options?: SmartTransactionOptions): Promise<Hex> {
-          if (used) throw new Error("Please go back and review your deposit again.");
+          if (used) throw new Error("Please go back and review your transaction again.");
           used = true;
           if (requestAssertion) {
             // Invoke credentials.get in the Confirm click's call stack.
