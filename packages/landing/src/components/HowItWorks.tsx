@@ -1,11 +1,11 @@
 const steps = [
   {
-    title: "Save USDC",
+    title: "Deposit USDC",
     body: "Add savings when you are ready. Your balance remains the base for draw eligibility.",
   },
   {
     title: "Stay eligible",
-    body: "At the end of a draw, chances are weighted by savings held through that draw.",
+    body: "At the end of a draw, chances are weighted by your balance.",
   },
   {
     title: "Check and claim",
@@ -19,7 +19,7 @@ export function HowItWorks() {
       <div className="section-inner">
         <div className="section-copy">
           <p className="eyebrow">How it works</p>
-          <h2 id="how-it-works-title">A simple rhythm for prize-linked saving.</h2>
+          <h2 id="how-it-works-title">One deposit. A place in each draw.</h2>
         </div>
         <ol className="step-grid">
           {steps.map((step) => (

@@ -3,18 +3,15 @@ export function Hero() {
     <section className="hero" id="top" aria-labelledby="hero-title">
       <div className="section-inner hero-layout">
         <div className="hero-copy">
-          <p className="eyebrow">Prize-linked USDC savings</p>
-          <h1 id="hero-title">Make your USDC feel lucky.</h1>
-          <p>
-            Save in USDC, stay eligible at the end of each draw, and keep control of your money while your balance sets
-            your chances.
-          </p>
+          <p className="eyebrow">Prize draws funded by interest</p>
+          <h1 id="hero-title">Enter the draw. Keep your deposit.</h1>
+          <p>Your deposit is your entry.</p>
           <div className="hero-actions" aria-label="Landing actions">
             <a className="button button-primary" href="https://app.kettigo.xyz/">
               Open Kettigo
             </a>
             <a className="button button-secondary" href="#how-it-works">
-              See how it works
+              See how the pool works
             </a>
           </div>
         </div>

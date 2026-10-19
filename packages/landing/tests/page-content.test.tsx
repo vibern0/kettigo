@@ -5,7 +5,7 @@ import App from "../src/App";
 describe("marketing page", () => {
   it("uses the prize-first hierarchy and working CTA targets", () => {
     render(<App />);
-    expect(screen.getByRole("heading", { level: 1, name: "Make your USDC feel lucky." })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Enter the draw. Keep your deposit." })).toBeInTheDocument();
     const links = screen.getAllByRole("link", { name: /open kettigo/i }) as HTMLAnchorElement[];
     expect(links.every((link) => link.href === "https://app.kettigo.xyz/")).toBe(true);
     expect(document.querySelector("#how-it-works")).not.toBeNull();
