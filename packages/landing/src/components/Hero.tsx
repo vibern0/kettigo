@@ -11,7 +11,7 @@ export function Hero() {
               Open Kettigo
             </a>
             <a className="button button-secondary" href="#how-it-works">
-              See how the pool works
+              See how it works
             </a>
           </div>
         </div>

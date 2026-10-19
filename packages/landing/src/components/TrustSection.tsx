@@ -4,14 +4,6 @@ const trustItems = [
     body: "Your balance sets your chances, and each draw explains exactly how eligibility is checked.",
   },
   {
-    title: "USDC for deposits and payouts.",
-    body: "You enter with USDC. Withdrawals and prizes use the same asset, with your deposit accounted for separately from winnings.",
-  },
-  {
-    title: "Zama runs the draw calculations.",
-    body: "Zama generates a random value and calculates the winner onchain. Each balance supplies its share of the selection weight.",
-  },
-  {
     title: "Yield powered by Morpho",
     body: "The prize pool is designed to be funded by established lending markets without promising a fixed return.",
   },
