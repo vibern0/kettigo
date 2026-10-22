@@ -20,7 +20,7 @@ export default function HomePage() {
   const usdcBalance = usdcData?.[0]?.result as bigint | undefined;
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6">
       {/* Hero */}
       <section className="space-y-3">
         <h1 className="font-display text-4xl font-bold leading-tight tracking-tight">

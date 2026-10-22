@@ -1,3 +1,21 @@
+import { formatUSDC } from "./format.ts";
+
+export function getPrizeRevealFeedback(winnings: bigint) {
+  if (winnings > 0n) {
+    return {
+      tone: "success" as const,
+      title: "You got a prize!",
+      description: `${formatUSDC(winnings, 6)} USDC is ready to claim.`,
+      celebration: "prize" as const,
+    };
+  }
+  return {
+    tone: "info" as const,
+    title: "No prize this time.",
+    description: "Your savings are still yours.",
+  };
+}
+
 export type PrizeActionId = "checkPrize" | "addPrizeToSavings" | "claimPrize";
 export type PrizeWorkingAction = PrizeActionId | undefined;
 

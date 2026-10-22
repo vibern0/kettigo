@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { useWallet } from "@/lib/wallet-context";
 import { shortAddress } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { m } from "motion/react";
 
 const NAV = [
   { href: "/", label: "Home" },
@@ -129,15 +130,17 @@ export function Header() {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 className={cn(
-                  "px-3 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap",
+                  "relative isolate px-3 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap",
                   "font-display",
                   active
-                    ? "bg-citron text-text shadow-lg shadow-black/10"
+                    ? "text-text"
                     : "border border-white/25 bg-white/10 text-white/90 hover:bg-white/20 hover:text-white"
                 )}
               >
-                {item.label}
+                {active && <m.span layoutId="active-nav" className="absolute inset-0 -z-10 rounded-full bg-citron shadow-lg shadow-black/10" />}
+                <span>{item.label}</span>
               </Link>
             );
           })}

@@ -508,7 +508,8 @@ export default function SavingsPage() {
     const tx = await sendSmartTransactionBatch(currentSession, calls);
     update({ status: "submitted", txHash: tx });
     update({ status: "confirming" });
-    await publicClient.waitForTransactionReceipt({ hash: tx });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+    if (receipt.status !== "success") throw new Error("Your deposit did not complete. Please try again.");
     update({ status: "updating" });
     setDepositAmount("");
     await refreshConfidentialBalances();
@@ -807,7 +808,12 @@ export default function SavingsPage() {
         try {
           await action(update);
           update({ status: "completed" });
-          toast({ tone: "success", title: ok });
+          toast({
+            tone: "success",
+            title: ok,
+            description: type === "deposit" ? label : undefined,
+            celebration: type === "deposit" ? "deposit" : undefined,
+          });
         } catch (error) {
           const errorMessage = getErrorMessage(error);
           update({ status: "failed", error: errorMessage });
@@ -842,7 +848,7 @@ export default function SavingsPage() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-5">
       <section className="space-y-2">
         <h1 className="font-display text-2xl font-bold">My savings</h1>
         <p className="text-sm leading-relaxed text-muted">

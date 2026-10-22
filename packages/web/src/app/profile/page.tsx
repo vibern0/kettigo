@@ -25,7 +25,7 @@ export default function ProfilePage() {
 
   if (!session) {
     return (
-      <div className="space-y-4 animate-fade-in">
+      <div className="space-y-4">
         <h1 className="font-display text-2xl font-bold">Account</h1>
         <div className="card text-center space-y-4">
           <p className="text-muted">Sign in to view your account.</p>
@@ -36,7 +36,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-5">
       <h1 className="font-display text-2xl font-bold">Account</h1>
 
       <div className="card space-y-3">

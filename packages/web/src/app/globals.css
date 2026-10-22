@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; --cobalt: #2548f4; --cobalt-dark: #17213b; --peach: #ffb69d; --citron: #e4f66a; --lilac: #d5c5ff; --paper: #fff9ef; --ink: #17213b; --muted-ink: #5c6170; }
+:root { color-scheme: light; --cobalt: #2548f4; --cobalt-dark: #17213b; --peach: #ffb69d; --citron: #e4f66a; --lilac: #d5c5ff; --paper: #fff9ef; --ink: #17213b; --muted-ink: #5c6170; --spring-ease: cubic-bezier(0.2, 1.55, 0.45, 1); }
 * { box-sizing: border-box; }
 html, body { min-height: 100%; }
 body { background: var(--paper); color: var(--ink); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
@@ -13,21 +13,21 @@ body { background: var(--paper); color: var(--ink); -webkit-font-smoothing: anti
 .app-shell::after { position: absolute; bottom: 6rem; left: -5rem; width: 12rem; height: 12rem; border-radius: 42% 58% 52% 48%; background: var(--lilac); content: ""; opacity: 0.5; pointer-events: none; transform: rotate(-12deg); z-index: -1; }
 header.sticky { background: var(--cobalt) !important; border-color: rgb(23 33 59 / 0.28) !important; color: var(--paper); }
 @media (min-width: 561px) { .app-shell > header.sticky { border-radius: 32px 32px 0 0; overflow: hidden; } }
-header.sticky nav a:not(.bg-citron) { color: var(--paper); }
-header.sticky nav a:not(.bg-citron):hover { background: rgb(255 249 239 / 0.16); color: var(--paper); }
+header.sticky nav a:not([aria-current="page"]) { color: var(--paper); }
+header.sticky nav a:not([aria-current="page"]):hover { background: rgb(255 249 239 / 0.16); color: var(--paper); }
 header.sticky > div > a span:last-child { color: var(--paper); }
 @media (min-width: 561px) { body { padding: 24px 0; } .app-shell { min-height: calc(100vh - 48px); border: 2px solid var(--cobalt-dark); border-radius: 34px; box-shadow: 10px 10px 0 var(--cobalt-dark); } }
 @layer base { h1, h2, h3 { letter-spacing: -0.06em; } }
 @layer components {
   .glass-surface { background: var(--paper); border: 1.5px solid var(--cobalt-dark); box-shadow: 5px 5px 0 var(--cobalt-dark); }
-  .card { @apply glass-surface p-5; border-radius: 26px; }
-  .btn-primary { @apply inline-flex items-center justify-center gap-2 px-5 py-3 font-display font-semibold text-white transition-all disabled:cursor-not-allowed disabled:opacity-50; background: var(--cobalt); border: 1.5px solid var(--cobalt-dark); border-radius: 17px; box-shadow: 4px 4px 0 var(--cobalt-dark); }
-  .btn-primary:hover { background: #1935c7; transform: translateY(-2px); }
-  .btn-primary:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--cobalt-dark); }
-  .btn-secondary { @apply inline-flex items-center justify-center gap-2 px-5 py-3 font-display font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50; background: var(--citron); border: 1.5px solid var(--cobalt-dark); border-radius: 17px; box-shadow: 4px 4px 0 var(--cobalt-dark); color: var(--ink); }
-  .btn-secondary:hover { background: #d7e94f; transform: translateY(-2px); }
-  .btn-ghost { @apply inline-flex items-center justify-center gap-2 px-4 py-2 font-display font-medium transition-colors; border-radius: 999px; color: var(--muted-ink); }
+  .card { @apply glass-surface p-5; border-radius: 26px; animation: sparkle-card-in 480ms var(--spring-ease) backwards; transition: transform 360ms var(--spring-ease), box-shadow 250ms ease; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-2 px-5 py-3 font-display font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50; background: var(--cobalt); border: 1.5px solid var(--cobalt-dark); border-radius: 17px; box-shadow: 4px 4px 0 var(--cobalt-dark); }
+  .btn-secondary { @apply inline-flex items-center justify-center gap-2 px-5 py-3 font-display font-semibold disabled:cursor-not-allowed disabled:opacity-50; background: var(--citron); border: 1.5px solid var(--cobalt-dark); border-radius: 17px; box-shadow: 4px 4px 0 var(--cobalt-dark); color: var(--ink); }
+  .btn-primary, .btn-secondary { transition: transform 360ms var(--spring-ease), box-shadow 220ms ease, background-color 180ms ease, opacity 180ms ease; }
+  .btn-primary:not(:disabled):active, .btn-secondary:not(:disabled):active { transform: translate(2px, 2px) scale(0.97); box-shadow: 1px 1px 0 var(--cobalt-dark); }
+  .btn-ghost { @apply inline-flex items-center justify-center gap-2 px-4 py-2 font-display font-medium; border-radius: 999px; color: var(--muted-ink); transition: transform 300ms var(--spring-ease), background-color 180ms ease; }
   .btn-ghost:hover { background: var(--lilac); color: var(--ink); }
+  .btn-ghost:not(:disabled):active { transform: scale(0.95); }
   .input { @apply w-full px-4 py-3 text-text outline-none transition-all placeholder:text-muted; background: var(--paper); border: 1.5px solid var(--cobalt-dark); border-radius: 15px; }
   .input:focus { box-shadow: 0 0 0 4px var(--citron); }
   .pill { @apply inline-flex items-center gap-1 px-3 py-1 text-xs font-medium; background: var(--citron); border: 1.5px solid var(--cobalt-dark); border-radius: 999px; color: var(--ink); }
@@ -35,4 +35,30 @@ header.sticky > div > a span:last-child { color: var(--paper); }
   .glass-divider { background: var(--lilac); }
   .accent-rose { background: var(--peach); color: var(--ink); border: 1.5px solid var(--cobalt-dark); }
   .accent-cyan { background: var(--citron); color: var(--ink); border: 1.5px solid var(--cobalt-dark); }
+}
+
+/* A shared motion vocabulary for cards, sheets, and the smaller controls. */
+.card:nth-child(2) { animation-delay: 35ms; }
+.card:nth-child(3) { animation-delay: 70ms; }
+.card:nth-child(n + 4) { animation-delay: 105ms; }
+.glass-surface[role="dialog"] { animation: sparkle-sheet-in 460ms var(--spring-ease) backwards; transform-origin: bottom center; }
+header nav a { transition: transform 320ms var(--spring-ease), color 180ms ease, background-color 180ms ease; }
+header nav a:active { transform: scale(0.94); }
+button[aria-haspopup="dialog"] { transition: transform 320ms var(--spring-ease), background-color 180ms ease; }
+button[aria-haspopup="dialog"]:active { transform: scale(0.96); }
+.sparkle-badge { position: relative; display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; margin: 2px 3px 3px 0; background: var(--citron); color: var(--ink); border: 1.5px solid var(--ink); border-radius: 12px; box-shadow: 2px 2px 0 var(--ink); font-size: 23px; line-height: 1; }
+.sparkle-badge-star { position: absolute; right: -8px; top: -6px; width: 13px; height: 13px; background: var(--peach); clip-path: polygon(50% 0, 63% 35%, 100% 50%, 63% 63%, 50% 100%, 37% 63%, 0 50%, 37% 35%); animation: sparkle-twinkle 650ms var(--spring-ease) backwards; }
+.sparkle-badge-star-small { right: auto; top: auto; bottom: -5px; left: -6px; width: 9px; height: 9px; background: var(--cobalt); animation-delay: 110ms; }
+@keyframes sparkle-card-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes sparkle-sheet-in { from { opacity: 0; transform: translateY(28px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes sparkle-twinkle { from { opacity: 0; transform: scale(0.3) rotate(-50deg); } to { opacity: 1; transform: none; } }
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:not(:disabled):hover { background: #1935c7; transform: translateY(-3px) scale(1.015); }
+  .btn-secondary:not(:disabled):hover { background: #d7e94f; transform: translateY(-3px) scale(1.015); }
+  .btn-primary:not(:disabled):active, .btn-secondary:not(:disabled):active { transform: translate(2px, 2px) scale(0.97); }
+  .card:hover { transform: translateY(-2px); box-shadow: 5px 7px 0 var(--cobalt-dark); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .card:hover, .btn-primary:not(:disabled):hover, .btn-secondary:not(:disabled):hover, .btn-primary:not(:disabled):active, .btn-secondary:not(:disabled):active, .btn-ghost:not(:disabled):active, header nav a:active, button[aria-haspopup="dialog"]:active { transform: none; }
 }

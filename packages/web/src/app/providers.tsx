@@ -8,6 +8,7 @@ import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/Toast";
 import { ActionCenterProvider } from "@/components/ActionCenter";
 import { AccessGate } from "@/components/AccessGate";
+import { LazyMotion, MotionConfig, domMax } from "motion/react";
 
 const CHUNK_RELOAD_KEY = "kettigo:last-chunk-reload";
 const CHUNK_RELOAD_WINDOW_MS = 10_000;
@@ -60,17 +61,21 @@ export function Providers({ children }: { children: ReactNode }) {
   );
 
   return (
-    <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>
-        <WalletProvider>
-          <ToastProvider>
-            <ActionCenterProvider>
-              <ChunkLoadRecovery />
-              <AccessGate>{children}</AccessGate>
-            </ActionCenterProvider>
-          </ToastProvider>
-        </WalletProvider>
-      </QueryClientProvider>
-    </WagmiProvider>
+    <MotionConfig reducedMotion="user" transition={{ type: "spring", stiffness: 380, damping: 26, mass: 0.8 }}>
+      <LazyMotion features={domMax}>
+        <WagmiProvider config={wagmiConfig}>
+          <QueryClientProvider client={queryClient}>
+            <WalletProvider>
+              <ToastProvider>
+                <ActionCenterProvider>
+                  <ChunkLoadRecovery />
+                  <AccessGate>{children}</AccessGate>
+                </ActionCenterProvider>
+              </ToastProvider>
+            </WalletProvider>
+          </QueryClientProvider>
+        </WagmiProvider>
+      </LazyMotion>
+    </MotionConfig>
   );
 }

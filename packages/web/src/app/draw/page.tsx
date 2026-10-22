@@ -18,8 +18,8 @@ import {
   decryptUint64,
   isZeroEncryptedHandle,
 } from "@/lib/zama";
-import { useToast } from "@/components/Toast";
-import { getPrizeActions, type PrizeActionId } from "@/lib/prize-actions";
+import { useToast, type ToastInput } from "@/components/Toast";
+import { getPrizeActions, getPrizeRevealFeedback, type PrizeActionId } from "@/lib/prize-actions";
 import {
   createLatestBlockRefresher,
   readProjectedMorphoYield,
@@ -249,12 +249,14 @@ export default function DrawPage() {
 
     if (isZeroEncryptedHandle(handle)) {
       setWinnings(0n);
-      return;
+      return getPrizeRevealFeedback(0n);
     }
 
     const sdk = createOwnerZamaSDK(currentSession);
     try {
-      setWinnings(await decryptUint64(sdk, handle as `0x${string}`, pool));
+      const value = await decryptUint64(sdk, handle as `0x${string}`, pool);
+      setWinnings(value);
+      return getPrizeRevealFeedback(value);
     } finally {
       sdk.terminate();
     }
@@ -300,13 +302,13 @@ export default function DrawPage() {
     return run(decryptWinnings, "Winnings revealed.", "checkPrize");
   }
 
-  async function run(action: () => Promise<void>, ok: string, currentAction?: WorkingAction) {
+  async function run(action: () => Promise<void | ToastInput>, ok: string, currentAction?: WorkingAction) {
     setStatus("working");
     setWorkingAction(currentAction);
     try {
-      await action();
+      const feedback = await action();
       setStatus("success");
-      toast({ tone: "success", title: ok });
+      toast(feedback ?? { tone: "success", title: ok });
     } catch (error) {
       const errorMessage = getErrorMessage(error);
       setStatus("error");
@@ -317,7 +319,7 @@ export default function DrawPage() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-5">
       <section className="space-y-3">
         <h1 className="font-display text-3xl font-bold leading-tight">
           Global state.
