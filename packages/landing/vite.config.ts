@@ -2,7 +2,7 @@ import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
-const DEFAULT_SITE_URL = "https://kettigo.com";
+const DEFAULT_SITE_URL = "https://kettigo.xyz";
 
 export function resolveSiteUrl(value = process.env.VITE_SITE_URL): string {
   const trimmed = value?.trim();
@@ -14,7 +14,7 @@ export function resolveSiteUrl(value = process.env.VITE_SITE_URL): string {
 
 export function renderLandingHtmlMetadata(html: string, value = process.env.VITE_SITE_URL): string {
   const siteUrl = resolveSiteUrl(value);
-  return html.replaceAll("%SITE_URL%", siteUrl).replaceAll("%OG_IMAGE_URL%", `${siteUrl}/og-image.png`);
+  return html.replaceAll("%SITE_URL%", siteUrl).replaceAll("%OG_IMAGE_URL%", `${siteUrl}/kettigo-share.png`);
 }
 
 function landingMetadataPlugin(): Plugin {

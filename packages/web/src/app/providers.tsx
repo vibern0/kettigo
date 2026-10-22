@@ -7,7 +7,6 @@ import { wagmiConfig } from "@/lib/wagmi";
 import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/Toast";
 import { ActionCenterProvider } from "@/components/ActionCenter";
-import { AccessGate } from "@/components/AccessGate";
 import { LazyMotion, MotionConfig, domMax } from "motion/react";
 
 const CHUNK_RELOAD_KEY = "kettigo:last-chunk-reload";
@@ -69,7 +68,7 @@ export function Providers({ children }: { children: ReactNode }) {
               <ToastProvider>
                 <ActionCenterProvider>
                   <ChunkLoadRecovery />
-                  <AccessGate>{children}</AccessGate>
+                  {children}
                 </ActionCenterProvider>
               </ToastProvider>
             </WalletProvider>

@@ -1,14 +1,6 @@
-import type { Address, Hex } from "viem";
-
-export const JOINED_MESSAGE = "i've joined";
-
 export type WaitlistResult =
   | { ok: true; status: "joined" | "already_joined" }
   | { ok: false; status: "invalid_request" | "temporarily_unavailable" };
-
-export type AccessResult =
-  | { ok: true; status: "approved" }
-  | { ok: false; status: "pending" | "claimed" | "invalid_request" | "temporarily_unavailable" };
 
 export type AccessStatus =
   | { ok: true; status: "approved" }
@@ -16,16 +8,6 @@ export type AccessStatus =
 
 export async function joinWaitlist(email: string, fetcher: typeof fetch = fetch): Promise<WaitlistResult> {
   return postJson<WaitlistResult>("/api/waitlist", { email }, fetcher, {
-    ok: false,
-    status: "temporarily_unavailable",
-  });
-}
-
-export async function claimAccess(
-  input: { email: string; walletAddress: Address; signature: Hex },
-  fetcher: typeof fetch = fetch,
-): Promise<AccessResult> {
-  return postJson<AccessResult>("/api/access/claim", input, fetcher, {
     ok: false,
     status: "temporarily_unavailable",
   });

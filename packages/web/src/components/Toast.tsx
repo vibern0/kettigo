@@ -64,7 +64,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={value}>
       {children}
       {celebration && <SparklePop key={celebration.id} kind={celebration.kind} />}
-      <div className="pointer-events-none fixed inset-x-0 top-10 z-50 mx-auto flex w-full max-w-[480px] flex-col gap-2 px-5">
+      <div className="pointer-events-none fixed inset-x-0 top-10 z-[60] mx-auto flex w-full max-w-[480px] flex-col gap-2 px-5">
         <AnimatePresence initial={false}>
           {toasts.map((toast) => (
             <m.div

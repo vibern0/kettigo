@@ -8,12 +8,11 @@ import {
   confidentialPrizePoolAbi,
   confidentialUsdcAbi,
 } from "./contracts";
-import type { SmartSession } from "./web3auth";
+import type { PasskeySmartSession } from "./smart-session";
 import {
   asChecksumAddress,
   clearValueToBigInt,
-  createOwnerZamaSDK,
-  createSmartZamaSDK,
+  decryptWithSmartReadSession,
   isZeroEncryptedHandle,
 } from "./zama";
 
@@ -35,28 +34,23 @@ type DecryptedBalances = {
 
 async function decryptHandles(
   requests: DecryptRequest[],
-  currentSession: SmartSession,
-  signer: "owner" | "smart",
+  currentSession: PasskeySmartSession,
 ) {
   if (requests.length === 0) return {};
 
-  const sdk = signer === "owner" ? createOwnerZamaSDK(currentSession) : createSmartZamaSDK(currentSession);
-  try {
-    const results = await sdk.decryption.decryptValues(
-      requests.map((request) => ({
-        encryptedValue: request.handle,
-        contractAddress: request.contract,
-      })),
-    );
+  const results = await decryptWithSmartReadSession(
+    currentSession,
+    requests.map((request) => ({
+      encryptedValue: request.handle,
+      contractAddress: request.contract,
+    })),
+  );
 
-    return Object.fromEntries(requests.map((request) => [request.key, results[request.handle]]));
-  } finally {
-    sdk.terminate();
-  }
+  return Object.fromEntries(requests.map((request) => [request.key, results[request.handle]]));
 }
 
 export async function decryptConfidentialBalances(
-  currentSession: SmartSession,
+  currentSession: PasskeySmartSession,
 ): Promise<DecryptedBalances> {
   const user = currentSession.address;
   const token = asChecksumAddress(CONTRACTS.confidentialUsdc, "Savings token");
@@ -78,13 +72,12 @@ export async function decryptConfidentialBalances(
   ]);
 
   const balances: DecryptedBalances = {};
-  const smartRequests: DecryptRequest[] = [];
-  const ownerRequests: DecryptRequest[] = [];
+  const requests: DecryptRequest[] = [];
 
   if (isZeroEncryptedHandle(balanceHandle)) {
     balances.confidentialBalance = 0n;
   } else {
-    smartRequests.push({
+    requests.push({
       key: "confidentialBalance",
       handle: balanceHandle as `0x${string}`,
       contract: token,
@@ -94,26 +87,19 @@ export async function decryptConfidentialBalances(
   if (isZeroEncryptedHandle(principalHandle)) {
     balances.principal = 0n;
   } else {
-    ownerRequests.push({
+    requests.push({
       key: "principal",
       handle: principalHandle as `0x${string}`,
       contract: pool,
     });
   }
 
-  const [smartDecrypted, ownerDecrypted] = await Promise.allSettled([
-    decryptHandles(smartRequests, currentSession, "smart"),
-    decryptHandles(ownerRequests, currentSession, "owner"),
-  ]);
-
-  for (const decrypted of [smartDecrypted, ownerDecrypted]) {
-    if (decrypted.status !== "fulfilled") continue;
-    if (decrypted.value.confidentialBalance !== undefined) {
-      balances.confidentialBalance = clearValueToBigInt(decrypted.value.confidentialBalance);
-    }
-    if (decrypted.value.principal !== undefined) {
-      balances.principal = clearValueToBigInt(decrypted.value.principal);
-    }
+  const decryptedBalances = await decryptHandles(requests, currentSession);
+  if (decryptedBalances.confidentialBalance !== undefined) {
+    balances.confidentialBalance = clearValueToBigInt(decryptedBalances.confidentialBalance);
+  }
+  if (decryptedBalances.principal !== undefined) {
+    balances.principal = clearValueToBigInt(decryptedBalances.principal);
   }
 
   return balances;

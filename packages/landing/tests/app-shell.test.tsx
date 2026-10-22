@@ -8,7 +8,7 @@ describe("landing shell", () => {
     expect(screen.getByRole("main")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /open kettigo/i })[0]).toHaveAttribute(
       "href",
-      "https://kettigo.blvieira5.workers.dev/",
+      "https://app.kettigo.xyz/",
     );
     expect(document.querySelector("#waitlist")).toBeNull();
   });

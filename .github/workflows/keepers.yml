@@ -1,0 +1,35 @@
+name: Production keepers
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: production-keepers
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+      SEPOLIA_WRITE_RPC_URL: ${{ secrets.SEPOLIA_WRITE_RPC_URL }}
+      KEEPER_PRIVATE_KEY: ${{ secrets.KEEPER_PRIVATE_KEY }}
+      NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS: "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b"
+      MORPHO_KEEPER_START_BLOCK: "11864127"
+      MORPHO_KEEPER_MAX_TXS: "1"
+      DRAW_KEEPER_MINIMUM_PRIZE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+        with:
+          version: 10.11.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm keeper:all

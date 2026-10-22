@@ -47,44 +47,80 @@ npm exec --workspace @kettigo/landing wrangler d1 execute kettigo-landing-local 
 
 ## Production D1
 
-Create the shared owner-operated production D1 database from `packages/landing`:
+The shared production D1 database is already provisioned as `kettigo` with ID
+`d6cfede8-60bb-45dc-b342-60e6da48f1e4`. Verify it from `packages/landing`
+before applying migrations or deploying:
 
 ```bash
-npm exec --workspace @kettigo/landing wrangler d1 create kettigo-landing
+npm exec --workspace @kettigo/landing wrangler d1 info kettigo
 ```
 
-Copy the returned `database_id` into `packages/landing/wrangler.jsonc`,
-replacing the local placeholder:
-
-```json
-"database_id": "00000000-0000-0000-0000-000000000000"
-```
-
-Do not invent this identifier. It must come from the Cloudflare account that
-will run the Worker. Keep the `DB` binding name unchanged.
+Stop if the reported name or ID differs. Keep the `DB` binding name unchanged,
+and do not create or rebind the production database during a routine deploy.
 
 Apply the migration to the remote D1 database after the ID is configured:
 
 ```bash
-npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo-landing --remote
+npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo --remote
 ```
 
 The web Worker has its own Wrangler config at `packages/web/wrangler.jsonc`.
 Keep its `database_name` and `database_id` synchronized with this config so
 both Workers use the same `DB` binding and schema.
 
+The landing Worker explicitly sets an empty Cron Trigger list. Keep this in
+place: the app Worker owns the lightweight GitHub Actions dispatch schedule,
+while the landing Worker only serves the site and waitlist. Wrangler otherwise leaves an existing
+dashboard Cron Trigger attached when `crons` is omitted. Its no-op scheduled
+handler is only a rollout safeguard; it must not replace removing accidental
+triggers.
+
 Approve remote emails with a targeted D1 update after reviewing the row.
 
-## Preview Deployment
+## Production deployment
 
-Deploy to a Worker preview URL before connecting any custom domain:
+The two Workers have separate deployment targets:
+
+| Site | Worker | Wrangler config |
+| --- | --- | --- |
+| `https://kettigo.xyz` | `kettigo-landing` | `wrangler.toml` (mirrors `packages/landing/wrangler.jsonc`) |
+| `https://app.kettigo.xyz` | `kettigo` | `packages/web/wrangler.jsonc` |
+
+Use the repository's pinned `pnpm@10.11.1` from the repository root:
 
 ```bash
-npm exec --workspace @kettigo/landing wrangler deploy
+pnpm install --frozen-lockfile
+pnpm --filter @kettigo/landing build
+pnpm exec wrangler deploy --config packages/landing/wrangler.jsonc --dry-run
+npm run landing:deploy
 ```
 
-Use the preview URL for smoke testing. Connect the custom domain only after the
-preview checks pass.
+The deploy script also applies the empty Cron Trigger list after uploading the
+Worker. Keep that step so stale keeper schedules are removed.
+
+The landing config owns the `kettigo.xyz` custom domain. The root
+`wrangler.toml` and `cf:build` script target the landing Worker because
+Cloudflare Workers Builds reads the repository-root convention. Keep the root
+config synchronized with `packages/landing/wrangler.jsonc`. The app remains
+isolated in `packages/web/wrangler.jsonc` and must always be deployed with that
+explicit config path.
+
+Cloudflare Workers Builds settings for `kettigo-landing`:
+
+- Production branch: `main`
+- Root directory: `/`
+- Build command: `pnpm run landing:build`
+- Deploy command: `pnpm run landing:deploy`
+- Preview branch builds: enabled (required for PR checks)
+- Previews Base build command: `pnpm run cf:build`
+- Preview command: `npx wrangler preview`
+
+Keep these repository scripts in the hosted build settings; the landing deploy
+script supplies the explicit config path. A manual landing deployment alone
+does not repair an incorrect automatic build trigger.
+After deploying, confirm the apex loads `/assets/` landing bundles and shows
+“Make your USDC feel lucky.”, while `app.kettigo.xyz` still loads the app's
+`/_next/` bundles. Recheck after an automatic build from `main`.
 
 ## Production Smoke Tests
 
@@ -136,7 +172,7 @@ contracts.
 - `npm run landing:test`
 - `npm run landing:build`
 - Local migration and email approval succeed.
-- Production D1 database ID replaces `00000000-0000-0000-0000-000000000000`.
+- Production D1 reports `kettigo` / `d6cfede8-60bb-45dc-b342-60e6da48f1e4`.
 - Remote migration applies before remote approvals.
 - Preview deployment passes waitlist join, replay, approval, and app gate smoke
   tests before the custom domain is connected.

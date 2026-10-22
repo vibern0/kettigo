@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 
 const KEEPERS = new Map([
+  ["draw", new URL("../../web/netlify/functions/draw-keeper.ts", import.meta.url)],
   ["morpho", new URL("../../web/netlify/functions/morpho-keeper.ts", import.meta.url)],
   ["withdrawal", new URL("../../web/netlify/functions/withdrawal-keeper.ts", import.meta.url)],
 ]);

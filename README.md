@@ -2,7 +2,7 @@
 
 > Your savings, with a chance to win. Test version on Ethereum Sepolia.
 
-**Live app:** https://kettigo.netlify.app
+**Live app:** [app.kettigo.xyz](https://app.kettigo.xyz)
 
 Mobile-first confidential prize-savings app for the Zama Developer Program
 Mainnet Season 4 bounty. Kettigo recreates the core PoolTogether no-loss
@@ -21,7 +21,7 @@ official PoolTogether protocol.
 
 **What's in the box**
 
-- **Web3 abstraction** — Social login (Google, Apple) via Web3Auth → Safe smart
+- **Passkey account** — A browser passkey solely owns a deterministic Safe 1.4.1
   account (ERC-4337, EntryPoint v0.7).
 - **Gasless** — Pimlico as bundler + paymaster. Users never see a gas popup.
 - **Fiat on-ramp** — out of scope for this MVP. Add Onramper / Wert / Stripe
@@ -30,8 +30,8 @@ official PoolTogether protocol.
   `ConfidentialPrizePool` and unwrap it back to USDC. The visible global prize
   is currently mocked by sponsor/admin funding until a real yield source is
   plugged in.
-- **Mobile-first PWA** — Next.js 14, Tailwind, dark theme, no crypto jargon in
-  the UI ("Save", "Tickets", "Draw", "Withdraw").
+- **Mobile-first PWA** — Next.js 15, Tailwind, and no crypto jargon in the UI
+  ("Save", "Tickets", "Draw", "Withdraw").
 
 ## Repo layout
 
@@ -41,41 +41,44 @@ kettigo/
     contracts/   # Hardhat — ConfidentialUSDC, ConfidentialPrizePool, mocks
     landing/     # Vite + Cloudflare Worker — see [Landing site operations](packages/landing/README.md)
     morpho-lab/  # Vite — local technical Morpho operator playground
-    web/         # Next.js 14 PWA — Web3Auth + Safe + Pimlico + Zama SDK v3
+    web/         # Next.js 15 PWA — passkeys + Safe + Pimlico + Zama SDK v3
   package.json   # npm workspaces root
 ```
 
 ## Quick start
 
 ```bash
-# 1. Install everything (workspaces).
-npm install
+# 1. Install everything with the pinned package manager.
+corepack pnpm install --frozen-lockfile
 
 # 2. Deploy confidential contracts to Sepolia.
 cd packages/contracts
 cp .env.example .env  # fill PRIVATE_KEY + SEPOLIA_RPC_URL
-npm run deploy:confidential-usdc
+pnpm run deploy:confidential-usdc
 # -> prints Circle Sepolia USDC + ConfidentialUSDC addresses
-CONFIDENTIAL_USDC_ADDRESS=0x... npm run deploy:confidential-pool
+CONFIDENTIAL_USDC_ADDRESS=0x... pnpm run deploy:confidential-pool
 # -> prints ConfidentialPrizePool address
 
 # Optional: deploy and connect Morpho yield adapter.
 CONFIDENTIAL_USDC_ADDRESS=0x... \
 CONFIDENTIAL_PRIZE_POOL_ADDRESS=0x... \
 MORPHO_UNWRAP_INTERVAL_SECONDS=300 \
-npm run deploy:morpho-yield-adapter
+pnpm run deploy:morpho-yield-adapter
 
 # 3. Configure the web app.
 cd ../web
 cp .env.example .env.local
 # fill NEXT_PUBLIC_USDC_ADDRESS, NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS,
 #       NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS,
-#       NEXT_PUBLIC_WEB3AUTH_CLIENT_ID, NEXT_PUBLIC_PIMLICO_API_KEY
-# On Netlify, also set private keeper env vars:
-#       SEPOLIA_RPC_URL, KEEPER_PRIVATE_KEY, MORPHO_KEEPER_START_BLOCK
+#       NEXT_PUBLIC_PASSKEY_RP_ID, NEXT_PUBLIC_PASSKEY_RP_NAME,
+#       NEXT_PUBLIC_PIMLICO_API_KEY
+# For the GitHub Actions keeper, also set repository secrets:
+#       SEPOLIA_RPC_URL, SEPOLIA_WRITE_RPC_URL, KEEPER_PRIVATE_KEY
+# Set a fine-grained GitHub token with Actions: write for this repository as the
+# GITHUB_WORKFLOW_AUTH secret on the Cloudflare app Worker.
 
 # 4. Run.
-npm run dev
+pnpm run dev
 # → http://localhost:3000
 ```
 
@@ -83,7 +86,7 @@ npm run dev
 
 ```bash
 cd packages/contracts
-npm test
+pnpm test
 ```
 
 Contract tests cover confidential deposits, encrypted principal decryption,
@@ -94,8 +97,8 @@ claims, and Morpho yield routing.
 
 Frontend:
 
-- **Live app:** https://kettigo.netlify.app
-- **Host:** Netlify
+- **Live app:** [app.kettigo.xyz](https://app.kettigo.xyz)
+- **Host:** Cloudflare Workers
 - **Status:** fresh safe-withdrawals contracts deployed; run a new app
   end-to-end exercise before judging from the live URL.
 
@@ -160,7 +163,7 @@ Explorer links use the Sepolia Etherscan transaction URL format:
 
 ## How to test the live app
 
-Use the hosted app at https://kettigo.netlify.app.
+Use the hosted app at [app.kettigo.xyz](https://app.kettigo.xyz).
 
 1. Create an account in the app.
 2. Fund that account with Circle's faucet: https://faucet.circle.com.
@@ -237,10 +240,11 @@ MORPHO_MARKET_ID=0x8c561f0929c3a3e2b20fba99c2ae15fc57b4d0599e4371b67c9a58388a27b
 MORPHO_UNWRAP_INTERVAL_SECONDS=300
 ```
 
-Netlify keeper env values:
+Keeper runtime values:
 
 ```bash
 SEPOLIA_RPC_URL=https://...
+SEPOLIA_WRITE_RPC_URL=https://... # optional dedicated transaction endpoint
 KEEPER_PRIVATE_KEY=0x...
 MORPHO_KEEPER_START_BLOCK=11711000
 MORPHO_KEEPER_MAX_TXS=1
@@ -257,8 +261,8 @@ The user does not need to keep the app open or approve another transaction.
 
 From the repository root, run `pnpm keeper:watch` for continuous local processing
 (Ctrl+C stops it). `pnpm keeper:all` performs one pass. The watcher runs the
-Morpho and withdrawal keepers sequentially, retries every 15 seconds after each
-pass, and continues with withdrawals even if the Morpho keeper fails.
+Morpho, withdrawal, and draw keepers sequentially, retries every 15 seconds after
+each pass, and continues with later lanes if an earlier keeper fails.
 Node 24 and the local keeper environment are required. Check configuration
 without sending transactions with `npm run keeper:withdrawal -- --check`.
 
@@ -270,9 +274,15 @@ durable cursor and pending-work index before batch history grows large.
 The savings screen refreshes pending delivery and wallet USDC automatically.
 Unknown amounts display as pending, never as zero USDC.
 
-The Netlify function is scheduled every minute, but automatic delivery requires
-that scheduled service to be deployed and running, or the local watcher to remain
-running. Local one-shot commands do not establish a background service.
+The Cloudflare app Worker dispatches the `Production keepers` GitHub Actions
+workflow every five minutes. The workflow can also be dispatched manually and requires the `SEPOLIA_RPC_URL`,
+`SEPOLIA_WRITE_RPC_URL`, and `KEEPER_PRIVATE_KEY` repository secrets. Separate
+read and write endpoints let the free runner use historical log access without
+depending on that provider for transaction broadcasts. Cloudflare performs only
+the lightweight workflow dispatch; the onchain keeper remains on GitHub because
+the Cloudflare free plan's CPU budget cannot safely execute it. Store a fine-grained
+GitHub token with `Actions: write` access to this repository as the app Worker's
+`GITHUB_WORKFLOW_AUTH` secret. Local one-shot commands do not establish a background service.
 The previous pool at `0x92938dbFFa6A7De3dd2a009e10f5d2100fA594e6` cannot perform
 the new permissionless payout. It is no longer selected by the local app. Old
 requests are not migrated into the replacement pool.
@@ -300,13 +310,13 @@ Current confidential architecture:
 
 ```
                         ┌─────────────────────┐
-                        │      Web3Auth       │
-                        │  (Google / Apple)   │
+                        │      Passkey        │
+                        │ (WebAuthn / ES256)  │
                         └──────────┬──────────┘
                                    │ owner signer
                                    ▼
                         ┌─────────────────────┐
-                        │   Safe smart acct   │ ← permissionless + viem
+                        │   Safe smart acct   │ ← Protocol Kit + viem
                         │  (ERC-4337, EP 0.7) │
                         └──────────┬──────────┘
                                    │ signed UserOp
@@ -403,9 +413,8 @@ Important current limitations:
   normalizes user and contract addresses with `viem.getAddress()` before they
   enter `sdk.encrypt()`, `sdk.decryption.decryptValues()`, or public-decryption
   helpers.
-- **Zama EIP-712 signing** is isolated inside the v3 SDK signer adapters. The
-  Safe smart account signs for its cUSDC balance; the Web3Auth owner signs for
-  pool principal and winnings.
+- **Zama EIP-712 signing** is isolated inside the v3 SDK signer adapter. The
+  passkey-owned Safe signs for its cUSDC balance, pool principal, and winnings.
 - **Morpho yield adapter exists but is not the live judge fallback.** Users
   still deposit only `cUSDC` into `ConfidentialPrizePool`; the keeper requests
   timed principal unwraps to `MorphoYieldAdapter`, the adapter supplies USDC to
@@ -424,8 +433,8 @@ Important current limitations:
 
 ## Where to go from here
 
-1. Keep the funded Netlify app and Sepolia contracts available for judges:
-   https://kettigo.netlify.app.
+1. Keep the funded Cloudflare app and Sepolia contracts available for judges:
+   [app.kettigo.xyz](https://app.kettigo.xyz).
 2. Record the real-person demo using the verified hosted flow.
 3. Publish the X thread/article and add the final link here.
 4. Continue hardening after submission: draw-start snapshots, larger participant

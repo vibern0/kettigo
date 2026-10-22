@@ -18,6 +18,7 @@ describe("landing operations README", () => {
     expect(markdown).toContain("npm run landing:typecheck");
     expect(markdown).toContain("npm run landing:test");
     expect(markdown).toContain("npm run landing:build");
+    expect(markdown).toContain("npm run landing:deploy");
     expect(markdown).toContain(
       "npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo-landing-local --local",
     );
@@ -27,10 +28,12 @@ describe("landing operations README", () => {
   it("documents production deployment, smoke tests, and rollback", () => {
     const markdown = read(landingReadme);
 
-    expect(markdown).toContain("wrangler d1 create kettigo-landing");
-    expect(markdown).toContain("00000000-0000-0000-0000-000000000000");
+    expect(markdown).toContain("wrangler d1 info kettigo");
+    expect(markdown).toContain("d6cfede8-60bb-45dc-b342-60e6da48f1e4");
+    expect(markdown).not.toContain("wrangler d1 create kettigo");
+    expect(markdown).not.toContain("00000000-0000-0000-0000-000000000000");
     expect(markdown).toContain(
-      "npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo-landing --remote",
+      "npm exec --workspace @kettigo/landing wrangler d1 migrations apply kettigo --remote",
     );
     expect(markdown).toContain("Approve remote emails with a targeted D1 update");
     expect(markdown).toContain("Waitlist join");
@@ -39,9 +42,16 @@ describe("landing operations README", () => {
     expect(markdown).toContain("replay");
     expect(markdown).toContain("previous Worker version");
     expect(markdown).toContain("dropping waitlist data is not a safe rollback");
+    expect(markdown).toContain("Preview branch builds: enabled (required for PR checks)");
+    expect(markdown).toContain("Previews Base build command: `pnpm run cf:build`");
+    expect(markdown).toContain("Preview command: `npx wrangler preview`");
   });
 
-  it("links from the root README without changing root deployment instructions", () => {
+  it("links from the root README and documents root deployment ownership", () => {
     expect(read(rootReadme)).toContain("[Landing site operations](packages/landing/README.md)");
+    expect(read(landingReadme)).toContain(
+      "The root\n`wrangler.toml` and `cf:build` script target the landing Worker",
+    );
+    expect(read(landingReadme)).toContain("packages/web/wrangler.jsonc");
   });
 });

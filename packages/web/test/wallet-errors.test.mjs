@@ -1,19 +1,39 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getWalletErrorMessage } from "../src/lib/wallet-errors.ts";
+import { getWalletError } from "../src/lib/wallet-errors.ts";
 
-test("maps Google userinfo fetch failures to a useful sign-in message", () => {
-  const error = new Error("Failed to connect with wallet. Failed to fetch (www.googleapis.com)", {
-    cause: new TypeError("Failed to fetch (www.googleapis.com)"),
+test("maps passkey cancellation to a retryable state", () => {
+  assert.deepEqual(getWalletError(new DOMException("cancelled", "NotAllowedError")), {
+    status: "cancelled",
+    message: "Verification was cancelled. You can try again.",
   });
-
-  assert.equal(
-    getWalletErrorMessage(error),
-    "Could not reach Google sign-in. Check your connection or content blocker, then try again."
-  );
 });
 
-test("keeps a generic message for unknown wallet failures", () => {
-  assert.equal(getWalletErrorMessage(new Error("user closed popup")), "Could not sign you in.");
+test("maps unsupported WebAuthn separately", () => {
+  assert.deepEqual(getWalletError(new Error("WebAuthn is unavailable.")), {
+    status: "unsupported",
+    message: "This browser or device cannot create your account.",
+  });
+});
+
+test("maps invalid saved metadata without hiding the address change", () => {
+  assert.deepEqual(getWalletError(new Error("Invalid passkey metadata.")), {
+    status: "invalid-metadata",
+    message: "Saved account details cannot be used. Creating another account will give you a different address.",
+  });
+});
+
+test("maps bundler and paymaster failures without discarding the session", () => {
+  assert.deepEqual(getWalletError(new Error("Pimlico paymaster unavailable")), {
+    status: "service-unavailable",
+    message: "Account service is unavailable right now. Try again.",
+  });
+});
+
+test("keeps diagnostics out of the generic user message", () => {
+  assert.deepEqual(getWalletError(new Error("unexpected internal detail")), {
+    status: "service-unavailable",
+    message: "Could not open your account. Try again.",
+  });
 });

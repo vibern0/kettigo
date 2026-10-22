@@ -9,16 +9,18 @@ import { useWallet } from "@/lib/wallet-context";
 import { shortAddress } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { m } from "motion/react";
+import { SheetViewport } from "@/components/SheetViewport";
+import { TestnetWarning } from "@/components/TestnetWarning";
 
 const NAV = [
   { href: "/", label: "Home" },
   { href: "/savings", label: "Save" },
-  { href: "/draw", label: "Draw" },
+  { href: "/draw", label: "Results" },
 ];
 
 export function Header() {
   const path = usePathname();
-  const { session, connect, connecting, disconnect, web3AuthReady } = useWallet();
+  const { session, connect, connecting, disconnect, error, passkeyReady, pimlicoReady, hasSavedAccount } = useWallet();
   const [accountSheetOpen, setAccountSheetOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const navItems = NAV;
@@ -31,20 +33,19 @@ export function Header() {
   }
 
   async function signOut() {
-    setAccountSheetOpen(false);
-    await disconnect();
+    if (await disconnect()) setAccountSheetOpen(false);
   }
 
   const accountSheet =
     session && accountSheetOpen && typeof document !== "undefined"
       ? createPortal(
-          <div
+          <SheetViewport
             className="fixed inset-0 z-50 flex items-end justify-center bg-text/20 px-3 pb-3 backdrop-blur-sm"
             role="presentation"
             onClick={() => setAccountSheetOpen(false)}
           >
             <div
-              className="glass-surface w-full max-w-[456px] rounded-[28px] p-4 shadow-2xl"
+              className="glass-surface max-h-full overflow-y-auto w-full max-w-[456px] rounded-[28px] p-4 shadow-2xl"
               role="dialog"
               aria-modal="true"
               aria-label="Account"
@@ -52,6 +53,7 @@ export function Header() {
             >
               <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-text/20" />
               <div className="space-y-3">
+                <TestnetWarning />
                 <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
                   <p className="font-display text-sm font-semibold text-text">Account</p>
                   <p className="mt-2 break-all font-mono text-xs leading-relaxed text-muted">
@@ -75,9 +77,10 @@ export function Header() {
                     Log out
                   </button>
                 </div>
+                {error && <p className="text-sm text-danger">{error}</p>}
               </div>
             </div>
-          </div>,
+          </SheetViewport>,
           document.body
         )
       : null;
@@ -115,10 +118,10 @@ export function Header() {
           ) : (
             <button
               onClick={() => void connect()}
-              disabled={connecting || !web3AuthReady}
+              disabled={connecting || !passkeyReady || !pimlicoReady}
               className="btn-secondary !py-2 !px-4 !text-sm"
             >
-              {connecting ? "Signing in..." : "Sign in"}
+              {connecting ? "Opening..." : hasSavedAccount ? "Open account" : "Create account"}
             </button>
           )}
         </div>

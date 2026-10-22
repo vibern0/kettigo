@@ -5,14 +5,19 @@ import SavingsPage from "../src/app/savings/page";
 import DrawPage from "../src/app/draw/page";
 import { ToastProvider } from "../src/components/Toast";
 
-const fixture = vi.hoisted(() => ({
-  receipt: vi.fn(),
-  decrypt: vi.fn(),
-  sendBatch: vi.fn(),
-  handle: `0x${"1".repeat(64)}`,
-  account: "0x1111111111111111111111111111111111111111",
-  refresh: vi.fn(async () => {}),
-}));
+const fixture = vi.hoisted(() => {
+  const account = "0x1111111111111111111111111111111111111111";
+  return {
+    receipt: vi.fn(),
+    decrypt: vi.fn(),
+    sendBatch: vi.fn(),
+    sendPrepared: vi.fn(),
+    handle: `0x${"1".repeat(64)}`,
+    account,
+    session: { address: account, ownerAddress: account, prepareTransaction: vi.fn() },
+    refresh: vi.fn(async () => {}),
+  };
+});
 
 vi.mock("viem", async (original) => ({
   ...await original<typeof import("viem")>(),
@@ -38,12 +43,12 @@ vi.mock("@/lib/contracts", async (original) => ({
 }));
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
-    session: { address: fixture.account, ownerAddress: fixture.account },
+    session: fixture.session,
     principal: 0n,
     refreshConfidentialBalances: fixture.refresh,
   }),
 }));
-vi.mock("@/lib/web3auth", () => ({
+vi.mock("@/lib/smart-session", () => ({
   sendSmartTransactionBatch: fixture.sendBatch,
   sendSmartTransaction: vi.fn(),
 }));
@@ -55,8 +60,11 @@ vi.mock("@/lib/zama", async () => {
     createOwnerZamaSDK: () => ({ terminate() {} }),
     createPublicZamaSDK: vi.fn(),
     decryptUint64: fixture.decrypt,
+    decryptSmartUint64: fixture.decrypt,
     decryptPublicUint64: vi.fn(),
     encryptUint64: async () => ({ handle: fixture.handle, inputProof: "0x" }),
+    withSmartZamaSDK: async (_session: unknown, action: (sdk: unknown) => Promise<unknown>) => action({ terminate() {} }),
+    prepareSmartReadSessionCalls: async () => [],
     isZeroEncryptedHandle: (handle: string) => handle === `0x${"0".repeat(64)}`,
   };
 });
@@ -68,6 +76,7 @@ vi.mock("@/components/ActionCenter", () => ({
     },
   }),
 }));
+vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn() }));
 vi.mock("@/lib/morpho-yield", () => ({
   createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
   readProjectedMorphoYield: vi.fn(),
@@ -79,10 +88,14 @@ vi.mock("canvas-confetti", () => ({
   default: { create: () => Object.assign(() => {}, { reset() {} }) },
 }));
 
+function Feedback({ children }: { children: React.ReactNode }) {
+  return <MotionConfig reducedMotion="user"><LazyMotion features={domMax}>
+    <ToastProvider>{children}</ToastProvider>
+  </LazyMotion></MotionConfig>;
+}
+
 function mount(page: React.ReactNode) {
-  return render(<MotionConfig reducedMotion="user"><LazyMotion features={domMax}>
-    <ToastProvider>{page}</ToastProvider>
-  </LazyMotion></MotionConfig>);
+  return render(page, { wrapper: Feedback });
 }
 
 async function deposit() {
@@ -91,15 +104,21 @@ async function deposit() {
   fireEvent.click(screen.getByRole("button", { name: /^Deposit$/ }));
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
   fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
-  fireEvent.click(screen.getByRole("button", { name: /^Confirm$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Confirm$/ }));
   return view;
 }
 
 beforeEach(() => {
   localStorage.clear();
   fixture.handle = `0x${"1".repeat(64)}`;
+  fixture.session = { ...fixture.session, address: fixture.account, ownerAddress: fixture.account };
   fixture.receipt.mockResolvedValue({ status: "success" });
   fixture.sendBatch.mockResolvedValue(`0x${"2".repeat(64)}`);
+  fixture.session.prepareTransaction.mockResolvedValue({ send: fixture.sendPrepared, cancel() {} });
+  fixture.sendPrepared.mockImplementation(async ({ onSigned }: { onSigned?: () => void }) => {
+    onSigned?.();
+    return `0x${"2".repeat(64)}`;
+  });
   fixture.decrypt.mockResolvedValue(25_000_000n);
 });
 
@@ -112,7 +131,7 @@ describe("deposit celebrations", () => {
     expect(container.querySelector("canvas")).toBeNull();
     expect(screen.queryByText("Deposit complete.")).toBeNull();
     await act(async () => confirm({ status: "success" }));
-    expect(screen.getByRole("status").textContent).toContain("Deposit complete.");
+    expect(screen.getByText("Deposit complete.")).toBeTruthy();
     expect(container.querySelector("canvas")).not.toBeNull();
   });
 
@@ -125,7 +144,7 @@ describe("deposit celebrations", () => {
   });
 
   it("does not celebrate a rejected deposit approval", async () => {
-    fixture.sendBatch.mockRejectedValue(new Error("Request rejected"));
+    fixture.sendPrepared.mockRejectedValue(new Error("Request rejected"));
     const { container } = await deposit();
     await screen.findByText("Transaction failed");
     expect(container.querySelector("canvas")).toBeNull();
@@ -162,5 +181,19 @@ describe("prize reveals", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
     await screen.findByText("Transaction failed");
     expect(container.querySelector("canvas")).toBeNull();
+  });
+
+  it("does not reveal or celebrate a prize from an account that has been switched away", async () => {
+    let reveal!: (amount: bigint) => void;
+    fixture.decrypt.mockReturnValue(new Promise(resolve => { reveal = resolve; }));
+    const { container, rerender } = mount(<DrawPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+    await waitFor(() => expect(fixture.decrypt).toHaveBeenCalled());
+    fixture.session = { ...fixture.session, address: "0x4444444444444444444444444444444444444444" };
+    rerender(<DrawPage />);
+    await act(async () => reveal(25_000_000n));
+    expect(container.querySelector("canvas")).toBeNull();
+    expect(screen.queryByText("You got a prize!")).toBeNull();
+    expect(screen.queryByText("25.000000 USDC")).toBeNull();
   });
 });

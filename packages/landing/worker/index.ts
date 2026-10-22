@@ -14,6 +14,16 @@ const TEMPORARILY_UNAVAILABLE: WaitlistResponse = {
 };
 
 export default {
+  scheduled(controller: ScheduledController, _env: Env, _context: ExecutionContext): void {
+    console.warn(
+      JSON.stringify({
+        event: "stale_scheduled_trigger_ignored",
+        cron: controller.cron,
+        scheduledTime: controller.scheduledTime,
+      }),
+    );
+  },
+
   async fetch(request: Request, env: Env, _context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) {
@@ -23,6 +33,7 @@ export default {
     const response = await env.ASSETS.fetch(request);
     return withSecurityHeaders(response, "document");
   },
+
 };
 
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {

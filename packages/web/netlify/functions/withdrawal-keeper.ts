@@ -16,6 +16,7 @@ import {
   type WithdrawalKeeperAction,
 } from "../../src/lib/withdrawal-keeper.ts";
 import { decryptPublicHandles } from "../../src/lib/zama-node.ts";
+import { resolveKeeperRpcUrls } from "../../src/lib/keeper-rpc.ts";
 
 declare const Netlify: { env: { get(name: string): string | undefined } } | undefined;
 
@@ -28,6 +29,7 @@ async function decryptHandles(handles: Hex[], rpcUrl: string) {
 
 type EnvName =
   | "SEPOLIA_RPC_URL"
+  | "SEPOLIA_WRITE_RPC_URL"
   | "NEXT_PUBLIC_RPC_URL"
   | "CONFIDENTIAL_PRIZE_POOL_ADDRESS"
   | "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS"
@@ -37,6 +39,7 @@ function env(name: EnvName): string | undefined {
   if (typeof Netlify !== "undefined") return Netlify.env.get(name);
   switch (name) {
     case "SEPOLIA_RPC_URL": return process.env.SEPOLIA_RPC_URL;
+    case "SEPOLIA_WRITE_RPC_URL": return process.env.SEPOLIA_WRITE_RPC_URL;
     case "NEXT_PUBLIC_RPC_URL": return process.env.NEXT_PUBLIC_RPC_URL;
     case "CONFIDENTIAL_PRIZE_POOL_ADDRESS": return process.env.CONFIDENTIAL_PRIZE_POOL_ADDRESS;
     case "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS": return process.env.NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS;
@@ -195,10 +198,11 @@ function clearValueFor(values: Readonly<Record<string, unknown>>, handle: Hex): 
 
 export default async () => {
   const rpcUrl = env("SEPOLIA_RPC_URL") ?? requiredEnv("NEXT_PUBLIC_RPC_URL");
+  const { readRpcUrl, writeRpcUrl } = resolveKeeperRpcUrls(rpcUrl, env("SEPOLIA_WRITE_RPC_URL"));
   const pool = getAddress(env("CONFIDENTIAL_PRIZE_POOL_ADDRESS") ?? requiredEnv("NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS"));
   const account = privateKeyToAccount(privateKeyEnv("KEEPER_PRIVATE_KEY"));
-  const publicClient = createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
-  const walletClient = createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) });
+  const publicClient = createPublicClient({ chain: sepolia, transport: http(readRpcUrl) });
+  const walletClient = createWalletClient({ account, chain: sepolia, transport: http(writeRpcUrl) });
   return runWithdrawalKeeper({ rpcUrl, pool, account, publicClient, walletClient });
 };
 

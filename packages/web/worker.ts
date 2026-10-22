@@ -1,20 +1,15 @@
 import {
-  JOINED_MESSAGE,
-  claimApprovedAccess,
   isValidEmail,
   normalizeEmail,
   readAccessStatus,
   registerWaitlistInterest,
 } from "./worker/access";
-import { createPublicClient, createWalletClient, getAddress, http, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
-import { confidentialPrizePoolAbi } from "@kettigo/protocol";
-import { chooseDrawKeeperAction, type DrawKeeperSnapshot } from "./src/lib/draw-keeper";
-import { normalizeKeeperMaxTransactions } from "./src/lib/morpho-keeper";
-import { sanitizeKeeperError } from "./src/lib/morpho-keeper";
-import { runMorphoKeeper } from "./netlify/functions/morpho-keeper";
-import { runWithdrawalKeeper } from "./netlify/functions/withdrawal-keeper";
+import {
+  runtimeConfigScript,
+  type PublicRuntimeEnv,
+} from "./worker/runtime-config-bootstrap";
+import { dispatchKeeperWorkflow } from "./worker/github-keeper-dispatch";
+import { handleClientEvents } from "./worker/client-events";
 
 type D1StatementLike = {
   bind(...values: unknown[]): D1StatementLike;
@@ -22,51 +17,27 @@ type D1StatementLike = {
   run(): Promise<unknown>;
 };
 
-type Env = {
+type Env = PublicRuntimeEnv & {
   ASSETS: {
     fetch(request: Request): Promise<Response>;
   };
   DB: {
     prepare(sql: string): D1StatementLike;
   };
-  NEXT_PUBLIC_CHAIN_ID?: string;
-  NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS?: string;
-  NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS?: string;
-  NEXT_PUBLIC_PIMLICO_API_KEY?: string;
-  NEXT_PUBLIC_RPC_URL?: string;
-  NEXT_PUBLIC_USDC_ADDRESS?: string;
-  NEXT_PUBLIC_WEB3AUTH_CLIENT_ID?: string;
-  DRAW_KEEPER_MINIMUM_PRIZE?: string;
-  DRAW_KEEPER_TRIGGER_TOKEN?: string;
-  KEEPER_PRIVATE_KEY?: string;
-  MORPHO_KEEPER_MAX_TXS?: string;
-  MORPHO_KEEPER_START_BLOCK?: string;
-  SEPOLIA_RPC_URL?: string;
+  GITHUB_WORKFLOW_AUTH: string;
 };
-
-const PUBLIC_KEYS = [
-  "NEXT_PUBLIC_CHAIN_ID",
-  "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS",
-  "NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS",
-  "NEXT_PUBLIC_PIMLICO_API_KEY",
-  "NEXT_PUBLIC_RPC_URL",
-  "NEXT_PUBLIC_USDC_ADDRESS",
-  "NEXT_PUBLIC_WEB3AUTH_CLIENT_ID",
-] as const;
-
-function runtimeConfig(env: Env): Record<string, string> {
-  return Object.fromEntries(
-    PUBLIC_KEYS.map((key) => [key, env[key] ?? ""]),
-  );
-}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === "/api/client-events") {
+      return handleClientEvents(request);
+    }
+
     if (url.pathname === "/config.js") {
       return new Response(
-        `window.__KETTIGO_CONFIG__ = ${JSON.stringify(runtimeConfig(env))};\n`,
+        runtimeConfigScript(env),
         {
           headers: {
             "content-type": "application/javascript; charset=utf-8",
@@ -80,31 +51,52 @@ export default {
       return handleWaitlist(request, env);
     }
 
-    if (url.pathname === "/api/access/claim" && request.method === "POST") {
-      return handleAccessClaim(request, env);
-    }
-
     if (url.pathname === "/api/access/status" && request.method === "POST") {
       return handleAccessStatus(request, env);
-    }
-
-    if (url.pathname === "/api/keeper/draw" && request.method === "POST") {
-      return handleDrawKeeperTrigger(request, env);
-    }
-
-    if (url.pathname === "/api/keeper/all" && request.method === "POST") {
-      return handleKeeperAllTrigger(request, env);
     }
 
     if (url.pathname.startsWith("/api/")) {
       return json({ ok: false, status: "invalid_request" }, 404);
     }
 
-    return env.ASSETS.fetch(request);
+    const asset = await env.ASSETS.fetch(request);
+    if (!asset.headers.get("content-type")?.toLowerCase().includes("text/html")) {
+      return asset;
+    }
+
+    const bootstrap = runtimeConfigScript(env);
+    return new HTMLRewriter()
+      .on("head", {
+        element(element) {
+          element.prepend(`<script>${bootstrap}</script>`, { html: true });
+        },
+      })
+      .transform(asset);
   },
 
-  scheduled(_controller: { cron: string }, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }) {
-    ctx.waitUntil(runKeeperAll(env, "cron"));
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    const scheduledMinute = Math.floor(controller.scheduledTime / 60_000);
+    if (scheduledMinute % 5 !== 0) {
+      console.log(JSON.stringify({
+        event: "keeper_dispatch",
+        outcome: "skipped_off_cycle",
+        cron: controller.cron,
+        scheduledTime: controller.scheduledTime,
+      }));
+      return;
+    }
+
+    try {
+      const status = await dispatchKeeperWorkflow(env.GITHUB_WORKFLOW_AUTH);
+      console.log(JSON.stringify({ event: "keeper_dispatch", outcome: "accepted", status }));
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "keeper_dispatch",
+        outcome: "failed",
+        error: error instanceof Error ? error.message : "Unknown error",
+      }));
+      throw error;
+    }
   },
 };
 
@@ -133,19 +125,6 @@ async function handleAccessStatus(request: Request, env: Env): Promise<Response>
   }
 }
 
-async function handleAccessClaim(request: Request, env: Env): Promise<Response> {
-  try {
-    const body = await readJsonBody(request);
-    const email = typeof body.email === "string" ? body.email : "";
-    const walletAddress = typeof body.walletAddress === "string" ? body.walletAddress : "";
-    const signature = typeof body.signature === "string" ? body.signature : "";
-    const result = await claimApprovedAccess(env.DB, email, walletAddress, signature);
-    return json({ ...result, message: JOINED_MESSAGE }, result.ok ? 200 : result.status === "invalid_request" ? 400 : 403);
-  } catch {
-    return json({ ok: false, status: "temporarily_unavailable" }, 503);
-  }
-}
-
 async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.split(";").map((part) => part.trim()).includes("application/json")) {
@@ -163,162 +142,4 @@ function json(body: unknown, status: number): Response {
     status,
     headers: { "cache-control": "no-store" },
   });
-}
-
-async function handleDrawKeeperTrigger(request: Request, env: Env): Promise<Response> {
-  const token = env.DRAW_KEEPER_TRIGGER_TOKEN;
-  if (!token) return json({ ok: false, status: "not_configured" }, 404);
-  if (request.headers.get("authorization") !== `Bearer ${token}`) {
-    return json({ ok: false, status: "unauthorized" }, 401);
-  }
-
-  const result = await runDrawKeeper(env, "manual");
-  return json(result, result.ok ? 200 : result.status === "not_configured" ? 503 : 200);
-}
-
-async function handleKeeperAllTrigger(request: Request, env: Env): Promise<Response> {
-  const token = env.DRAW_KEEPER_TRIGGER_TOKEN;
-  if (!token) return json({ ok: false, status: "not_configured" }, 404);
-  if (request.headers.get("authorization") !== `Bearer ${token}`) {
-    return json({ ok: false, status: "unauthorized" }, 401);
-  }
-
-  const result = await runKeeperAll(env, "manual");
-  return json(result, result.ok ? 200 : result.status === "not_configured" ? 503 : 200);
-}
-
-async function runKeeperAll(env: Env, source: "cron" | "manual") {
-  const context = createKeeperContext(env);
-  if (!context) {
-    const result = { ok: false, source, status: "not_configured" as const };
-    console.log(JSON.stringify(result));
-    return result;
-  }
-
-  const lanes = {
-    morpho: await runKeeperLane("morpho", () => runMorphoKeeper({
-      ...context,
-      maxTransactions: normalizeKeeperMaxTransactions(env.MORPHO_KEEPER_MAX_TXS),
-      startBlock: parseRequiredBigint(env.MORPHO_KEEPER_START_BLOCK, "MORPHO_KEEPER_START_BLOCK"),
-    })),
-    withdrawal: await runKeeperLane("withdrawal", () => runWithdrawalKeeper(context)),
-    draw: await runKeeperLane("draw", () => runDrawKeeperWithContext(context, env, source)),
-  };
-  const result = { ok: Object.values(lanes).every((lane) => lane.ok), source, status: "ran" as const, lanes };
-  console.log(JSON.stringify(result));
-  return result;
-}
-
-async function runKeeperLane(name: string, run: () => Promise<unknown>) {
-  try {
-    const result = await run();
-    const body = result instanceof Response ? await result.json() : result;
-    return { ok: true, name, result: serializeKeeperResult(body) };
-  } catch (error) {
-    return { ok: false, name, error: sanitizeKeeperError(error) };
-  }
-}
-
-async function runDrawKeeper(env: Env, source: "cron" | "manual") {
-  try {
-    const context = createKeeperContext(env);
-    if (!context) {
-      const result = { ok: false, source, status: "not_configured" as const };
-      console.log(JSON.stringify(result));
-      return result;
-    }
-    const result = await runDrawKeeperWithContext(context, env, source);
-    console.log(JSON.stringify(result));
-    return result;
-  } catch (error) {
-    const result = { ok: false, source, status: "error" as const, error: sanitizeKeeperError(error) };
-    console.log(JSON.stringify(result));
-    return result;
-  }
-}
-
-function createKeeperContext(env: Env) {
-  const rpcUrl = env.SEPOLIA_RPC_URL ?? env.NEXT_PUBLIC_RPC_URL;
-  const poolAddress = env.NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS;
-  const privateKey = normalizePrivateKey(env.KEEPER_PRIVATE_KEY);
-  if (!rpcUrl || !poolAddress || !privateKey) return undefined;
-
-  const pool = getAddress(poolAddress);
-  const account = privateKeyToAccount(privateKey);
-  const publicClient = createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
-  const walletClient = createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) });
-  return { rpcUrl, pool, account, publicClient, walletClient };
-}
-
-async function runDrawKeeperWithContext(
-  context: NonNullable<ReturnType<typeof createKeeperContext>>,
-  env: Env,
-  source: "cron" | "manual",
-) {
-  const block = await context.publicClient.getBlock();
-  const [nextDrawAt, participantCount, publicPrizeReserve, morphoAccruedYieldAssets] = await Promise.all([
-    context.publicClient.readContract({ address: context.pool, abi: confidentialPrizePoolAbi, functionName: "nextDrawAt" }),
-    context.publicClient.readContract({ address: context.pool, abi: confidentialPrizePoolAbi, functionName: "participantCount" }),
-    context.publicClient.readContract({ address: context.pool, abi: confidentialPrizePoolAbi, functionName: "publicPrizeReserve" }),
-    context.publicClient.readContract({ address: context.pool, abi: confidentialPrizePoolAbi, functionName: "morphoAccruedYieldAssets" }),
-  ]);
-  const snapshot = {
-    now: block.timestamp,
-    nextDrawAt,
-    participantCount,
-    publicPrizeReserve,
-    morphoAccruedYieldAssets,
-    minimumPrize: parseKeeperMinimumPrize(env.DRAW_KEEPER_MINIMUM_PRIZE),
-  } satisfies DrawKeeperSnapshot;
-
-  const action = chooseDrawKeeperAction(snapshot);
-  if (!action) {
-    return { ok: true, source, status: "idle" as const, snapshot: serializeDrawSnapshot(snapshot) };
-  }
-
-  const hash = await context.walletClient.writeContract({
-    address: context.pool,
-    abi: confidentialPrizePoolAbi,
-    account: context.account,
-    chain: sepolia,
-    functionName: "closeDraw",
-    args: [],
-  });
-  return { ok: true, source, status: "submitted" as const, action, hash, snapshot: serializeDrawSnapshot(snapshot) };
-}
-
-function normalizePrivateKey(value: string | undefined): Hex | undefined {
-  if (!value) return undefined;
-  return (value.startsWith("0x") ? value : `0x${value}`) as Hex;
-}
-
-function parseKeeperMinimumPrize(value: string | undefined): bigint {
-  if (!value) return 1_000_000n;
-  const parsed = BigInt(value);
-  if (parsed < 0n) throw new Error("DRAW_KEEPER_MINIMUM_PRIZE must be non-negative");
-  return parsed;
-}
-
-function parseRequiredBigint(value: string | undefined, name: string): bigint {
-  if (!value) throw new Error(`${name} is required`);
-  const parsed = BigInt(value);
-  if (parsed < 0n) throw new Error(`${name} must be non-negative`);
-  return parsed;
-}
-
-function serializeDrawSnapshot(snapshot: DrawKeeperSnapshot) {
-  return Object.fromEntries(
-    Object.entries(snapshot).map(([key, value]) => [key, value.toString()]),
-  );
-}
-
-function serializeKeeperResult(value: unknown): unknown {
-  if (typeof value === "bigint") return value.toString();
-  if (Array.isArray(value)) return value.map(serializeKeeperResult);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, serializeKeeperResult(item)]),
-    );
-  }
-  return value;
 }

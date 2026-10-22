@@ -66,3 +66,17 @@ frozen install, run its real build, and run Wrangler `deploy --dry-run`; if
 deployment credentials are available, deploy and smoke-test the target before
 calling the PR ready. Use the `codacy-pr-review` skill for the detailed review
 workflow.
+
+## Shared-work safeguards
+
+- Never force-push. Do not rewrite or overwrite branches that another agent may
+  be using.
+- Before merging a pull request, fetch the latest `origin/main`, merge it into
+  the pull-request branch, and resolve conflicts by preserving the intent and
+  completed work from both sides. Do not discard another agent's changes to
+  make a conflict disappear.
+- After resolving conflicts, rerun the relevant tests and quality gates, then
+  push with a normal (non-force) push.
+- Verify that expected commits and merged pull requests remain reachable from
+  the updated branch before merging. If work appears missing, stop and recover
+  it instead of proceeding with the merge.

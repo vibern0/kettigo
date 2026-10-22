@@ -30,6 +30,7 @@ async function run(name) {
 while (!stopped) {
   await run("morpho");
   if (!stopped) await run("withdrawal");
+  if (!stopped) await run("draw");
   if (!stopped) await new Promise((resolve) => {
     const timer = setTimeout(resolve, 15_000);
     wake = () => { clearTimeout(timer); resolve(); };
