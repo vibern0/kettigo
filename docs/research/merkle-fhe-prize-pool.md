@@ -8,6 +8,8 @@ The experimental replacement uses a **Merkle tree of encrypted balances**. Closi
 
 This removes the all-user scan from closing a draw. Each check follows at most 32 tree levels, regardless of the occupied population. An indexer reconstructs historical proofs; the contract verifies them. The tested tree has a finite capacity of 2^32 slots, with further limits from arithmetic, storage, and network throughput.
 
+![Research architecture: deposits update an encrypted sum tree; draw closure freezes its root and encrypted ticket; an event archive supplies historical proofs; the contract verifies one user's proof before an FHE interval check pays the fixed beneficiary.](assets/merkle-fhe-architecture.png)
+
 Testing covered **4,096 funded local accounts and every account's prize check**, using a simulated FHE backend. A separate **24-hour Sepolia experiment** exercised real FHE with eight wallets across 48 cycles: 1,635 confirmed transactions, zero mined reverts, and successful principal and prize accounting.
 
 The live run also exposed RPC failures, service timeouts, and missing historical logs. Recovery worked from retained events, making durable archival storage a concrete requirement.
