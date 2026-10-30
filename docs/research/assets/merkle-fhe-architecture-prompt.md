@@ -31,4 +31,3 @@ Do not add text or blocks. Keep every label crisp and legible. This is an edit, 
 ## Footer edit
 
 Edit only the small bottom footer line of this infographic. Replace that entire small line, including its poorly rendered mathematical superscript, with exactly: "Finite tree capacity. Live throughput and 60-day retention still under validation." Preserve absolutely everything else, including the bold footer above, all boxes, arrows, labels, colors and dimensions. Keep this replacement footer large enough to read clearly.
-
