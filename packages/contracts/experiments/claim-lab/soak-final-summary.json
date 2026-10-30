@@ -1,0 +1,132 @@
+{
+  "status": "completed_with_interruptions",
+  "startedAt": "2026-10-28T16:04:38.978Z",
+  "stoppedAt": "2026-10-29T16:04:39.131Z",
+  "elapsedMs": 86400153,
+  "loadCycles": 48,
+  "uniqueWallets": 8,
+  "concurrencyCycles": {
+    "2": 1,
+    "4": 1,
+    "8": 46
+  },
+  "uniqueCompletedActionsPerKind": 374,
+  "totalConfirmedTransactions": 1635,
+  "minedReverts": 0,
+  "transactionFeeWei": "463111439200000",
+  "gasFundingWei": "640000000000000",
+  "lateCycles": 4,
+  "maxSchedulingLagMs": 1483015,
+  "allScheduledCyclesOnTime": false,
+  "awardsTotal": "528",
+  "retentionCanary": {
+    "drawId": 2,
+    "users": 8,
+    "untouched": true,
+    "earliestDay60": "2026-12-27T16:04:36.000Z"
+  },
+  "testEvidence": {
+    "researchPassing": 124,
+    "researchOptInSkipped": 1,
+    "priorProductionPassing": 34
+  },
+  "claim": "Recovery and conservation at a bounded workload; no uninterrupted SLA or maximum capacity established",
+  "finalAudit": {
+    "status": "passed",
+    "at": "2026-10-29T16:14:02.439Z",
+    "chainId": 11155111,
+    "pool": "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27",
+    "lastBlock": 12020447,
+    "replayedEvents": 25890,
+    "reconstructedProofs": 382,
+    "verifiedCheckedClaims": 374,
+    "verifiedUntouchedCanaryClaims": 8,
+    "activeCount": 0,
+    "runtimeHashMatches": true,
+    "rpcOnlyReplay": {
+      "status": "blocked",
+      "code": 4444,
+      "message": "pruned history unavailable",
+      "verifiedMissingKnownEventBlocks": [
+        12007448,
+        12007449,
+        12007451,
+        12007452
+      ]
+    },
+    "kind": "independent derived-table rebuild from retained event payloads and onchain flag/root audit; no signing or decryption"
+  },
+  "latencyMs": {
+    "transactionConfirmation": {
+      "count": 1590,
+      "p50": 10424,
+      "p95": 21408,
+      "p99": 24066
+    },
+    "publicAdmissionProof": {
+      "count": 388,
+      "p50": 12853,
+      "p95": 22071,
+      "p99": 23658
+    },
+    "coldAwardDecryption": {
+      "count": 378,
+      "p50": 10278,
+      "p95": 15621,
+      "p99": 17581
+    },
+    "coldBalanceDecryption": {
+      "count": 384,
+      "p50": 2808,
+      "p95": 7985,
+      "p99": 8231
+    },
+    "archive": {
+      "count": 50,
+      "p50": 389,
+      "p95": 794,
+      "p99": 1544
+    }
+  },
+  "latencyUnit": "successful operation attempt; repeated labels after recovery count again",
+  "http": {
+    "POST:202": 1649,
+    "GET:200": 1641,
+    "GET:202": 3710,
+    "GET:503": 8
+  },
+  "recordedInWindowFailedOperations": 16,
+  "failureCaveat": "Masked send incident is retained separately in incidents; successful-attempt latency excludes failures.",
+  "gasUsed": {
+    "deposit": {
+      "count": 374,
+      "min": 3286822,
+      "max": 3299267
+    },
+    "admit": {
+      "count": 374,
+      "min": 3103995,
+      "max": 3237310
+    },
+    "exit": {
+      "count": 374,
+      "min": 3347643,
+      "max": 3584830
+    },
+    "check": {
+      "count": 374,
+      "min": 1775352,
+      "max": 1822678
+    },
+    "fund": {
+      "count": 48,
+      "min": 2310146,
+      "max": 2318833
+    },
+    "close": {
+      "count": 48,
+      "min": 1247847,
+      "max": 1251218
+    }
+  }
+}

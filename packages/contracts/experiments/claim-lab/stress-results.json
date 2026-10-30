@@ -1,0 +1,174 @@
+{
+  "population": 4096,
+  "treeDepth": 32,
+  "backend": "local Hardhat FHE mock; actual ERC7984 callbacks",
+  "checkpoints": [
+    {
+      "participants": 1,
+      "deposit": {
+        "gas": "3283927",
+        "globalHCU": "7587128",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "408545",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "1",
+      "storedNodes": "33"
+    },
+    {
+      "participants": 32,
+      "deposit": {
+        "gas": "2218095",
+        "globalHCU": "7587096",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "376345",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "528",
+      "storedNodes": "90"
+    },
+    {
+      "participants": 33,
+      "deposit": {
+        "gas": "2306470",
+        "globalHCU": "7587096",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "376345",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "561",
+      "storedNodes": "96"
+    },
+    {
+      "participants": 256,
+      "deposit": {
+        "gas": "2282595",
+        "globalHCU": "7587096",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "376345",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "11459",
+      "storedNodes": "535"
+    },
+    {
+      "participants": 1024,
+      "deposit": {
+        "gas": "2325595",
+        "globalHCU": "7587096",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "376345",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "49015",
+      "storedNodes": "2069"
+    },
+    {
+      "participants": 2048,
+      "deposit": {
+        "gas": "2347095",
+        "globalHCU": "7587096",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "376345",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "99879",
+      "storedNodes": "4116"
+    },
+    {
+      "participants": 4096,
+      "deposit": {
+        "gas": "2368583",
+        "globalHCU": "7587096",
+        "maxHCUDepth": "995000",
+        "calldataBytes": 388
+      },
+      "close": {
+        "gas": "376345",
+        "globalHCU": "2081096",
+        "maxHCUDepth": "1747064",
+        "calldataBytes": 4
+      },
+      "total": "199879",
+      "storedNodes": "8211"
+    }
+  ],
+  "progress": [],
+  "passed": true,
+  "onboardingMs": 102285,
+  "fundedClose": {
+    "gas": "376345",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "snapshotTotal": "199879",
+  "localOracleTicket": "111088",
+  "archiveRecoveryMs": 7360,
+  "archivedNodeEvents": 135168,
+  "archivedNodeLogJsonBytes": 88476960,
+  "claimSamples": [
+    {
+      "index": 0,
+      "gas": "624113",
+      "globalHCU": "1288032",
+      "maxHCUDepth": "757000",
+      "calldataBytes": 3396
+    },
+    {
+      "index": 2289,
+      "gas": "699671",
+      "globalHCU": "2098032",
+      "maxHCUDepth": "1243000",
+      "calldataBytes": 3396
+    },
+    {
+      "index": 4095,
+      "gas": "785087",
+      "globalHCU": "3070032",
+      "maxHCUDepth": "1405000",
+      "calldataBytes": 3396
+    }
+  ],
+  "claims": {
+    "count": 4096,
+    "winnerIndex": 2289,
+    "totalGas": "2866033596",
+    "minGas": "624113",
+    "maxGas": "785087",
+    "elapsedMs": 37140
+  },
+  "backedPrincipalAfterMutationsAndClaims": "198289",
+  "peakRssMiB": 5137,
+  "elapsedMs": 149325
+}
