@@ -24,6 +24,10 @@ runtime hash was
 upgradeability audit. Re-read canonical state before release; draw and balance
 state changes over time.
 
+The [block-pinned inventory](sepolia-v1-inventory-2026-11-04.json)
+records public state, principal/winnings handles and withdrawal claims for both
+legacy pools without decrypting balances.
+
 Do not infer principal amounts from ciphertext handles, participant counts or
 archive records. An inventory records handles, authorized account-side
 reconciliation, pending withdrawal batches and claims, wrapper unwrap requests,

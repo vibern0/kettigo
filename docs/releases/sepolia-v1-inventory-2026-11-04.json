@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "status": "legacy-inventory-no-cutover",
+  "chainId": "11155111",
+  "observedAt": "2026-11-04T21:11:32.136Z",
+  "blockNumber": "12065011",
+  "blockHash": "0x8e9d613c5d0cc5a32dd19ef3bc0848dc556aa60b0e5d83c21b8110c5c525e8d9",
+  "sourceVerification": "not independently verified by this inventory",
+  "plaintextAccounting": "not reconstructed; ciphertext handles only",
+  "pools": [
+    {
+      "version": "v1-worker",
+      "pool": "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b",
+      "runtimeHash": "0x274d61d9715be69e898763e72a46a92530c83ef92c5cade8a222235f3c9ff403",
+      "runtimeBytes": 13464,
+      "releaseTreatment": "immutable; retain original liabilities and access",
+      "publicState": {
+        "owner": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+        "token": "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a",
+        "morphoYieldAdapter": "0xb2dAb46E04c875E6C8c1B966cFC3E1f40f063e90",
+        "drawId": "25",
+        "nextDrawAt": "1793911920",
+        "drawInterval": "86400",
+        "MAX_PARTICIPANTS": "32",
+        "participantCount": "5",
+        "publicPrizeReserve": "0",
+        "encryptedTotalPrincipal": "0x7a4e17090760bb38c4b0a821c9b2ed0b137c2eb90bff0000000000aa36a70500",
+        "encryptedPrizeReserve": "0x2ee51573d20ea194b09020a521458b825ec05d615aff0000000000aa36a70500",
+        "encryptedPendingMorphoPrincipal": "0xf4ca68c059554339135b34e55260b56681c06b8c63ff0000000000aa36a70500",
+        "currentWithdrawalBatchId": "3"
+      },
+      "participants": [
+        {
+          "account": "0x8AEFBA26724c9FD9a1f06E3a65bfd7a8004d2F79",
+          "principalHandle": "0x18e2f4ff6d7c947d3ab90bfc44bb031a30e7e821ccff0000000000aa36a70500",
+          "winningsHandle": "0x609715247e30d0a5a2bfabf401d03d1ac0e97077ffff0000000000aa36a70500"
+        },
+        {
+          "account": "0x3cf27E9C79752d74FC4c42C20983a078BC35F1E2",
+          "principalHandle": "0xd6ca0569017dd9b580e9a9d7c1dd4125bdc88bf158ff0000000000aa36a70500",
+          "winningsHandle": "0x60f812c9a2bd3961c422371af08173e2212c127e3aff0000000000aa36a70500"
+        },
+        {
+          "account": "0xD35632C20C82595eA9a51F950f2Eea05C45238e1",
+          "principalHandle": "0x9283ed56839845b76357373f0f174dedabb71dd0d6ff0000000000aa36a70500",
+          "winningsHandle": "0x236f68d662a0c643e83b88b2ebe87460e59c17d579ff0000000000aa36a70500"
+        },
+        {
+          "account": "0xED3a25fe0abae2F06a44a9816B41683630b63BA8",
+          "principalHandle": "0xf522dfdc15dd1a0ba1cfcc355edc39c27b09bb9092ff0000000000aa36a70500",
+          "winningsHandle": "0x98ae0528a0e5bca94fdda13828b8cdb17c315d512eff0000000000aa36a70500"
+        },
+        {
+          "account": "0x102623615Aaa1E4EC387E87dDA9d2a72fE3448Aa",
+          "principalHandle": "0x688a68049140ac5750b06c6f59e369c50a6b10f3cbff0000000000aa36a70500",
+          "winningsHandle": "0x3e7a5f7f70e3d34bfa04b177c6182153150bac2509ff0000000000aa36a70500"
+        }
+      ],
+      "withdrawalBatches": [
+        {
+          "batchId": "1",
+          "status": "0",
+          "accounts": []
+        },
+        {
+          "batchId": "2",
+          "status": "2",
+          "accounts": [
+            {
+              "account": "0xD35632C20C82595eA9a51F950f2Eea05C45238e1",
+              "claimHandle": "0x6a3d1450d108520916f95db250410302948d3f6dc5ff0000000000aa36a70500",
+              "unwrapRequest": "0xf8fbda4af697823586454213d4ad1e226fe5d39d9aff0000000000aa36a70500"
+            }
+          ]
+        },
+        {
+          "batchId": "3",
+          "status": "0",
+          "accounts": []
+        }
+      ]
+    },
+    {
+      "version": "v1-local",
+      "pool": "0x9c23E5f7143612dc1232FC643A57300291e0d719",
+      "runtimeHash": "0x71ccb969d9f7e2c397edd97be32e0d13a87e7e73da9c78616c01a917bde393d4",
+      "runtimeBytes": 13466,
+      "releaseTreatment": "immutable; retain original liabilities and access",
+      "publicState": {
+        "owner": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+        "token": "0x3B4F71c77e288d92871Cda495891Cd42f543A3f5",
+        "morphoYieldAdapter": "0x784C2020a2fbf4a106881E37B673A93604A9559D",
+        "drawId": "8",
+        "nextDrawAt": "1791389868",
+        "drawInterval": "900",
+        "MAX_PARTICIPANTS": "32",
+        "participantCount": "1",
+        "publicPrizeReserve": "15",
+        "encryptedTotalPrincipal": "0x41ca1e177f0843647a0f60dab9270c11dc1db2c8e6ff0000000000aa36a70500",
+        "encryptedPrizeReserve": "0xebe15de75fe0b0273706fb39fcbabf17b9f13e6c84ff0000000000aa36a70500",
+        "encryptedPendingMorphoPrincipal": "0x943c6a62f0a1dfa684cc961bd664724f44472f4ae6ff0000000000aa36a70500",
+        "currentWithdrawalBatchId": "3"
+      },
+      "participants": [
+        {
+          "account": "0x8AEFBA26724c9FD9a1f06E3a65bfd7a8004d2F79",
+          "principalHandle": "0x41ca1e177f0843647a0f60dab9270c11dc1db2c8e6ff0000000000aa36a70500",
+          "winningsHandle": "0x5d31c4645d29bc047b0ce0240097920b7c8c5531d0ff0000000000aa36a70500"
+        }
+      ],
+      "withdrawalBatches": [
+        {
+          "batchId": "1",
+          "status": "0",
+          "accounts": []
+        },
+        {
+          "batchId": "2",
+          "status": "2",
+          "accounts": [
+            {
+              "account": "0x8AEFBA26724c9FD9a1f06E3a65bfd7a8004d2F79",
+              "claimHandle": "0xc648b07a13c4756f91d3fbe260b111f8eee2b0ee69ff0000000000aa36a70500",
+              "unwrapRequest": "0xda57c4de9ea943abc646995e97751bea15810120daff0000000000aa36a70500"
+            }
+          ]
+        },
+        {
+          "batchId": "3",
+          "status": "0",
+          "accounts": []
+        }
+      ]
+    }
+  ]
+}
