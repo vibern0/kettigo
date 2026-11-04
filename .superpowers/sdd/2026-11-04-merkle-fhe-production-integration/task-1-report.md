@@ -61,3 +61,20 @@ that scan with snapshot claims.
   Task 2 will replace the active-member scan in `closeDraw` with snapshot
   claiming. Client-side consumers should retain the complete node/ownership
   event history when rebuilding historical proofs.
+
+## Review round 1 follow-up
+
+- Added `docs/CONFIDENTIAL_MEMBERSHIP_ACCOUNTING.md`, an engineering-facing
+  record of the permanently disclosed positive-balance bit, delayed draw
+  eligibility, pending-withdrawal behavior, and the active/pending invariant.
+- Investigated the review finding on `morphoPendingDepositCount`. The existing
+  counter is intentionally a public scheduling-attempt count; it cannot be
+  gated on an encrypted acceptance bit without a confidential branch or new
+  public disclosure. The encrypted pending-principal handle remains the
+  authoritative amount. A zero aggregate unwrap clears a rejected-only
+  scheduling window and moves no principal.
+- RED/GREEN follow-up: the expanded focused membership run is **10 passing**;
+  the full suite is **44 passing** (`npm test`). The new tests assert rejected
+  callback and cap-rejected reinvestment preserve encrypted principal, pending
+  Morpho principal, pool backing, and winnings; they also establish the public
+  scheduling-counter increment and real-adapter zero-aggregate unwrap behavior.

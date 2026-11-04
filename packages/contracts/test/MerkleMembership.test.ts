@@ -169,6 +169,7 @@ describe("ConfidentialPrizePool membership", function () {
     const seed = await fhevm.createEncryptedInput(await pool.getAddress(), owner.address).add64((1n << 64n) - 1n).encrypt();
     await pool.seedTotalPrincipal(seed.handles[0], seed.inputProof);
     const before = await token.confidentialBalanceOf(alice.address);
+    const attemptsBefore = await pool.morphoPendingDepositCount();
     const input = await fhevm.createEncryptedInput(await token.getAddress(), alice.address).add64(1n).encrypt();
     await token.connect(alice)["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](
       await pool.getAddress(), input.handles[0], input.inputProof, "0x",
@@ -178,5 +179,54 @@ describe("ConfidentialPrizePool membership", function () {
       await fhevm.userDecryptEuint(FhevmType.euint64, before, await token.getAddress(), alice),
     );
     expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, await pool.encryptedTotalPrincipal())).to.equal((1n << 64n) - 1n);
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, await pool.encryptedPendingMorphoPrincipal())).to.equal(0n);
+    // This counter is intentionally a public scheduling-attempt count, not an acceptance bit.
+    expect(await pool.morphoPendingDepositCount()).to.equal(attemptsBefore + 1n);
+  });
+
+  it("preserves backing and winnings when cap-rejected reinvestment adds only a scheduling attempt", async function () {
+    const { owner, alice, usdc, token, pool } = await fixture();
+    await usdc.faucet(alice.address, 1_000_000_000n);
+    await usdc.connect(alice).approve(await token.getAddress(), 1_000_000_000n);
+    await token.connect(alice).wrap(alice.address, 1_000_000_000n);
+    await deposit(token, pool, alice, 1_000_000_000n); await admit(pool, alice.address);
+    const prize = await fhevm.createEncryptedInput(await token.getAddress(), owner.address).add64(1n).encrypt();
+    await token.connect(owner)["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](
+      await pool.getAddress(), prize.handles[0], prize.inputProof,
+      ethers.concat([await pool.PRIZE_FUNDING_DATA(), ethers.AbiCoder.defaultAbiCoder().encode(["uint64"], [1n])]),
+    );
+    await ethers.provider.send("evm_increaseTime", [Number(DRAW_INTERVAL) + 1]); await ethers.provider.send("evm_mine", []);
+    await pool.closeDraw();
+    const [principalBefore, totalBefore, pendingBefore, poolBalanceBefore, attemptsBefore] = await Promise.all([
+      pool.encryptedPrincipalOf(alice.address), pool.encryptedTotalPrincipal(), pool.encryptedPendingMorphoPrincipal(),
+      token.confidentialBalanceOf(await pool.getAddress()), pool.morphoPendingDepositCount(),
+    ]);
+    await pool.connect(alice).claimPrizeToSavings();
+    for (const [after, before] of [
+      [await pool.encryptedPrincipalOf(alice.address), principalBefore],
+      [await pool.encryptedTotalPrincipal(), totalBefore],
+      [await pool.encryptedPendingMorphoPrincipal(), pendingBefore],
+      [await token.confidentialBalanceOf(await pool.getAddress()), poolBalanceBefore],
+    ] as const) {
+      expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, after)).to.equal(
+        await fhevm.debugger.decryptEuint(FhevmType.euint64, before),
+      );
+    }
+    expect(await fhevm.userDecryptEuint(FhevmType.euint64, await pool.encryptedWinningsOf(alice.address), await pool.getAddress(), alice)).to.equal(1n);
+    expect(await pool.morphoPendingDepositCount()).to.equal(attemptsBefore + 1n);
+  });
+
+  it("allows a keeper to clear a rejected-only scheduling attempt with a zero aggregate unwrap", async function () {
+    const f = await fixture(); const { alice, usdc, token, pool } = f;
+    await configureWithdrawalAdapter(f);
+    await usdc.faucet(alice.address, 1_000_000_001n);
+    await usdc.connect(alice).approve(await token.getAddress(), 1_000_000_001n);
+    await token.connect(alice).wrap(alice.address, 1_000_000_001n);
+    await deposit(token, pool, alice, 1_000_000_001n);
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, await pool.encryptedPendingMorphoPrincipal())).to.equal(0n);
+    expect(await pool.morphoPendingDepositCount()).to.equal(1n);
+    await ethers.provider.send("evm_increaseTime", [2]); await ethers.provider.send("evm_mine", []);
+    await expect(pool.requestMorphoPrincipalUnwrap()).to.emit(pool, "MorphoPrincipalUnwrapRequested");
+    expect(await pool.morphoPendingDepositCount()).to.equal(0n);
   });
 });
