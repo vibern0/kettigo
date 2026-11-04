@@ -31,4 +31,9 @@ contract ConfidentialPrizePoolHarness is ConfidentialPrizePool {
     _totalPrincipal = FHE.fromExternal(encryptedTotal, inputProof);
     FHE.allowThis(_totalPrincipal);
   }
+
+  /// @dev Test-only hook: creates a depth-32 proof boundary without creating 2^32 users.
+  function seedNextMembershipIndex(uint256 index) external {
+    _nextMembershipIndex = index;
+  }
 }

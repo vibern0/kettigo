@@ -57,7 +57,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   address[] private _participants;
   mapping(address account => uint256 indexPlusOne) private _activeParticipantIndexPlusOne;
   uint256[] private _freeSlots;
-  uint256 private _nextMembershipIndex;
+  uint256 internal _nextMembershipIndex;
   EncryptedSnapshotTree.Tree private _membershipTree;
   euint64 internal _totalPrincipal;
   euint64 private _pendingAdmissionPrincipal;
@@ -65,6 +65,18 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   euint64 private _pendingMorphoPrincipal;
   uint64 public publicPrizeReserve;
   uint256 private _drawId;
+  struct Draw {
+    bytes32 rootHash;
+    euint64 rootSum;
+    euint128 ticket;
+    euint64 prize;
+    euint64 remaining;
+    uint64 upperBound;
+    uint256 closeBlockNumber;
+  }
+  mapping(uint256 drawId_ => Draw draw) public draws;
+  mapping(uint256 drawId_ => mapping(address beneficiary => bool wasChecked)) public checked;
+  mapping(uint256 drawId_ => mapping(address beneficiary => euint64 award)) private _awardOf;
   enum WithdrawalBatchStatus {
     Open,
     Closed,
@@ -95,6 +107,16 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     uint256 indexed drawId,
     euint128 indexed randomTicket,
     euint64 indexed prizeAmount
+  );
+  event DrawSnapshotClosed(
+    uint256 indexed drawId,
+    bytes32 rootHash,
+    euint64 rootSum,
+    euint128 ticket,
+    euint64 prize,
+    euint64 remaining,
+    uint64 upperBound,
+    uint256 closeBlockNumber
   );
   event PrizeClaimed(address indexed account, euint64 indexed amount);
   event PrizeAddedToSavings(address indexed account, euint64 indexed amount);
@@ -150,6 +172,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   error WithdrawalRestorationMismatch(uint256 expected, uint256 actual);
   error NoWithdrawalClaim(uint256 batchId, address account);
   error InvalidWithdrawalReceiver();
+  error InvalidDrawProof();
+  error InvalidDrawClaim();
+  error DrawAlreadyChecked(uint256 drawId, address beneficiary);
 
   /// @notice Creates a pool for one confidential token and starts the first draw.
   constructor(IERC7984 token_, uint256 drawInterval_, uint256 withdrawalBatchInterval_) {
@@ -228,7 +253,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     return success;
   }
 
-  /// @notice Closes the ready draw, privately credits any winner, and starts the next draw.
+  /// @notice Closes the ready draw without scanning members; historical members check their own proofs.
   function closeDraw() external returns (euint128) {
     if (block.timestamp < nextDrawAt) {
       revert DrawNotReady(nextDrawAt);
@@ -236,41 +261,121 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
 
     _harvestAccruedMorphoYield();
 
-    euint128 randomTicket = _scaledRandomTicket(FHE.randEuint64(), _membershipTree.root().sum);
-    euint128 cumulative = FHE.asEuint128(0);
-    ebool alreadyAwarded = FHE.asEbool(false);
-    euint64 prize = _prizeReserve;
-    _prizeReserve = FHE.asEuint64(0);
+    EncryptedSnapshotTree.Node memory root = _membershipTree.root();
+    euint128 randomTicket = _scaledRandomTicket(FHE.randEuint64(), root.sum);
+    euint64 prize = FHE.select(FHE.gt(root.sum, 0), _prizeReserve, FHE.asEuint64(0));
+    _prizeReserve = FHE.sub(_prizeReserve, prize);
+    // The public mirror tracks newly funded amount only; encrypted carry remains in _prizeReserve.
     publicPrizeReserve = 0;
-
-    uint256 participantLength = _participants.length;
-    // aderyn-fp-next-line(costly-loop): each encrypted winner credit is required for weighted selection.
-    for (uint256 i = 0; i < participantLength; ++i) {
-      address participant = _participants[i];
-      euint128 previous = cumulative;
-      cumulative = FHE.add(cumulative, FHE.asEuint128(_principal[participant]));
-
-      ebool atOrAfterStart = FHE.ge(randomTicket, previous);
-      ebool beforeEnd = FHE.lt(randomTicket, cumulative);
-      ebool selected = FHE.and(FHE.and(atOrAfterStart, beforeEnd), FHE.not(alreadyAwarded));
-      euint64 award = FHE.select(selected, prize, FHE.asEuint64(0));
-
-      _winnings[participant] = FHE.add(_winnings[participant], award);
-      _allowAccount(_winnings[participant], participant);
-
-      alreadyAwarded = FHE.or(alreadyAwarded, selected);
-    }
-
-    euint64 carry = FHE.select(alreadyAwarded, FHE.asEuint64(0), prize);
-    _prizeReserve = FHE.add(_prizeReserve, carry);
     FHE.allowThis(_prizeReserve);
     FHE.allowThis(randomTicket);
 
     ++_drawId;
+    Draw storage draw = draws[_drawId];
+    draw.rootHash = root.hash;
+    draw.rootSum = root.sum;
+    draw.ticket = randomTicket;
+    draw.prize = prize;
+    draw.remaining = prize;
+    draw.upperBound = uint64(_nextMembershipIndex);
+    draw.closeBlockNumber = block.number;
+    FHE.allowThis(draw.rootSum);
+    FHE.allowThis(draw.ticket);
+    FHE.allowThis(draw.prize);
+    FHE.allowThis(draw.remaining);
     nextDrawAt = block.timestamp + drawInterval;
     emit DrawClosed(_drawId, randomTicket, prize);
+    emit DrawSnapshotClosed(
+      _drawId,
+      root.hash,
+      root.sum,
+      randomTicket,
+      prize,
+      prize,
+      draw.upperBound,
+      block.number
+    );
     emit DrawStarted(_drawId + 1, nextDrawAt);
     return randomTicket;
+  }
+
+  function checkPrize(
+    uint256 drawId_,
+    address beneficiary,
+    uint256 index,
+    uint64 generation,
+    bytes32 balanceHandle,
+    bytes32[] calldata siblingHashes,
+    bytes32[] calldata siblingSums,
+    bytes32[] calldata parentSums
+  ) external {
+    if (
+      drawId_ == 0 ||
+      drawId_ > _drawId ||
+      beneficiary == address(0) ||
+      generation == 0 ||
+      index >= draws[drawId_].upperBound
+    ) revert InvalidDrawClaim();
+    if (checked[drawId_][beneficiary]) {
+      revert DrawAlreadyChecked(drawId_, beneficiary);
+    }
+    if (
+      siblingHashes.length != EncryptedSnapshotTree.DEPTH ||
+      siblingSums.length != EncryptedSnapshotTree.DEPTH ||
+      parentSums.length != EncryptedSnapshotTree.DEPTH
+    ) revert InvalidDrawProof();
+
+    euint64 balance = euint64.wrap(balanceHandle);
+    EncryptedSnapshotTree.Node memory node = EncryptedSnapshotTree.Node(
+      EncryptedSnapshotTree.leaf(beneficiary, generation, balance),
+      balance
+    );
+    for (uint256 level; level < EncryptedSnapshotTree.DEPTH; ++level) {
+      EncryptedSnapshotTree.Node memory sibling = EncryptedSnapshotTree.Node(
+        siblingHashes[level],
+        euint64.wrap(siblingSums[level])
+      );
+      node.hash =
+        ((index >> level) & 1) == 0
+          ? EncryptedSnapshotTree.parent(node, sibling)
+          : EncryptedSnapshotTree.parent(sibling, node);
+      node.sum = euint64.wrap(parentSums[level]);
+    }
+    Draw storage draw = draws[drawId_];
+    if (node.hash != draw.rootHash || euint64.unwrap(node.sum) != euint64.unwrap(draw.rootSum)) {
+      revert InvalidDrawProof();
+    }
+
+    euint64 start = _prefixBefore(index, siblingSums);
+    euint128 end = FHE.add(FHE.asEuint128(start), FHE.asEuint128(balance));
+    ebool winner = FHE.and(FHE.ge(draw.ticket, FHE.asEuint128(start)), FHE.lt(draw.ticket, end));
+    euint64 award = FHE.select(winner, draw.prize, FHE.asEuint64(0));
+    checked[drawId_][beneficiary] = true;
+    _awardOf[drawId_][beneficiary] = award;
+    draw.remaining = FHE.sub(draw.remaining, award);
+    _winnings[beneficiary] = FHE.add(_winnings[beneficiary], award);
+    FHE.allowThis(draw.remaining);
+    _allowAccount(award, beneficiary);
+    _allowAccount(_winnings[beneficiary], beneficiary);
+  }
+
+  /// @dev Reduces left siblings in a balanced tree; depth-32 proof work stays logarithmic.
+  function _prefixBefore(uint256 index, bytes32[] calldata siblingSums) internal returns (euint64) {
+    euint64[] memory terms = new euint64[](EncryptedSnapshotTree.DEPTH);
+    uint256 count;
+    for (uint256 level; level < EncryptedSnapshotTree.DEPTH; ++level) {
+      if (((index >> level) & 1) == 1) {
+        terms[count++] = euint64.wrap(siblingSums[level]);
+      }
+    }
+    while (count > 1) {
+      uint256 next;
+      for (uint256 i; i < count; i += 2) {
+        terms[next++] = i + 1 < count ? FHE.add(terms[i], terms[i + 1]) : terms[i];
+      }
+      count = next;
+    }
+    return count == 0 ? _membershipTree.zero : terms[0];
   }
 
   /// @notice Maps a uniform 64-bit encrypted word into `[0, totalPrincipal)`.
@@ -829,6 +934,11 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     return EncryptedSnapshotTree.DEPTH;
   }
 
+  /// @notice Canonical zero encrypted handle used by every empty tree node.
+  function membershipZero() external view returns (euint64) {
+    return _membershipTree.zero;
+  }
+
   function emptyHash(uint256 level) external view returns (bytes32) {
     return _membershipTree.emptyHash[level];
   }
@@ -844,6 +954,11 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   /// @notice Encrypted unclaimed winnings for an account.
   function encryptedWinningsOf(address account) external view returns (euint64) {
     return _winnings[account];
+  }
+
+  /// @notice Immutable outcome for one checked draw, independent of later claims or reinvestment.
+  function encryptedAwardOf(uint256 drawId_, address beneficiary) external view returns (euint64) {
+    return _awardOf[drawId_][beneficiary];
   }
 
   /// @notice Address allowed to decrypt an account's pool values.
