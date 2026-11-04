@@ -1,6 +1,6 @@
 # Merkle + FHE v2: proposed Sepolia validation envelope
 
-Status: proposed, not approved or started. This is a new run. The completed
+Status: approved by the user on 2026-11-04; not started. This is a new run. The completed
 claim-lab soak, its clock, wallets, budgets and eight-account retention canary
 are excluded. Never send a check for research pool
 `0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27`, draw 2, before
