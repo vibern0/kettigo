@@ -102,6 +102,12 @@ describe("MorphoYieldAdapter", function () {
     );
   }
 
+  async function finalizeAdmission(pool: any, account: string) {
+    const pending = await pool.pendingAdmissionOf(account);
+    const decrypted = await fhevm.publicDecrypt([pending.marker]);
+    await pool.finalizeAdmission(account, pending.nonce, true, decrypted.decryptionProof);
+  }
+
   async function requestWithdrawal(
     pool: any,
     poolAddress: string,
@@ -354,6 +360,7 @@ describe("MorphoYieldAdapter", function () {
         owner,
         USDC(1),
       );
+      await finalizeAdmission(pool, owner.address);
 
       await usdc.transfer(await adapter.getAddress(), USDC(1_000));
       await pool.supplyFinalizedMorphoPrincipal(USDC(1_000));

@@ -25,4 +25,10 @@ contract ConfidentialPrizePoolHarness is ConfidentialPrizePool {
     FHE.allowThis(ticket);
     return ticket;
   }
+
+  /// @dev Test-only harness hook for exercising production overflow guards.
+  function seedTotalPrincipal(externalEuint64 encryptedTotal, bytes calldata inputProof) external {
+    _totalPrincipal = FHE.fromExternal(encryptedTotal, inputProof);
+    FHE.allowThis(_totalPrincipal);
+  }
 }

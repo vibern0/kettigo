@@ -136,6 +136,12 @@ describe("ConfidentialPrizePool", function () {
     return encryptedAmount;
   }
 
+  async function finalizeAdmission(pool: any, account: string) {
+    const pending = await pool.pendingAdmissionOf(account);
+    const decrypted = await fhevm.publicDecrypt([pending.marker]);
+    await pool.finalizeAdmission(account, pending.nonce, true, decrypted.decryptionProof);
+  }
+
   it("tracks encrypted principal for multiple depositors", async function () {
     const { confidentialUsdc, confidentialUsdcAddress, pool, poolAddress } = await deployFixture();
 
@@ -293,6 +299,8 @@ describe("ConfidentialPrizePool", function () {
 
     await encryptedDeposit(confidentialUsdc, confidentialUsdcAddress, poolAddress, alice, 600_000n);
     await encryptedDeposit(confidentialUsdc, confidentialUsdcAddress, poolAddress, bob, 448_576n);
+    await finalizeAdmission(pool, alice.address);
+    await finalizeAdmission(pool, bob.address);
     await fundPrize(confidentialUsdc, confidentialUsdcAddress, pool, poolAddress, 1_000_000n);
 
     await time.increase(Number(DRAW_INTERVAL) + 1);
@@ -325,6 +333,7 @@ describe("ConfidentialPrizePool", function () {
     const { confidentialUsdc, confidentialUsdcAddress, pool, poolAddress } = await deployFixture();
 
     await encryptedDeposit(confidentialUsdc, confidentialUsdcAddress, poolAddress, alice, 600_000n);
+    await finalizeAdmission(pool, alice.address);
     await fundPrize(confidentialUsdc, confidentialUsdcAddress, pool, poolAddress, 1_000_000n);
 
     await time.increase(Number(DRAW_INTERVAL) + 1);
