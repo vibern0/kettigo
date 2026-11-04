@@ -1,9 +1,8 @@
-import { decodeFunctionResult, encodeFunctionData } from "viem";
-import { confidentialPrizePoolAbi } from "@kettigo/protocol";
-import { D1Archive } from "./archive.ts";
+import { D1Archive, type ArchiveDatabase, type Draw } from "./archive.ts";
 import { checksum, decimal, type Namespace } from "./domain.ts";
-export type Env = {
-  PROOF_DB: D1Database;
+import { createRpc } from "./rpc.ts";
+
+export type Env = Cloudflare.Env & {
   CHAIN_ID: string;
   POOL_ADDRESS: string;
   TREE_DEPTH: string;
@@ -15,9 +14,17 @@ export type Env = {
   CONFIRMATIONS?: string;
   MAX_BLOCKS_PER_SLICE?: string;
   OPERATOR_BEARER?: string;
+  ALLOWED_ORIGINS?: string;
 };
-const MAX_URL = 2048,
-  rates = new Map<string, { n: number; at: number }>();
+
+const MAX_URL = 2048;
+const MAX_RATE_ENTRIES = 4096;
+const RATE_WINDOW_MS = 60_000;
+const MAX_REQUESTS_PER_WINDOW = 60;
+const MAX_CONCURRENT = 8;
+const rates = new Map<string, { count: number; expiresAt: number }>();
+let activeRequests = 0;
+
 function response(value: unknown, status = 200, headers: HeadersInit = {}) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", ...headers } });
 }
@@ -26,7 +33,7 @@ function outcome(code: "NOT_ELIGIBLE" | "INDEXING" | "HISTORY_UNAVAILABLE", stat
 }
 function namespace(e: Env): Namespace {
   return {
-    chainId: decimal(e.CHAIN_ID),
+    chainId: decimal(e.CHAIN_ID, "chain id"),
     pool: checksum(e.POOL_ADDRESS),
     depth: Number(e.TREE_DEPTH),
     zero: e.ZERO_HANDLE,
@@ -34,98 +41,126 @@ function namespace(e: Env): Namespace {
     deploymentBlock: Number(e.DEPLOYMENT_BLOCK),
   };
 }
-function allow(request: Request) {
-  const ip = request.headers.get("cf-connecting-ip") ?? "anonymous";
-  const old = rates.get(ip),
-    t = Date.now();
-  if (!old || t - old.at > 60_000) {
-    rates.set(ip, { n: 1, at: t });
+function primary(db: D1Database): ArchiveDatabase {
+  return (db as D1Database & { withSession(bookmark?: string): ArchiveDatabase }).withSession(
+    "first-primary",
+  );
+}
+function cors(request: Request, env: Env): HeadersInit {
+  const origin = request.headers.get("origin");
+  const allowed = new Set(
+    (env.ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  return origin && allowed.has(origin)
+    ? { "access-control-allow-origin": origin, vary: "origin" }
+    : {};
+}
+function rateAllowed(request: Request) {
+  const key = request.headers.get("cf-connecting-ip") ?? "anonymous";
+  const now = Date.now();
+  for (const [candidate, value] of rates) if (value.expiresAt <= now) rates.delete(candidate);
+  const current = rates.get(key);
+  if (current) {
+    if (current.count >= MAX_REQUESTS_PER_WINDOW) return false;
+    current.count += 1;
     return true;
   }
-  if (old.n >= 30) return false;
-  old.n++;
+  if (rates.size >= MAX_RATE_ENTRIES) return false;
+  rates.set(key, { count: 1, expiresAt: now + RATE_WINDOW_MS });
   return true;
 }
-async function onchainRoot(e: Env, drawId: string, block: number) {
-  // Scheduler and proof verification share this explicit primary/historical endpoint contract.
-  const rpcUrl = e.PRIMARY_RPC_URL ?? e.HISTORICAL_RPC_URL;
-  if (!rpcUrl) throw new Error("RPC unavailable");
-  const data = encodeFunctionData({
-    abi: confidentialPrizePoolAbi,
-    functionName: "draws",
-    args: [BigInt(drawId)],
-  });
-  const r = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_call",
-      params: [{ to: checksum(e.POOL_ADDRESS), data }, `0x${block.toString(16)}`],
-    }),
-  });
-  const j = (await r.json()) as { result?: `0x${string}` };
-  if (!j.result) throw new Error("RPC unavailable");
-  const x = decodeFunctionResult({
-    abi: confidentialPrizePoolAbi,
-    functionName: "draws",
-    data: j.result,
-  });
-  return { rootHash: x[0].toLowerCase(), rootSum: x[1].toLowerCase(), closeBlock: Number(x[6]) };
+function rpc(env: Env, n: Namespace) {
+  if (!env.PRIMARY_RPC_URL || !env.HISTORICAL_RPC_URL) throw new Error("RPC unavailable");
+  return createRpc(
+    env.PRIMARY_RPC_URL,
+    env.HISTORICAL_RPC_URL,
+    n,
+    Math.max(0, Number(env.CONFIRMATIONS ?? "6")),
+  );
 }
-export async function handle(request: Request, e: Env): Promise<Response> {
-  if (request.method !== "GET") return response({ outcome: "HISTORY_UNAVAILABLE" }, 405);
-  if (request.url.length > MAX_URL || !allow(request))
-    return response({ outcome: "HISTORY_UNAVAILABLE" }, 429);
-  let n: Namespace;
+async function authenticate(draw: Draw, env: Env, n: Namespace) {
+  return rpc(env, n).withSource(async (source) => {
+    const close = await source.block(draw.closeBlockNumber);
+    if (close.hash !== draw.blockHash) throw new Error("orphan close block");
+    const onchain = await source.drawSnapshot(draw.drawId, close);
+    if (
+      onchain.rootHash !== draw.rootHash ||
+      onchain.rootSum !== draw.rootSum ||
+      onchain.ticket !== draw.ticket ||
+      onchain.upperBound !== draw.upperBound ||
+      onchain.closeBlock !== draw.closeBlockNumber
+    )
+      throw new Error("onchain draw mismatch");
+  });
+}
+async function absentDrawOutcome(archive: D1Archive, env: Env, n: Namespace, drawId: string) {
+  const state = await archive.status(n);
+  return rpc(env, n).withSource(async (source) => {
+    const head = await source.latestHead();
+    const chainDraw = await source.drawSnapshot(drawId, head);
+    if (chainDraw.closeBlock === 0) return outcome("HISTORY_UNAVAILABLE", 404);
+    if (chainDraw.closeBlock >= state.nextBlock) return outcome("INDEXING");
+    return outcome("HISTORY_UNAVAILABLE");
+  });
+}
+
+export async function handle(request: Request, env: Env): Promise<Response> {
+  const headers = cors(request, env);
+  if (request.method === "OPTIONS")
+    return new Response(null, {
+      status: 204,
+      headers: { ...headers, "cache-control": "no-store" },
+    });
+  if (request.method !== "GET") return response({ outcome: "HISTORY_UNAVAILABLE" }, 405, headers);
+  if (request.url.length > MAX_URL || !rateAllowed(request))
+    return response({ outcome: "HISTORY_UNAVAILABLE" }, 429, headers);
+  if (activeRequests >= MAX_CONCURRENT)
+    return response({ outcome: "HISTORY_UNAVAILABLE" }, 429, headers);
+  activeRequests += 1;
   try {
-    n = namespace(e);
-  } catch {
-    return outcome("HISTORY_UNAVAILABLE", 500);
-  }
-  const url = new URL(request.url),
-    m = url.pathname.match(
+    const n = namespace(env);
+    const url = new URL(request.url);
+    const match = url.pathname.match(
       /^\/v1\/([0-9]+)\/(0x[0-9a-fA-F]{40})\/draws(?:\/([0-9]+)\/proof\/(0x[0-9a-fA-F]{40}))?$/,
     );
-  if (!m) return response({ outcome: "HISTORY_UNAVAILABLE" }, 404);
-  try {
-    if (m[1] !== n.chainId || checksum(m[2]) !== n.pool)
-      return response({ outcome: "HISTORY_UNAVAILABLE" }, 404);
-    const a = new D1Archive(e.PROOF_DB);
-    await a.initialize(n);
-    const state = await a.status(n);
-    if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE");
-    if (!m[3]) {
-      const limit = Number(url.searchParams.get("limit") ?? "20"),
-        cursor = url.searchParams.get("cursor") ?? undefined;
+    if (!match) return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
+    if (
+      decimal(match[1], "chain id") !== n.chainId ||
+      checksum(match[2]) !== n.pool ||
+      (match[3] !== undefined && decimal(match[3], "draw id") !== match[3])
+    )
+      return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
+    if (!match[3]) {
+      const limit = Number(url.searchParams.get("limit") ?? "20");
+      const cursor = url.searchParams.get("cursor") ?? undefined;
       if (
         !Number.isSafeInteger(limit) ||
         limit < 1 ||
         limit > 100 ||
-        (cursor !== undefined && !/^(0|[1-9][0-9]*)$/.test(cursor))
+        (cursor !== undefined && decimal(cursor, "cursor") !== cursor)
       )
-        return response({ outcome: "HISTORY_UNAVAILABLE" }, 400);
-      return response({ draws: await a.listDraws(n, cursor, limit) });
+        return response({ outcome: "HISTORY_UNAVAILABLE" }, 400, headers);
+      const archive = new D1Archive(primary(env.PROOF_DB));
+      const state = await archive.status(n);
+      if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE");
+      return response({ draws: await archive.listDraws(n, cursor, limit) }, 200, headers);
     }
-    if (state.nextBlock <= state.lastFinalizedBlock) return outcome("INDEXING");
-    const proof = await a.proof(n, m[3], m[4]);
-    if (!proof) return outcome("NOT_ELIGIBLE", 404);
-    const root = await onchainRoot(e, proof.drawId, proof.closeBlockNumber);
-    if (
-      root.rootHash !== proof.rootHash ||
-      root.rootSum !== proof.rootSum ||
-      root.closeBlock !== proof.closeBlockNumber
-    )
-      return outcome("HISTORY_UNAVAILABLE");
-    return response({ proof });
+    const archive = new D1Archive(primary(env.PROOF_DB));
+    const state = await archive.status(n);
+    if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE");
+    const draw = await archive.drawById(n, match[3]);
+    if (!draw) return absentDrawOutcome(archive, env, n, match[3]);
+    await authenticate(draw, env, n);
+    const proof = await archive.proof(n, match[3], match[4]);
+    return proof ? response({ proof }, 200, headers) : outcome("NOT_ELIGIBLE", 404);
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: "proof-service-error",
-        message: error instanceof Error ? error.message : "unknown",
-      }),
-    );
+    const message = error instanceof Error ? error.message : "unknown";
+    console.error(JSON.stringify({ event: "proof-service-error", message: message.slice(0, 160) }));
     return outcome("HISTORY_UNAVAILABLE");
+  } finally {
+    activeRequests -= 1;
   }
 }

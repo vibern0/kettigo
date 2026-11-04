@@ -4,13 +4,20 @@ import { CheckpointConflict } from "./domain.ts";
 export interface RpcSource {
   chainId(): Promise<string>;
   finalizedHead(): Promise<{ number: number; hash: string }>;
+  latestHead(): Promise<BlockHeader>;
   block(number: number): Promise<{ number: number; hash: string; parentHash: string }>;
   logs(from: number, to: number): Promise<ArchiveLog[]>;
   receiptLogs(block: BlockHeader): Promise<ArchiveLog[]>;
   drawSnapshot(
     drawId: string,
     block: BlockHeader,
-  ): Promise<{ rootHash: string; rootSum: string; closeBlock: number }>;
+  ): Promise<{
+    rootHash: string;
+    rootSum: string;
+    ticket: string;
+    upperBound: string;
+    closeBlock: number;
+  }>;
   membershipRoot(block: BlockHeader): Promise<Node>;
 }
 /** One bounded, finalized slice. Receipt comparison prevents an omitted ownership log from becoming a false negative. */

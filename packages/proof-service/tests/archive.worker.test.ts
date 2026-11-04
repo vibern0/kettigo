@@ -66,7 +66,7 @@ function fixture(depth = 32): { n: Namespace; logs: ArchiveLog[]; root: string }
       rootHash: node.hash,
       rootSum: zero,
       ticket: zero,
-      upperBound: "0",
+      upperBound: "1",
       closeBlockNumber: "1",
     },
   });
@@ -89,6 +89,15 @@ describe("D1 proof archive", () => {
     expect(proof?.rootHash).toBe(root);
     expect(proof?.siblingHashes).toHaveLength(32);
     expect(proof?.generation).toBe("1");
+  });
+  it("rejects a closed draw whose assigned range cannot contain its slot", async () => {
+    const a = new D1Archive(env.PROOF_DB);
+    const { n, logs } = fixture(1);
+    logs.at(-1)!.args.upperBound = "0";
+    await a.initialize(n);
+    await expect(a.ingest(n, await a.status(n), logs, [header()])).rejects.toThrow(
+      "invalid draw upper bound",
+    );
   });
   it("deduplicates exact logs and rejects conflicting payloads before writes", async () => {
     const a = new D1Archive(env.PROOF_DB);
@@ -139,7 +148,7 @@ describe("D1 proof archive", () => {
         rootHash: n.emptyHashes[1],
         rootSum: zero,
         ticket: zero,
-        upperBound: "0",
+        upperBound: "1",
         closeBlockNumber: "1",
       },
     }));

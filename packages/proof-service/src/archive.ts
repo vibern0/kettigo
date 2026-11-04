@@ -46,8 +46,10 @@ const ZERO_HASH = `0x${"00".repeat(32)}`;
 const now = () => new Date().toISOString();
 const before = "(block_number<? OR (block_number=? AND log_index<?))";
 
+export type ArchiveDatabase = Pick<D1Database, "prepare" | "batch">;
+
 export class D1Archive {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: ArchiveDatabase) {}
 
   /** The deployment-parent anchor is persisted so first ingestion accepts the real chain parent. */
   async initialize(namespace: Namespace, deploymentParentHash = ZERO_HASH): Promise<void> {
@@ -265,7 +267,10 @@ export class D1Archive {
               log.logIndex,
             ),
         );
-      else
+      else {
+        const upperBound = uint(log.args.upperBound, 64, "draw upper bound");
+        if (BigInt(upperBound) === 0n || BigInt(upperBound) > 1n << BigInt(n.depth))
+          throw new Error("invalid draw upper bound");
         statements.push(
           this.db
             .prepare("INSERT INTO draws VALUES(?,?,?,?,?,?,?,?,?)")
@@ -276,11 +281,12 @@ export class D1Archive {
               hash32(log.args.rootHash),
               hash32(log.args.rootSum),
               hash32(log.args.ticket),
-              decimal(log.args.upperBound),
+              upperBound,
               Number(log.args.closeBlockNumber),
               log.logIndex,
             ),
         );
+      }
     }
     const final = blocks.at(-1)!;
     statements.push(
@@ -382,6 +388,7 @@ export class D1Archive {
       .bind(...args)
       .first<Record<string, unknown>>();
     if (!slot || Number(slot.assigned) !== 1) return null;
+    if (BigInt(String(slot.slot_index)) >= BigInt(draw.upperBound)) return null;
     const occupant = await this.db
       .prepare(
         `SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND slot_index=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
@@ -451,6 +458,16 @@ export class D1Archive {
       siblingSums,
       parentSums,
     };
+  }
+
+  async drawById(n: Namespace, drawId: string): Promise<Draw | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=? AND d.draw_id=?",
+      )
+      .bind(n.chainId, n.pool, decimal(drawId, "draw id"))
+      .first<Record<string, unknown>>();
+    return row ? this.draw(n, row) : null;
   }
 
   private nodeQuery(n: Namespace, level: number, index: bigint, draw: Draw): D1PreparedStatement {

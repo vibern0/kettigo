@@ -127,6 +127,10 @@ export class EthereumRpc implements RpcSource {
     const latest = number(await this.call("eth_blockNumber"), "block number");
     return this.block(Math.max(this.namespace.deploymentBlock - 1, latest - this.confirmations));
   }
+  async latestHead() {
+    const latest = number(await this.call("eth_blockNumber"), "block number");
+    return this.block(latest);
+  }
   async block(value: number): Promise<BlockHeader> {
     if (!Number.isSafeInteger(value) || value < 0) throw new Error("invalid block number");
     const block = await this.call("eth_getBlockByNumber", [`0x${value.toString(16)}`, false]);
@@ -291,7 +295,13 @@ export class EthereumRpc implements RpcSource {
       functionName: "draws",
       data: await this.callAt(data, block),
     });
-    return { rootHash: hash32(draw[0]), rootSum: hash32(draw[1]), closeBlock: Number(draw[6]) };
+    return {
+      rootHash: hash32(draw[0]),
+      rootSum: hash32(draw[1]),
+      ticket: hash32(draw[2]),
+      upperBound: BigInt(draw[5]).toString(),
+      closeBlock: Number(draw[6]),
+    };
   }
   async membershipRoot(block: BlockHeader): Promise<Node> {
     const data = encodeFunctionData({

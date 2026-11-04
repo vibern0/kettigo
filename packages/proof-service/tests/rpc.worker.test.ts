@@ -205,6 +205,9 @@ class FakeRpc implements RpcSource {
   finalizedHead() {
     return this.run({ number: 1, hash: blockHash });
   }
+  latestHead() {
+    return this.run({ number: 1, hash: blockHash, parentHash });
+  }
   block(number: number) {
     return this.run({ number, hash: blockHash, parentHash });
   }
@@ -215,7 +218,13 @@ class FakeRpc implements RpcSource {
     return this.run([]);
   }
   drawSnapshot() {
-    return this.run({ rootHash: zero, rootSum: zero, closeBlock: 1 });
+    return this.run({
+      rootHash: zero,
+      rootSum: zero,
+      ticket: zero,
+      upperBound: "1",
+      closeBlock: 1,
+    });
   }
   membershipRoot() {
     return this.run({ hash: zero, sum: zero });

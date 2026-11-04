@@ -38,6 +38,9 @@ class FixtureRpc implements RpcSource {
     const x = this.blocks.at(-1)!;
     return { number: x.number, hash: x.hash };
   }
+  async latestHead() {
+    return this.blocks.at(-1)!;
+  }
   async block(number: number) {
     const x = this.blocks.find((b) => b.number === number);
     if (!x) throw new Error("missing block");
@@ -51,7 +54,7 @@ class FixtureRpc implements RpcSource {
   }
   async drawSnapshot() {
     throw new Error("unused");
-    return { rootHash: zero, rootSum: zero, closeBlock: 0 };
+    return { rootHash: zero, rootSum: zero, ticket: zero, upperBound: "0", closeBlock: 0 };
   }
   async membershipRoot() {
     if (this.root) return this.root;

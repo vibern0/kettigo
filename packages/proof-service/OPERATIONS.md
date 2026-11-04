@@ -31,6 +31,29 @@ unattended cloud backup exists yet. An operator must retain exports in an
 approved independent location and exercise both SQL restore and full RPC
 backfill separately before asserting recovery readiness.
 
+The local retained-export path requires Node 24 and uses the native SQLite
+adapter. Run `pnpm --filter @kettigo/proof-service test:restore` to exercise a
+clean export, digest/namespace validation, canonical-log replay into a separate
+SQLite file, and `PRAGMA integrity_check`. The export must contain only the
+canonical namespace, headers, and retained event logs; derived tables are
+rebuilt during restore and are never trusted from an export. Keep the SQL/D1
+snapshot restore exercise separate from a complete archival-RPC backfill.
+
+No Worker endpoint serves exports. Retained local exports are an operator task,
+not an automated cloud backup claim.
+
+## Service limits and monitoring
+
+The public API accepts only canonical decimal identifiers, a URI of at most
+2048 bytes, and draw pages of 1 through 100. It uses a primary-consistent D1
+session, at most eight in-flight proof requests, and a bounded/expiring per-IP
+map (60 requests per minute, 4096 tracked keys). Monitor the sanitized
+checkpoint state (`nextBlock` and `lastFinalizedBlock`) and alert on finalized
+lag, disabled namespaces, or scheduler failures. The scheduler processes at
+most two blocks per tick. The shared RPC source pins one provider per operation;
+fallback receipt recovery is deliberately bounded and may fail closed under a
+provider outage rather than exceed Worker subrequest limits.
+
 ## Incident behavior
 
 On a canonical hash conflict, stop serving the affected namespace, roll back
