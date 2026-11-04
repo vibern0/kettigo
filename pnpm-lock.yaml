@@ -40,7 +40,7 @@ importers:
         version: 6.2.5(typescript@5.9.3)
       wrangler:
         specifier: 4.149.0
-        version: 4.149.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+        version: 4.149.0(@cloudflare/workers-types@5.20260924.1)(@types/node@22.20.4)(bufferutil@4.1.0)(utf-8-validate@6.0.6)
 
   packages/contracts:
     dependencies:
@@ -208,6 +208,31 @@ importers:
       vitest:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.4)(jsdom@30.1.1(@noble/hashes@2.4.0))(lightningcss@1.33.0)
+
+  packages/proof-service:
+    dependencies:
+      '@kettigo/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      viem:
+        specifier: 2.55.19
+        version: 2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.6.5)
+    devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: ^1.2.7
+        version: 1.2.7(@cloudflare/workers-types@5.20260924.1)(@types/node@22.20.4)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(bufferutil@4.1.0)(utf-8-validate@6.0.6)(vitest@4.1.11(@types/node@22.20.4)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@22.20.4)(esbuild@0.28.2)(jiti@1.21.7)(yaml@2.9.1)))
+      '@cloudflare/workers-types':
+        specifier: ^5.20260924.1
+        version: 5.20260924.1
+      typescript:
+        specifier: ^5.6.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.20.4)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@22.20.4)(esbuild@0.28.2)(jiti@1.21.7)(yaml@2.9.1))
+      wrangler:
+        specifier: 4.149.0
+        version: 4.149.0(@cloudflare/workers-types@5.20260924.1)(@types/node@22.20.4)(bufferutil@4.1.0)(utf-8-validate@6.0.6)
 
   packages/protocol:
     dependencies:
@@ -9702,7 +9727,7 @@ snapshots:
 
   '@scure/bip32@1.7.0':
     dependencies:
-      '@noble/curves': 1.9.1
+      '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
 
@@ -11385,6 +11410,11 @@ snapshots:
     optionalDependencies:
       typescript: 5.9.3
       zod: 4.6.5
+
+  abitype@1.3.0(typescript@5.9.3)(zod@3.22.4):
+    optionalDependencies:
+      typescript: 5.9.3
+      zod: 3.22.4
 
   abitype@1.3.0(typescript@5.9.3)(zod@3.25.76):
     optionalDependencies:
@@ -13951,7 +13981,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  miniflare@5.20261006.1-alpha(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  miniflare@5.20261006.1-alpha(@types/node@22.20.4)(bufferutil@4.1.0)(utf-8-validate@6.0.6):
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
       sharp: 0.35.5(@types/node@22.20.4)
@@ -14275,7 +14305,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@3.22.4)
+      abitype: 1.3.0(typescript@5.9.3)(zod@3.22.4)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 5.9.3
@@ -14290,7 +14320,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@3.25.76)
+      abitype: 1.3.0(typescript@5.9.3)(zod@3.25.76)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 5.9.3
@@ -14305,7 +14335,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@4.6.5)
+      abitype: 1.3.0(typescript@5.9.3)(zod@4.6.5)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 5.9.3
@@ -14317,8 +14347,8 @@ snapshots:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.6.2
-      '@scure/bip39': 1.5.4
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
       abitype: 1.3.0(typescript@5.9.3)(zod@3.25.76)
       eventemitter3: 5.0.1
     optionalDependencies:
@@ -16150,17 +16180,18 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  wrangler@4.149.0(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  wrangler@4.149.0(@cloudflare/workers-types@5.20260924.1)(@types/node@22.20.4)(bufferutil@4.1.0)(utf-8-validate@6.0.6):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261006.1)
       blake3-wasm: 2.1.5
       esbuild: 0.28.2
-      miniflare: 5.20261006.1-alpha(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      miniflare: 5.20261006.1-alpha(@types/node@22.20.4)(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       path-to-regexp: 6.3.0
       unenv: 2.0.0-rc.24
       workerd: 1.20261006.1
     optionalDependencies:
+      '@cloudflare/workers-types': 5.20260924.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'

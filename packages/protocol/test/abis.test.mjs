@@ -39,7 +39,12 @@ test("custom ABIs contain the union consumed by the web app, keepers, and lab", 
     "closeDraw", "claimPrize", "claimPrizeToSavings", "requestWithdrawal", "claimWithdrawalToUsdc",
     "closeWithdrawalBatch", "settleWithdrawalBatch", "processWithdrawal", "supplyAvailableMorphoPrincipal",
     "requestMorphoPrincipalUnwrap",
+    "membershipTreeDepth", "membershipZero", "emptyHash", "membershipNode", "checked",
   ]) assert.equal(has(confidentialPrizePoolAbi, "function", name), true, name);
+
+  for (const name of ["DrawSnapshotClosed", "SlotAssigned", "SlotReleased", "NodeUpdated"]) {
+    assert.equal(has(confidentialPrizePoolAbi, "event", name), true, name);
+  }
 
   for (const name of ["wrap", "confidentialBalanceOf", "confidentialTransferAndCall", "unwrap", "finalizeUnwrap", "unwrapRequester", "multicall"]) {
     assert.equal(has(confidentialUsdcAbi, "function", name), true, name);

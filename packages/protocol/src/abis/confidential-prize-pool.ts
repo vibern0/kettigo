@@ -36,6 +36,30 @@ export const confidentialPrizePoolAbi = [
   getter("encryptedTotalPrincipal", "bytes32"),
   getter("encryptedPrizeReserve", "bytes32"),
   getter("encryptedPendingMorphoPrincipal", "bytes32"),
+  getter("membershipTreeDepth", "uint8"),
+  getter("membershipZero", "bytes32"),
+  {
+    type: "function", name: "emptyHash", stateMutability: "view",
+    inputs: [{ name: "level", type: "uint256" }], outputs: [{ type: "bytes32" }],
+  },
+  {
+    type: "function", name: "membershipNode", stateMutability: "view",
+    inputs: [{ name: "level", type: "uint256" }, { name: "index", type: "uint256" }],
+    outputs: [{ name: "hash", type: "bytes32" }, { name: "sum", type: "bytes32" }],
+  },
+  {
+    type: "function", name: "checked", stateMutability: "view",
+    inputs: [{ name: "drawId", type: "uint256" }, { name: "beneficiary", type: "address" }],
+    outputs: [{ name: "wasChecked", type: "bool" }],
+  },
+  {
+    type: "function", name: "draws", stateMutability: "view",
+    inputs: [{ name: "drawId", type: "uint256" }],
+    outputs: [
+      { name: "rootHash", type: "bytes32" }, { name: "rootSum", type: "bytes32" }, { name: "ticket", type: "bytes32" },
+      { name: "prize", type: "bytes32" }, { name: "remaining", type: "bytes32" }, { name: "upperBound", type: "uint64" }, { name: "closeBlockNumber", type: "uint256" },
+    ],
+  },
   getter("currentWithdrawalBatchId", "uint256"),
   batchGetter("withdrawalAccounts", "address[]"),
   batchGetter("withdrawalBatchStatus", "uint8"),
@@ -107,6 +131,36 @@ export const confidentialPrizePoolAbi = [
     inputs: [
       { indexed: true, name: "account", type: "address" }, { indexed: true, name: "batchId", type: "uint256" },
       { indexed: true, name: "amount", type: "bytes32" },
+    ],
+  },
+  {
+    type: "event", name: "DrawSnapshotClosed",
+    inputs: [
+      { indexed: true, name: "drawId", type: "uint256" }, { indexed: false, name: "rootHash", type: "bytes32" },
+      { indexed: false, name: "rootSum", type: "bytes32" }, { indexed: false, name: "ticket", type: "bytes32" },
+      { indexed: false, name: "prize", type: "bytes32" }, { indexed: false, name: "remaining", type: "bytes32" },
+      { indexed: false, name: "upperBound", type: "uint64" }, { indexed: false, name: "closeBlockNumber", type: "uint256" },
+    ],
+  },
+  {
+    type: "event", name: "NodeUpdated",
+    inputs: [
+      { indexed: true, name: "level", type: "uint256" }, { indexed: true, name: "index", type: "uint256" },
+      { indexed: false, name: "hash", type: "bytes32" }, { indexed: false, name: "sum", type: "bytes32" },
+    ],
+  },
+  {
+    type: "event", name: "SlotAssigned",
+    inputs: [
+      { indexed: true, name: "account", type: "address" }, { indexed: true, name: "index", type: "uint256" },
+      { indexed: false, name: "generation", type: "uint64" },
+    ],
+  },
+  {
+    type: "event", name: "SlotReleased",
+    inputs: [
+      { indexed: true, name: "account", type: "address" }, { indexed: true, name: "index", type: "uint256" },
+      { indexed: false, name: "generation", type: "uint64" },
     ],
   },
   {
