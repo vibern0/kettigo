@@ -37,6 +37,9 @@
     }
   },
   "scripts": {
+    "prepare": "husky",
+    "lint:solidity": "solhint \"packages/contracts/contracts/**/*.sol\"",
+    "format:solidity:check": "prettier --check \"packages/contracts/contracts/**/*.sol\"",
     "cf:build": "pnpm --filter @kettigo/landing build",
     "contracts:compile": "npm run compile -w packages/contracts",
     "contracts:test": "npm run test -w packages/contracts",
@@ -58,7 +61,19 @@
     "keeper:all": "node packages/keeper/src/run-all-keepers.mjs",
     "keeper:watch": "node packages/keeper/src/watch-keepers.mjs"
   },
+  "lint-staged": {
+    "*.sol": [
+      "prettier --write",
+      "solhint"
+    ]
+  },
   "devDependencies": {
+    "@cyfrin/aderyn": "0.6.8",
+    "husky": "9.1.7",
+    "lint-staged": "17.6.0",
+    "prettier": "3.9.10",
+    "prettier-plugin-solidity": "2.4.1",
+    "solhint": "6.2.5",
     "wrangler": "4.149.0"
   }
 }

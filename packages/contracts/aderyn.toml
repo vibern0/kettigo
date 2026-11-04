@@ -1,0 +1,8 @@
+version = 1
+
+[detectors]
+# FHE ACL and token operations intentionally return no application-level value;
+# this detector cannot distinguish those void calls from unchecked return values.
+# `onlyPrizePool` must remain first: moving `nonReentrant` ahead of it causes
+# the FHE Hardhat plugin to reject the authorization-revert test path.
+exclude = ["unchecked-return", "non-reentrant-not-first"]
