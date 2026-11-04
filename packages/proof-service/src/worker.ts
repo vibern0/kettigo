@@ -56,7 +56,7 @@ async function tick(env: Env) {
     if (n.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
     const anchor = await rpc.withSource((source) => source.block(n.deploymentBlock - 1));
     await archive.initialize(n, anchor.hash);
-  }
+  } else await archive.assertNamespace(n);
   return rpc.withSource((source) =>
     ingestOneSlice(
       archive,
@@ -70,6 +70,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const u = new URL(request.url);
     if (u.pathname === "/internal/tick") {
+      if (request.method !== "POST")
+        return new Response(null, { status: 405, headers: { allow: "POST" } });
       if (
         request.headers.get("content-length") &&
         Number(request.headers.get("content-length")) > 1024

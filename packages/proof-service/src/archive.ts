@@ -59,6 +59,24 @@ export class D1Archive {
       .prepare("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,?,?,?)")
       .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock)
       .run();
+    await this.assertNamespace(n);
+    await this.db
+      .prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, anchor, 0, null, now())
+      .run();
+    // A rollback to deployment uses this durable anchor instead of guessing zero.
+    await this.db
+      .prepare("INSERT OR IGNORE INTO canonical_blocks VALUES(?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.deploymentBlock - 1, anchor, ZERO_HASH)
+      .run();
+    const initial = await this.status(n);
+    if (initial.nextBlock === n.deploymentBlock && initial.lastFinalizedHash !== anchor)
+      throw new Error("deployment parent anchor mismatch");
+  }
+
+  /** Read-only immutable namespace check for Worker requests and scheduler restarts. */
+  async assertNamespace(namespace: Namespace): Promise<void> {
+    const n = validateNamespace(namespace);
     const row = await this.db
       .prepare(
         "SELECT depth,zero_handle,empty_hashes_json,deployment_block FROM namespaces WHERE chain_id=? AND pool=?",
@@ -73,18 +91,6 @@ export class D1Archive {
       row.deployment_block !== n.deploymentBlock
     )
       throw new Error("namespace mismatch");
-    await this.db
-      .prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
-      .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, anchor, 0, null, now())
-      .run();
-    // A rollback to deployment uses this durable anchor instead of guessing zero.
-    await this.db
-      .prepare("INSERT OR IGNORE INTO canonical_blocks VALUES(?,?,?,?,?)")
-      .bind(n.chainId, n.pool, n.deploymentBlock - 1, anchor, ZERO_HASH)
-      .run();
-    const initial = await this.status(n);
-    if (initial.nextBlock === n.deploymentBlock && initial.lastFinalizedHash !== anchor)
-      throw new Error("deployment parent anchor mismatch");
   }
 
   async status(n: Namespace): Promise<Checkpoint> {

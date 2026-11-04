@@ -196,7 +196,10 @@ class FakeRpc implements RpcSource {
     readonly chain = "11155111",
   ) {}
   private run<T>(value: T): Promise<T> {
-    if (this.fail) throw new Error(`${this.label} https://host/v2/path-secret?querysecret failed`);
+    if (this.fail)
+      throw new Error(
+        `${this.label} https://host/v2/path-secret?querysecret invalid API key: raw-secret`,
+      );
     return Promise.resolve(value);
   }
   chainId() {
@@ -241,7 +244,7 @@ describe("FallbackRpc", () => {
     await expect(rpc.withSource((source) => source.block(1))).rejects.toThrow("primary");
     await expect(rpc.withSource((source) => source.block(1))).rejects.toThrow("fallback");
     await expect(rpc.withSource((source) => source.block(1))).rejects.not.toThrow(
-      /path-secret|querysecret/,
+      /path-secret|querysecret|raw-secret/,
     );
   });
 

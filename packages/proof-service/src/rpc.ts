@@ -21,9 +21,11 @@ class RpcFailure extends Error {
   constructor(
     readonly method: string,
     readonly code?: number,
-    detail?: string,
+    safeCause?: "transport" | "response",
   ) {
-    super(`rpc ${method} failed${detail ? `: ${detail}` : ""}`);
+    super(
+      `rpc ${method} failed${code === undefined ? "" : ` (${code})`}${safeCause ? `: ${safeCause}` : ""}`,
+    );
   }
 }
 const number = (v: unknown, label: string) => {
@@ -32,10 +34,11 @@ const number = (v: unknown, label: string) => {
   if (!Number.isSafeInteger(n) || n < 0) throw new Error(`invalid ${label}`);
   return n;
 };
-const sanitize = (e: unknown) =>
-  String(e instanceof Error ? e.message : e)
-    .replace(/https?:\/\/[^\s"')]+/g, "[provider-url]")
-    .slice(0, 240);
+const sanitize = (e: unknown) => {
+  if (e instanceof RpcFailure) return e.message;
+  if (e instanceof Error && e.message === "rpc chain id mismatch") return e.message;
+  return "provider operation failed";
+};
 const readLimitedBody = async (response: Response, method: string) => {
   const reader = response.body?.getReader();
   if (!reader) return "";
@@ -110,12 +113,12 @@ export class EthereumRpc implements RpcSource {
         throw new RpcFailure(
           method,
           typeof json.error?.code === "number" ? json.error.code : undefined,
-          typeof json.error?.message === "string" ? sanitize(json.error.message) : undefined,
+          "response",
         );
       return json.result;
     } catch (e) {
       if (e instanceof RpcFailure) throw e;
-      throw new RpcFailure(method, undefined, "transport failure");
+      throw new RpcFailure(method, undefined, "transport");
     } finally {
       clearTimeout(timer);
     }

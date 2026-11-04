@@ -1,5 +1,5 @@
 import { D1Archive, type ArchiveDatabase, type Draw } from "./archive.ts";
-import { checksum, decimal, type Namespace } from "./domain.ts";
+import { checksum, decimal, uint, type Namespace } from "./domain.ts";
 import { createRpc } from "./rpc.ts";
 
 export type Env = Cloudflare.Env & {
@@ -28,8 +28,12 @@ let activeRequests = 0;
 function response(value: unknown, status = 200, headers: HeadersInit = {}) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", ...headers } });
 }
-function outcome(code: "NOT_ELIGIBLE" | "INDEXING" | "HISTORY_UNAVAILABLE", status = 409) {
-  return response({ outcome: code }, status);
+function outcome(
+  code: "NOT_ELIGIBLE" | "INDEXING" | "HISTORY_UNAVAILABLE",
+  status = 409,
+  headers: HeadersInit = {},
+) {
+  return response({ outcome: code }, status, headers);
 }
 function namespace(e: Env): Namespace {
   return {
@@ -96,6 +100,17 @@ async function authenticate(draw: Draw, env: Env, n: Namespace) {
       throw new Error("onchain draw mismatch");
   });
 }
+async function authenticateCheckpoint(
+  state: { lastFinalizedBlock: number; lastFinalizedHash: string },
+  env: Env,
+  n: Namespace,
+) {
+  if (state.lastFinalizedBlock < n.deploymentBlock) return;
+  await rpc(env, n).withSource(async (source) => {
+    const checkpoint = await source.block(state.lastFinalizedBlock);
+    if (checkpoint.hash !== state.lastFinalizedHash) throw new Error("orphaned checkpoint");
+  });
+}
 async function absentDrawOutcome(archive: D1Archive, env: Env, n: Namespace, drawId: string) {
   const state = await archive.status(n);
   return rpc(env, n).withSource(async (source) => {
@@ -112,7 +127,12 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (request.method === "OPTIONS")
     return new Response(null, {
       status: 204,
-      headers: { ...headers, "cache-control": "no-store" },
+      headers: {
+        ...headers,
+        "cache-control": "no-store",
+        "access-control-allow-methods": "GET, OPTIONS",
+        "access-control-allow-headers": "content-type",
+      },
     });
   if (request.method !== "GET") return response({ outcome: "HISTORY_UNAVAILABLE" }, 405, headers);
   if (request.url.length > MAX_URL || !rateAllowed(request))
@@ -130,7 +150,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     if (
       decimal(match[1], "chain id") !== n.chainId ||
       checksum(match[2]) !== n.pool ||
-      (match[3] !== undefined && decimal(match[3], "draw id") !== match[3])
+      (match[3] !== undefined && uint(match[3], 256, "draw id") !== match[3])
     )
       return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
     if (!match[3]) {
@@ -140,26 +160,29 @@ export async function handle(request: Request, env: Env): Promise<Response> {
         !Number.isSafeInteger(limit) ||
         limit < 1 ||
         limit > 100 ||
-        (cursor !== undefined && decimal(cursor, "cursor") !== cursor)
+        (cursor !== undefined && uint(cursor, 256, "cursor") !== cursor)
       )
         return response({ outcome: "HISTORY_UNAVAILABLE" }, 400, headers);
       const archive = new D1Archive(primary(env.PROOF_DB));
+      await archive.assertNamespace(n);
       const state = await archive.status(n);
-      if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE");
+      if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
+      await authenticateCheckpoint(state, env, n);
       return response({ draws: await archive.listDraws(n, cursor, limit) }, 200, headers);
     }
     const archive = new D1Archive(primary(env.PROOF_DB));
+    await archive.assertNamespace(n);
     const state = await archive.status(n);
-    if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE");
+    if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
     const draw = await archive.drawById(n, match[3]);
     if (!draw) return absentDrawOutcome(archive, env, n, match[3]);
     await authenticate(draw, env, n);
     const proof = await archive.proof(n, match[3], match[4]);
-    return proof ? response({ proof }, 200, headers) : outcome("NOT_ELIGIBLE", 404);
+    return proof ? response({ proof }, 200, headers) : outcome("NOT_ELIGIBLE", 404, headers);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
     console.error(JSON.stringify({ event: "proof-service-error", message: message.slice(0, 160) }));
-    return outcome("HISTORY_UNAVAILABLE");
+    return outcome("HISTORY_UNAVAILABLE", 409, headers);
   } finally {
     activeRequests -= 1;
   }

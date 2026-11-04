@@ -32,6 +32,7 @@ describe("proof HTTP boundary", () => {
     for (const suffix of [
       `/v1/011155111/${pool}/draws`,
       `/v1/11155111/${pool}/draws/01/proof/${pool}`,
+      `/v1/11155111/${pool}/draws/${"9".repeat(79)}/proof/${pool}`,
       `/v1/11155111/${pool}/draws?cursor=01`,
       `/v1/11155111/${pool}/draws?limit=101`,
     ]) {

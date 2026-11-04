@@ -79,6 +79,9 @@ describe("D1 proof archive", () => {
     const n = ns();
     await a.initialize(n);
     await expect(a.initialize({ ...n, deploymentBlock: 2 })).rejects.toThrow("namespace mismatch");
+    await expect(a.assertNamespace({ ...n, deploymentBlock: 2 })).rejects.toThrow(
+      "namespace mismatch",
+    );
   });
   it("builds and verifies a genuine depth-32 historical proof in D1", async () => {
     const a = new D1Archive(env.PROOF_DB);
