@@ -144,21 +144,33 @@ describe("finalized RPC ingestion", () => {
   });
 
   it("fails closed when the end-of-slice membership root proves an omitted transaction", async () => {
-    const n = namespace(), archive = new D1Archive(env.PROOF_DB);
+    const n = namespace(),
+      archive = new D1Archive(env.PROOF_DB);
     await archive.initialize(n);
     const h1 = header(1, "1");
     const rpc = new FixtureRpc([h1], [], n, { hash: `0x${"4".repeat(64)}`, sum: zero });
-    await expect(ingestOneSlice(archive, n, rpc, 2)).rejects.toThrow("onchain membership root mismatch");
+    await expect(ingestOneSlice(archive, n, rpc, 2)).rejects.toThrow(
+      "onchain membership root mismatch",
+    );
     expect((await archive.status(n)).nextBlock).toBe(1);
   });
 
   it("rejects conflicting duplicate receipt logs before archive mutation", async () => {
-    const n = namespace(), archive = new D1Archive(env.PROOF_DB);
+    const n = namespace(),
+      archive = new D1Archive(env.PROOF_DB);
     await archive.initialize(n);
     const h1 = header(1, "1");
-    const event: ArchiveLog = { blockNumber: 1, blockHash: h1.hash, logIndex: 0, name: "NodeUpdated", args: { level: "1", index: "0", hash: n.emptyHashes[1], sum: zero } };
+    const event: ArchiveLog = {
+      blockNumber: 1,
+      blockHash: h1.hash,
+      logIndex: 0,
+      name: "NodeUpdated",
+      args: { level: "1", index: "0", hash: n.emptyHashes[1], sum: zero },
+    };
     const conflict = { ...event, args: { ...event.args, sum: `0x${"5".repeat(64)}` } };
-    await expect(ingestOneSlice(archive, n, new FixtureRpc([h1], [event], n, undefined, [event, conflict]), 2)).rejects.toThrow("conflicting receipt log payload");
+    await expect(
+      ingestOneSlice(archive, n, new FixtureRpc([h1], [event], n, undefined, [event, conflict]), 2),
+    ).rejects.toThrow("conflicting receipt log payload");
     expect((await archive.status(n)).nextBlock).toBe(1);
   });
 });

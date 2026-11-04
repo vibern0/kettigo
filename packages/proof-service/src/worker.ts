@@ -23,12 +23,14 @@ async function tick(env: Env) {
     const anchor = await rpc.withSource((source) => source.block(n.deploymentBlock - 1));
     await archive.initialize(n, anchor.hash);
   }
-  return rpc.withSource((source) => ingestOneSlice(
-    archive,
-    n,
-    source,
-    Math.min(2, Math.max(1, Number(env.MAX_BLOCKS_PER_SLICE ?? "2"))),
-  ));
+  return rpc.withSource((source) =>
+    ingestOneSlice(
+      archive,
+      n,
+      source,
+      Math.min(2, Math.max(1, Number(env.MAX_BLOCKS_PER_SLICE ?? "2"))),
+    ),
+  );
 }
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {

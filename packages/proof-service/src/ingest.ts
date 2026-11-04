@@ -47,7 +47,8 @@ export async function ingestOneSlice(
   if (!found) return archive.disable(n, state, "deep or unknown canonical fork");
   if (ancestor < state.lastFinalizedBlock) return archive.rollbackFrom(n, state, ancestor + 1);
   if (state.nextBlock > head.number) return state;
-  if (!Number.isSafeInteger(head.number) || head.number < 0) throw new Error("invalid finalized head");
+  if (!Number.isSafeInteger(head.number) || head.number < 0)
+    throw new Error("invalid finalized head");
   const to = Math.min(head.number, state.nextBlock + maxBlocks - 1);
   if (!Number.isSafeInteger(to)) throw new Error("invalid bounded range");
   const headers: BlockHeader[] = [];
@@ -88,7 +89,10 @@ export async function ingestOneSlice(
   }
   for (const log of ordered) {
     if (log.name !== "DrawSnapshotClosed") continue;
-    const snapshot = await rpc.drawSnapshot(log.args.drawId, headers[log.blockNumber - state.nextBlock]);
+    const snapshot = await rpc.drawSnapshot(
+      log.args.drawId,
+      headers[log.blockNumber - state.nextBlock],
+    );
     if (
       hash32(snapshot.rootHash) !== hash32(log.args.rootHash) ||
       hash32(snapshot.rootSum) !== hash32(log.args.rootSum) ||
