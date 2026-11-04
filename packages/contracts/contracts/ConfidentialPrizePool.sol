@@ -40,6 +40,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   uint256 public morphoUnwrapInterval;
   uint256 public lastMorphoUnwrapAt;
   uint256 public morphoPendingDepositCount;
+  uint256 private _unfundedWithdrawalBatchCount;
   uint256 public currentWithdrawalBatchId = 1;
 
   mapping(address account => euint64 principal) private _principal;
@@ -172,6 +173,8 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   error WithdrawalRestorationMismatch(uint256 expected, uint256 actual);
   error NoWithdrawalClaim(uint256 batchId, address account);
   error InvalidWithdrawalReceiver();
+  error ManualMorphoRestoreBlocked();
+  error InvalidMorphoRestoreAmount(uint256 assets);
   error InvalidDrawProof();
   error InvalidDrawClaim();
   error DrawAlreadyChecked(uint256 drawId, address beneficiary);
@@ -240,7 +243,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
       FHE.allowThis(_pendingAdmissionPrincipal);
       _refreshAdmission(from, pending);
     } else {
-      _updateMemberLeaf(from, acceptedAmount, true);
+      _updateMemberLeaf(from, acceptedAmount, true, false);
     }
 
     _allowAccount(_principal[from], from);
@@ -428,7 +431,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
       FHE.allowThis(_pendingAdmissionPrincipal);
       _refreshAdmission(msg.sender, pending);
     } else {
-      _updateMemberLeaf(msg.sender, credited, true);
+      _updateMemberLeaf(msg.sender, credited, true, false);
     }
 
     _allowAccount(_winnings[msg.sender], msg.sender);
@@ -501,9 +504,24 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   /// @notice Restores Morpho principal as cUSDC liquidity in the pool.
   function restoreMorphoPrincipal(uint256 assets) external returns (uint256 restoredAssets) {
     _onlyOwner();
+    if (_unfundedWithdrawalBatchCount != 0) {
+      revert ManualMorphoRestoreBlocked();
+    }
+    if (assets > type(uint64).max) {
+      revert InvalidMorphoRestoreAmount(assets);
+    }
     IMorphoPrizeYieldAdapter adapter = _requireMorphoYieldAdapter();
 
     restoredAssets = adapter.restorePrincipalToPool(assets);
+    if (restoredAssets != assets) {
+      revert WithdrawalRestorationMismatch(assets, restoredAssets);
+    }
+    _pendingMorphoPrincipal = FHE.add(
+      _pendingMorphoPrincipal,
+      FHE.asEuint64(uint64(restoredAssets))
+    );
+    ++morphoPendingDepositCount;
+    FHE.allowThis(_pendingMorphoPrincipal);
     emit MorphoPrincipalRestored(restoredAssets);
   }
 
@@ -527,13 +545,21 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     bytes calldata inputProof
   ) external returns (uint256 batchId) {
     euint64 requested = FHE.fromExternal(encryptedAmount, inputProof);
-    return _queueWithdrawal(msg.sender, requested);
+    return _queueWithdrawal(msg.sender, requested, false);
   }
 
-  function _queueWithdrawal(address account, euint64 requested) internal returns (uint256 batchId) {
+  function _queueWithdrawal(
+    address account,
+    euint64 requested,
+    bool clearMembership
+  ) internal returns (uint256 batchId) {
     _requireMorphoYieldAdapter();
     _rollExpiredWithdrawalBatch();
-    (euint64 accepted, euint64 morphoPortion) = _movePrincipalToWithdrawal(account, requested);
+    (euint64 accepted, euint64 morphoPortion) = _movePrincipalToWithdrawal(
+      account,
+      requested,
+      clearMembership
+    );
 
     batchId = currentWithdrawalBatchId;
     if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Open) {
@@ -543,6 +569,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     if (!_hasWithdrawalClaim[batchId][account]) {
       ++_withdrawalBatchClaimantCount[batchId];
       _withdrawalAccounts[batchId].push(account);
+    }
+    if (_withdrawalBatchRequestCount[batchId] == 0) {
+      ++_unfundedWithdrawalBatchCount;
     }
     _withdrawalClaims[batchId][account] = FHE.add(_withdrawalClaims[batchId][account], accepted);
     _hasWithdrawalClaim[batchId][account] = true;
@@ -603,6 +632,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
 
     _withdrawalBatchStatus[batchId] = WithdrawalBatchStatus.Funded;
     _withdrawalBatchRestoredAmount[batchId] = cleartextMorphoRestore;
+    --_unfundedWithdrawalBatchCount;
 
     emit WithdrawalBatchFunded(batchId, cleartextTotal, cleartextMorphoRestore);
   }
@@ -658,7 +688,8 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
 
   function _movePrincipalToWithdrawal(
     address account,
-    euint64 requested
+    euint64 requested,
+    bool clearMembership
   ) internal returns (euint64 accepted, euint64 morphoPortion) {
     euint64 available = _principal[account];
     accepted = FHE.min(requested, available);
@@ -676,7 +707,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
       FHE.allowThis(_pendingAdmissionPrincipal);
       _refreshAdmission(account, pending);
     } else {
-      _updateMemberLeaf(account, accepted, false);
+      _updateMemberLeaf(account, accepted, false, clearMembership);
     }
 
     _allowAccount(_principal[account], account);
@@ -859,7 +890,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     if (membershipPosition == 0) {
       return;
     }
-    _queueWithdrawal(msg.sender, _principal[msg.sender]);
+    _queueWithdrawal(msg.sender, _principal[msg.sender], true);
     uint256 index = membershipPosition - 1;
     uint64 generation = _generationOf[index];
     delete _membershipIndexPlusOne[msg.sender];
@@ -876,7 +907,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     emit SlotReleased(msg.sender, index, generation);
   }
 
-  function _updateMemberLeaf(address account, euint64 delta, bool addition) internal {
+  function _updateMemberLeaf(address account, euint64 delta, bool addition, bool clear) internal {
     uint256 position = _membershipIndexPlusOne[account];
     _membershipTree.update(
       account,
@@ -885,7 +916,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
       _principal[account],
       delta,
       addition,
-      false
+      clear
     );
   }
 

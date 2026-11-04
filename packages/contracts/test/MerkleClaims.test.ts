@@ -80,6 +80,20 @@ describe("ConfidentialPrizePool snapshot claims", function () {
     }
     return { index, generation, balance, siblingHashes, siblingSums, parentSums };
   }
+  async function proofAt(pool: any, beneficiary: string, index: bigint, generation: bigint) {
+    const [, balance] = await pool.membershipNode(0, index);
+    const siblingHashes: string[] = [],
+      siblingSums: string[] = [],
+      parentSums: string[] = [];
+    for (let level = 0n; level < 32n; level++) {
+      const [hash, sum] = await pool.membershipNode(level, (index >> level) ^ 1n);
+      const [, parentSum] = await pool.membershipNode(level + 1n, index >> (level + 1n));
+      siblingHashes.push(hash);
+      siblingSums.push(sum);
+      parentSums.push(parentSum);
+    }
+    return { beneficiary, index, generation, balance, siblingHashes, siblingSums, parentSums };
+  }
   async function close(pool: any) {
     await ethers.provider.send("evm_increaseTime", [Number(DRAW_INTERVAL) + 1]);
     await ethers.provider.send("evm_mine", []);
@@ -178,6 +192,62 @@ describe("ConfidentialPrizePool snapshot claims", function () {
         p.siblingHashes,
         p.siblingSums,
         p.parentSums,
+      ),
+    ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
+  });
+
+  it("rejects a stale zero leaf before it can consume a rejoined account's draw check", async function () {
+    const f = await fixture();
+    await configureWithdrawalAdapter(f);
+    for (const user of [f.alice, f.bob]) {
+      await deposit(f.token, f.pool, user, 1n);
+      await admit(f.pool, user.address);
+    }
+    const staleGeneration = await f.pool.generationOf(0n);
+    await f.pool.connect(f.alice).exitMembership();
+    await f.pool.connect(f.bob).exitMembership();
+    await deposit(f.token, f.pool, f.alice, 1n);
+    await admit(f.pool, f.alice.address);
+    expect(await f.pool.membershipIndexOf(f.alice.address)).to.equal(2n);
+    const stale = await proofAt(f.pool, f.alice.address, 0n, staleGeneration);
+    const active = await proof(f.pool, f.alice.address);
+    await fund(f.token, f.pool, f.owner, 5n);
+    await close(f.pool);
+    await expect(
+      f.pool
+        .connect(f.carol)
+        .checkPrize(
+          1n,
+          stale.beneficiary,
+          stale.index,
+          stale.generation,
+          stale.balance,
+          stale.siblingHashes,
+          stale.siblingSums,
+          stale.parentSums,
+        ),
+    ).to.be.revertedWithCustomError(f.pool, "InvalidDrawProof");
+    await f.pool.checkPrize(
+      1n,
+      f.alice.address,
+      active.index,
+      active.generation,
+      active.balance,
+      active.siblingHashes,
+      active.siblingSums,
+      active.parentSums,
+    );
+    expect(await f.pool.checked(1n, f.alice.address)).to.equal(true);
+    await expect(
+      f.pool.checkPrize(
+        1n,
+        f.alice.address,
+        active.index,
+        active.generation,
+        active.balance,
+        active.siblingHashes,
+        active.siblingSums,
+        active.parentSums,
       ),
     ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
   });

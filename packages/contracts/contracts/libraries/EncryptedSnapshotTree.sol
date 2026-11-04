@@ -67,7 +67,10 @@ library EncryptedSnapshotTree {
       self,
       0,
       index,
-      Node(clear ? self.emptyHash[0] : leaf(account, generation, balance), balance)
+      Node(
+        clear ? self.emptyHash[0] : leaf(account, generation, balance),
+        clear ? self.zero : balance
+      )
     );
     for (uint256 level = 1; level <= DEPTH; ++level) {
       index >>= 1;
