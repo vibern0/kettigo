@@ -461,7 +461,7 @@ describe("MorphoYieldAdapter", function () {
       pool.connect(keeper).supplyFinalizedMorphoPrincipal(USDC(1)),
     ).to.be.revertedWithCustomError(pool, "OnlyOwner");
     await expect(
-      adapter.supplyPoolPrincipal(USDC(1)),
+      adapter.supplyPoolPrincipal.staticCall(USDC(1)),
     ).to.be.revertedWithCustomError(adapter, "OnlyPrizePool");
     await expect(
       pool.restoreMorphoPrincipal(USDC(101)),
@@ -470,7 +470,7 @@ describe("MorphoYieldAdapter", function () {
       "PrincipalWithdrawalExceedsSupply",
     );
     await expect(
-      adapter.harvestYieldToPrizePool(0),
+      adapter.harvestYieldToPrizePool.staticCall(0),
     ).to.be.revertedWithCustomError(adapter, "OnlyPrizePool");
   });
 });

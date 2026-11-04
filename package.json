@@ -44,6 +44,7 @@
     "cf:build": "pnpm --filter @kettigo/landing build",
     "contracts:compile": "npm run compile -w packages/contracts",
     "contracts:test": "npm run test -w packages/contracts",
+    "coverage": "SOLIDITY_COVERAGE=true pnpm --dir packages/contracts exec hardhat coverage",
     "contracts:deploy:sepolia": "npm run deploy:sepolia -w packages/contracts",
     "lab:dev": "npm run dev -w @kettigo/morpho-lab",
     "lab:build": "npm run build -w @kettigo/morpho-lab",
