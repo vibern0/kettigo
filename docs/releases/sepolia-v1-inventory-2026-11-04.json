@@ -16,7 +16,6 @@
       "releaseTreatment": "immutable; retain original liabilities and access",
       "publicState": {
         "owner": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
-        "token": "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a",
         "morphoYieldAdapter": "0xb2dAb46E04c875E6C8c1B966cFC3E1f40f063e90",
         "drawId": "25",
         "nextDrawAt": "1793911920",
@@ -27,7 +26,8 @@
         "encryptedTotalPrincipal": "0x7a4e17090760bb38c4b0a821c9b2ed0b137c2eb90bff0000000000aa36a70500",
         "encryptedPrizeReserve": "0x2ee51573d20ea194b09020a521458b825ec05d615aff0000000000aa36a70500",
         "encryptedPendingMorphoPrincipal": "0xf4ca68c059554339135b34e55260b56681c06b8c63ff0000000000aa36a70500",
-        "currentWithdrawalBatchId": "3"
+        "currentWithdrawalBatchId": "3",
+        "wrapperAddress": "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a"
       },
       "participants": [
         {
@@ -88,7 +88,6 @@
       "releaseTreatment": "immutable; retain original liabilities and access",
       "publicState": {
         "owner": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
-        "token": "0x3B4F71c77e288d92871Cda495891Cd42f543A3f5",
         "morphoYieldAdapter": "0x784C2020a2fbf4a106881E37B673A93604A9559D",
         "drawId": "8",
         "nextDrawAt": "1791389868",
@@ -99,7 +98,8 @@
         "encryptedTotalPrincipal": "0x41ca1e177f0843647a0f60dab9270c11dc1db2c8e6ff0000000000aa36a70500",
         "encryptedPrizeReserve": "0xebe15de75fe0b0273706fb39fcbabf17b9f13e6c84ff0000000000aa36a70500",
         "encryptedPendingMorphoPrincipal": "0x943c6a62f0a1dfa684cc961bd664724f44472f4ae6ff0000000000aa36a70500",
-        "currentWithdrawalBatchId": "3"
+        "currentWithdrawalBatchId": "3",
+        "wrapperAddress": "0x3B4F71c77e288d92871Cda495891Cd42f543A3f5"
       },
       "participants": [
         {

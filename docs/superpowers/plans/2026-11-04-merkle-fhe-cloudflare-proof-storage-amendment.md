@@ -65,5 +65,5 @@ service availability. The untouched research canary and its earliest test date
 2026-12-27T16:04:36Z remain unchanged; a D1 backup does not prove Zama ciphertext
 retention. Codacy Cloud remains an explicitly blocked release gate.
 
-References: https://developers.cloudflare.com/d1/worker-api/d1-database/
-and https://developers.cloudflare.com/d1/observability/find-expensive-queries/.
+References: [D1 binding API](https://developers.cloudflare.com/d1/worker-api/d1-database/)
+and [atomic batches](https://developers.cloudflare.com/d1/observability/find-expensive-queries/).
