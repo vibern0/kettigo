@@ -1,1 +1,14 @@
-{"compilerOptions":{"target":"ES2022","lib":["ES2022","DOM"],"module":"ESNext","moduleResolution":"Bundler","strict":true,"skipLibCheck":true,"noEmit":true,"allowImportingTsExtensions":true,"types":["@cloudflare/workers-types","@cloudflare/vitest-plugin/types","vitest/globals"]},"include":["src","tests","vitest.worker.config.ts"]}
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "vitest/globals"]
+  },
+  "include": ["src", "tests", "vitest.worker.config.ts", "worker-configuration.d.ts"]
+}

@@ -2,11 +2,129 @@ import { decodeFunctionResult, encodeFunctionData } from "viem";
 import { confidentialPrizePoolAbi } from "@kettigo/protocol";
 import { D1Archive } from "./archive.ts";
 import { checksum, decimal, type Namespace } from "./domain.ts";
-export type Env={PROOF_DB:D1Database;CHAIN_ID:string;POOL_ADDRESS:string;TREE_DEPTH:string;ZERO_HANDLE:string;EMPTY_HASHES_JSON:string;DEPLOYMENT_BLOCK:string;RPC_URL?:string;PRIMARY_RPC_URL?:string;HISTORICAL_RPC_URL?:string;CONFIRMATIONS?:string;MAX_BLOCKS_PER_SLICE?:string;OPERATOR_BEARER?:string};
-const MAX_URL=2048, rates=new Map<string,{n:number;at:number}>();
-function response(value:unknown,status=200,headers:HeadersInit={}){return Response.json(value,{status,headers:{"cache-control":"no-store",...headers}})}
-function outcome(code:"NOT_ELIGIBLE"|"INDEXING"|"HISTORY_UNAVAILABLE",status=409){return response({outcome:code},status)}
-function namespace(e:Env):Namespace{return{chainId:decimal(e.CHAIN_ID),pool:checksum(e.POOL_ADDRESS),depth:Number(e.TREE_DEPTH),zero:e.ZERO_HANDLE,emptyHashes:JSON.parse(e.EMPTY_HASHES_JSON),deploymentBlock:Number(e.DEPLOYMENT_BLOCK)}}
-function allow(request:Request){const ip=request.headers.get("cf-connecting-ip")??"anonymous";const old=rates.get(ip),t=Date.now();if(!old||t-old.at>60_000){rates.set(ip,{n:1,at:t});return true}if(old.n>=30)return false;old.n++;return true}
-async function onchainRoot(e:Env,drawId:string,block:number){if(!e.RPC_URL)throw new Error("RPC unavailable");const data=encodeFunctionData({abi:confidentialPrizePoolAbi,functionName:"draws",args:[BigInt(drawId)]});const r=await fetch(e.RPC_URL,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"eth_call",params:[{to:checksum(e.POOL_ADDRESS),data},`0x${block.toString(16)}`]})});const j=await r.json() as {result?:`0x${string}`};if(!j.result)throw new Error("RPC unavailable");const x=decodeFunctionResult({abi:confidentialPrizePoolAbi,functionName:"draws",data:j.result});return {rootHash:x[0].toLowerCase(),rootSum:x[1].toLowerCase(),closeBlock:Number(x[6])}}
-export async function handle(request:Request,e:Env):Promise<Response>{if(request.method!=="GET")return response({outcome:"HISTORY_UNAVAILABLE"},405);if(request.url.length>MAX_URL||!allow(request))return response({outcome:"HISTORY_UNAVAILABLE"},429);let n:Namespace;try{n=namespace(e)}catch{return outcome("HISTORY_UNAVAILABLE",500)}const url=new URL(request.url),m=url.pathname.match(/^\/v1\/([0-9]+)\/(0x[0-9a-fA-F]{40})\/draws(?:\/([0-9]+)\/proof\/(0x[0-9a-fA-F]{40}))?$/);if(!m)return response({outcome:"HISTORY_UNAVAILABLE"},404);try{if(m[1]!==n.chainId||checksum(m[2])!==n.pool)return response({outcome:"HISTORY_UNAVAILABLE"},404);const a=new D1Archive(e.PROOF_DB);await a.initialize(n);const state=await a.status(n);if(state.disabledReason)return outcome("HISTORY_UNAVAILABLE");if(!m[3]){const limit=Number(url.searchParams.get("limit")??"20"),cursor=url.searchParams.get("cursor")??undefined;if(!Number.isSafeInteger(limit)||limit<1||limit>100||(cursor!==undefined&&!/^(0|[1-9][0-9]*)$/.test(cursor)))return response({outcome:"HISTORY_UNAVAILABLE"},400);return response({draws:await a.listDraws(n,cursor,limit)});}if(state.nextBlock<=state.lastFinalizedBlock)return outcome("INDEXING");const proof=await a.proof(n,m[3],m[4]);if(!proof)return outcome("NOT_ELIGIBLE",404);const root=await onchainRoot(e,proof.drawId,proof.closeBlockNumber);if(root.rootHash!==proof.rootHash||root.rootSum!==proof.rootSum||root.closeBlock!==proof.closeBlockNumber)return outcome("HISTORY_UNAVAILABLE");return response({proof});}catch(error){console.error(JSON.stringify({event:"proof-service-error",message:error instanceof Error?error.message:"unknown"}));return outcome("HISTORY_UNAVAILABLE");}}
+export type Env = {
+  PROOF_DB: D1Database;
+  CHAIN_ID: string;
+  POOL_ADDRESS: string;
+  TREE_DEPTH: string;
+  ZERO_HANDLE: string;
+  EMPTY_HASHES_JSON: string;
+  DEPLOYMENT_BLOCK: string;
+  RPC_URL?: string;
+  PRIMARY_RPC_URL?: string;
+  HISTORICAL_RPC_URL?: string;
+  CONFIRMATIONS?: string;
+  MAX_BLOCKS_PER_SLICE?: string;
+  OPERATOR_BEARER?: string;
+};
+const MAX_URL = 2048,
+  rates = new Map<string, { n: number; at: number }>();
+function response(value: unknown, status = 200, headers: HeadersInit = {}) {
+  return Response.json(value, { status, headers: { "cache-control": "no-store", ...headers } });
+}
+function outcome(code: "NOT_ELIGIBLE" | "INDEXING" | "HISTORY_UNAVAILABLE", status = 409) {
+  return response({ outcome: code }, status);
+}
+function namespace(e: Env): Namespace {
+  return {
+    chainId: decimal(e.CHAIN_ID),
+    pool: checksum(e.POOL_ADDRESS),
+    depth: Number(e.TREE_DEPTH),
+    zero: e.ZERO_HANDLE,
+    emptyHashes: JSON.parse(e.EMPTY_HASHES_JSON),
+    deploymentBlock: Number(e.DEPLOYMENT_BLOCK),
+  };
+}
+function allow(request: Request) {
+  const ip = request.headers.get("cf-connecting-ip") ?? "anonymous";
+  const old = rates.get(ip),
+    t = Date.now();
+  if (!old || t - old.at > 60_000) {
+    rates.set(ip, { n: 1, at: t });
+    return true;
+  }
+  if (old.n >= 30) return false;
+  old.n++;
+  return true;
+}
+async function onchainRoot(e: Env, drawId: string, block: number) {
+  if (!e.RPC_URL) throw new Error("RPC unavailable");
+  const data = encodeFunctionData({
+    abi: confidentialPrizePoolAbi,
+    functionName: "draws",
+    args: [BigInt(drawId)],
+  });
+  const r = await fetch(e.RPC_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_call",
+      params: [{ to: checksum(e.POOL_ADDRESS), data }, `0x${block.toString(16)}`],
+    }),
+  });
+  const j = (await r.json()) as { result?: `0x${string}` };
+  if (!j.result) throw new Error("RPC unavailable");
+  const x = decodeFunctionResult({
+    abi: confidentialPrizePoolAbi,
+    functionName: "draws",
+    data: j.result,
+  });
+  return { rootHash: x[0].toLowerCase(), rootSum: x[1].toLowerCase(), closeBlock: Number(x[6]) };
+}
+export async function handle(request: Request, e: Env): Promise<Response> {
+  if (request.method !== "GET") return response({ outcome: "HISTORY_UNAVAILABLE" }, 405);
+  if (request.url.length > MAX_URL || !allow(request))
+    return response({ outcome: "HISTORY_UNAVAILABLE" }, 429);
+  let n: Namespace;
+  try {
+    n = namespace(e);
+  } catch {
+    return outcome("HISTORY_UNAVAILABLE", 500);
+  }
+  const url = new URL(request.url),
+    m = url.pathname.match(
+      /^\/v1\/([0-9]+)\/(0x[0-9a-fA-F]{40})\/draws(?:\/([0-9]+)\/proof\/(0x[0-9a-fA-F]{40}))?$/,
+    );
+  if (!m) return response({ outcome: "HISTORY_UNAVAILABLE" }, 404);
+  try {
+    if (m[1] !== n.chainId || checksum(m[2]) !== n.pool)
+      return response({ outcome: "HISTORY_UNAVAILABLE" }, 404);
+    const a = new D1Archive(e.PROOF_DB);
+    await a.initialize(n);
+    const state = await a.status(n);
+    if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE");
+    if (!m[3]) {
+      const limit = Number(url.searchParams.get("limit") ?? "20"),
+        cursor = url.searchParams.get("cursor") ?? undefined;
+      if (
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > 100 ||
+        (cursor !== undefined && !/^(0|[1-9][0-9]*)$/.test(cursor))
+      )
+        return response({ outcome: "HISTORY_UNAVAILABLE" }, 400);
+      return response({ draws: await a.listDraws(n, cursor, limit) });
+    }
+    if (state.nextBlock <= state.lastFinalizedBlock) return outcome("INDEXING");
+    const proof = await a.proof(n, m[3], m[4]);
+    if (!proof) return outcome("NOT_ELIGIBLE", 404);
+    const root = await onchainRoot(e, proof.drawId, proof.closeBlockNumber);
+    if (
+      root.rootHash !== proof.rootHash ||
+      root.rootSum !== proof.rootSum ||
+      root.closeBlock !== proof.closeBlockNumber
+    )
+      return outcome("HISTORY_UNAVAILABLE");
+    return response({ proof });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "proof-service-error",
+        message: error instanceof Error ? error.message : "unknown",
+      }),
+    );
+    return outcome("HISTORY_UNAVAILABLE");
+  }
+}

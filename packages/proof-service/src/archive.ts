@@ -1,17 +1,454 @@
-import { branchHash, checksum, decimal, hash32, leafHash, validateNamespace, type ArchiveLog, type Namespace, type Node, CheckpointConflict } from "./domain.ts";
-export type Checkpoint = { nextBlock: number; lastFinalizedBlock: number; lastFinalizedHash: string; revision: number; disabledReason?: string };
-export type Draw = { drawId: string; rootHash: string; rootSum: string; ticket: string; upperBound: string; closeBlockNumber: number; closeLogIndex: number; chainId: string; pool: string; blockHash: string };
-export type Proof = Draw & { account: string; index: string; generation: string; balance: string; siblingHashes: string[]; siblingSums: string[]; parentSums: string[] };
+import {
+  branchHash,
+  checksum,
+  decimal,
+  hash32,
+  leafHash,
+  uint,
+  validateNamespace,
+  type ArchiveLog,
+  type Namespace,
+  type Node,
+  CheckpointConflict,
+} from "./domain.ts";
+
+export type Checkpoint = {
+  nextBlock: number;
+  lastFinalizedBlock: number;
+  lastFinalizedHash: string;
+  revision: number;
+  disabledReason?: string;
+};
+export type BlockHeader = { number: number; hash: string; parentHash: string };
+export type Draw = {
+  drawId: string;
+  rootHash: string;
+  rootSum: string;
+  ticket: string;
+  upperBound: string;
+  closeBlockNumber: number;
+  closeLogIndex: number;
+  chainId: string;
+  pool: string;
+  blockHash: string;
+};
+export type Proof = Draw & {
+  account: string;
+  index: string;
+  generation: string;
+  balance: string;
+  siblingHashes: string[];
+  siblingSums: string[];
+  parentSums: string[];
+};
+
+const ZERO_HASH = `0x${"00".repeat(32)}`;
 const now = () => new Date().toISOString();
+const before = "(block_number<? OR (block_number=? AND log_index<?))";
+
 export class D1Archive {
-  constructor(private db: D1Database) {}
-  async initialize(namespace: Namespace): Promise<void> { const n = validateNamespace(namespace); await this.db.prepare("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,?,?,?)").bind(n.chainId,n.pool,n.depth,n.zero,JSON.stringify(n.emptyHashes),n.deploymentBlock).run(); const row = await this.db.prepare("SELECT depth,zero_handle,empty_hashes_json,deployment_block FROM namespaces WHERE chain_id=? AND pool=?").bind(n.chainId,n.pool).first<Record<string, unknown>>(); if (!row || row.depth !== n.depth || row.zero_handle !== n.zero || row.empty_hashes_json !== JSON.stringify(n.emptyHashes) || row.deployment_block !== n.deploymentBlock) throw new Error("namespace mismatch"); await this.db.prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)").bind(n.chainId,n.pool,n.deploymentBlock,n.deploymentBlock - 1,"0x"+"00".repeat(32),0,null,now()).run(); }
-  async status(n: Namespace): Promise<Checkpoint> { const r = await this.db.prepare("SELECT next_block,last_finalized_block,last_finalized_hash,revision,disabled_reason FROM ingestion_state WHERE chain_id=? AND pool=?").bind(n.chainId,n.pool).first<Record<string, unknown>>(); if (!r) throw new Error("uninitialized namespace"); return { nextBlock:Number(r.next_block),lastFinalizedBlock:Number(r.last_finalized_block),lastFinalizedHash:String(r.last_finalized_hash),revision:Number(r.revision),disabledReason:r.disabled_reason ? String(r.disabled_reason) : undefined }; }
-  async ingest(n: Namespace, expected: Checkpoint, logs: readonly ArchiveLog[], finalizedBlock: number, finalizedHash: string): Promise<Checkpoint> { const ordered=[...logs].sort((a,b)=>a.blockNumber-b.blockNumber||a.logIndex-b.logIndex); const statements:D1PreparedStatement[]=[]; for(const log of ordered){ const payload=JSON.stringify({name:log.name,args:log.args}); statements.push(this.db.prepare("INSERT OR IGNORE INTO canonical_blocks VALUES(?,?,?,?)").bind(n.chainId,n.pool,log.blockNumber,hash32(log.blockHash))); statements.push(this.db.prepare("INSERT OR IGNORE INTO event_logs VALUES(?,?,?,?,?)").bind(n.chainId,n.pool,log.blockNumber,log.logIndex,payload)); if(log.name==="NodeUpdated") statements.push(this.db.prepare("INSERT INTO node_versions VALUES(?,?,?,?,?,?,?,?)").bind(n.chainId,n.pool,Number(log.args.level),decimal(log.args.index),log.blockNumber,log.logIndex,hash32(log.args.hash),hash32(log.args.sum))); else if(log.name==="SlotAssigned"||log.name==="SlotReleased") statements.push(this.db.prepare("INSERT INTO slot_versions VALUES(?,?,?,?,?,?,?,?,?)").bind(n.chainId,n.pool,checksum(log.args.account),decimal(log.args.index),decimal(log.args.generation),log.name==="SlotAssigned"?1:0,log.blockNumber,log.logIndex)); else statements.push(this.db.prepare("INSERT INTO draws VALUES(?,?,?,?,?,?,?,?,?,?)").bind(n.chainId,n.pool,decimal(log.args.drawId),hash32(log.args.rootHash),hash32(log.args.rootSum),hash32(log.args.ticket),decimal(log.args.upperBound),Number(log.args.closeBlockNumber),log.logIndex)); }
-    statements.push(this.db.prepare("INSERT INTO ingestion_commits VALUES(?,?,?,?,?,?,?)").bind(n.chainId,n.pool,expected.revision,"ingest",expected.nextBlock,finalizedBlock,now())); statements.push(this.db.prepare("UPDATE ingestion_state SET next_block=?,last_finalized_block=?,last_finalized_hash=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?").bind(finalizedBlock+1,finalizedBlock,hash32(finalizedHash),now(),n.chainId,n.pool,expected.revision));
-    try { const out=await this.db.batch(statements); if(out.at(-1)?.meta.changes!==1) throw new CheckpointConflict(); } catch(e) { if(String(e).includes("UNIQUE constraint failed: ingestion_commits")) throw new CheckpointConflict(); throw e; } return this.status(n); }
-  async rollbackFrom(n: Namespace, expected: Checkpoint, block: number): Promise<Checkpoint> { const q=(sql:string)=>this.db.prepare(sql).bind(n.chainId,n.pool,block); const xs=[q("DELETE FROM draws WHERE chain_id=? AND pool=? AND close_block_number>=?"),q("DELETE FROM node_versions WHERE chain_id=? AND pool=? AND block_number>=?"),q("DELETE FROM slot_versions WHERE chain_id=? AND pool=? AND block_number>=?"),q("DELETE FROM event_logs WHERE chain_id=? AND pool=? AND block_number>=?"),q("DELETE FROM canonical_blocks WHERE chain_id=? AND pool=? AND block_number>=?"),this.db.prepare("INSERT INTO ingestion_commits VALUES(?,?,?,?,?,?,?)").bind(n.chainId,n.pool,expected.revision,"rollback",block,expected.lastFinalizedBlock,now()),this.db.prepare("UPDATE ingestion_state SET next_block=?,last_finalized_block=?,last_finalized_hash=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?").bind(block,block-1,"0x"+"00".repeat(32),now(),n.chainId,n.pool,expected.revision)]; try { const out=await this.db.batch(xs); if(out.at(-1)?.meta.changes!==1) throw new CheckpointConflict(); } catch(e){if(String(e).includes("UNIQUE constraint"))throw new CheckpointConflict();throw e;} return this.status(n); }
-  async listDraws(n: Namespace,cursor?:string,limit=20):Promise<Draw[]> { const rows=await this.db.prepare("SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=? AND CAST(d.draw_id AS INTEGER) < CAST(? AS INTEGER) ORDER BY CAST(d.draw_id AS INTEGER) DESC LIMIT ?").bind(n.chainId,n.pool,cursor??"999999999999999999999999999999999999",Math.min(limit,100)).all<Record<string,unknown>>(); return rows.results.map(r=>this.draw(n,r)); }
-  private draw(n:Namespace,r:Record<string,unknown>):Draw{return {drawId:String(r.draw_id),rootHash:String(r.root_hash),rootSum:String(r.root_sum),ticket:String(r.ticket_handle),upperBound:String(r.upper_bound_handle),closeBlockNumber:Number(r.close_block_number),closeLogIndex:Number(r.close_log_index),chainId:n.chainId,pool:n.pool,blockHash:String(r.block_hash)}}
-  async proof(n:Namespace,drawId:string,account:string):Promise<Proof|null>{const r=await this.db.prepare("SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=? AND d.draw_id=?").bind(n.chainId,n.pool,decimal(drawId),).first<Record<string,unknown>>();if(!r) return null; const draw=this.draw(n,r), at=[draw.closeBlockNumber,draw.closeLogIndex], owner=checksum(account);const slot=await this.db.prepare("SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND account=? AND (block_number<? OR (block_number=? AND log_index<?)) ORDER BY block_number DESC,log_index DESC LIMIT 1").bind(n.chainId,n.pool,owner,at[0],at[0],at[1]).first<Record<string,unknown>>();if(!slot||Number(slot.assigned)!==1)return null;const occupant=await this.db.prepare("SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND slot_index=? AND (block_number<? OR (block_number=? AND log_index<?)) ORDER BY block_number DESC,log_index DESC LIMIT 1").bind(n.chainId,n.pool,String(slot.slot_index),at[0],at[0],at[1]).first<Record<string,unknown>>();if(!occupant||Number(occupant.assigned)!==1||occupant.account!==owner||occupant.generation!==slot.generation)throw new Error("ownership history unavailable");let index=BigInt(String(slot.slot_index)); const node=async(level:number,i:bigint,required=false):Promise<Node>=>{const x=await this.db.prepare("SELECT hash,sum_handle FROM node_versions WHERE chain_id=? AND pool=? AND level=? AND node_index=? AND (block_number<? OR (block_number=? AND log_index<?)) ORDER BY block_number DESC,log_index DESC LIMIT 1").bind(n.chainId,n.pool,level,i.toString(),at[0],at[0],at[1]).first<Record<string,unknown>>();if(x)return{hash:String(x.hash),sum:String(x.sum_handle)};if(required)throw new Error("node history unavailable");return{hash:n.emptyHashes[level],sum:n.zero};};let current=await node(0,index,true);if(current.hash!==leafHash(owner,String(slot.generation),current.sum))throw new Error("leaf mismatch");const siblingHashes:string[]=[],siblingSums:string[]=[],parentSums:string[]=[];for(let level=0;level<n.depth;level++){const sibling=await node(level,index^1n);const parent=await node(level+1,index>>1n,true);if(parent.hash!==branchHash((index&1n)?sibling:current,(index&1n)?current:sibling))throw new Error("parent mismatch");siblingHashes.push(sibling.hash);siblingSums.push(sibling.sum);parentSums.push(parent.sum);current=parent;index>>=1n;}if(current.hash!==draw.rootHash||current.sum!==draw.rootSum)throw new Error("root mismatch");return{...draw,account:owner,index:String(slot.slot_index),generation:String(slot.generation),balance:(await node(0,BigInt(String(slot.slot_index)),true)).sum,siblingHashes,siblingSums,parentSums};}
+  constructor(private readonly db: D1Database) {}
+
+  async initialize(namespace: Namespace): Promise<void> {
+    const n = validateNamespace(namespace);
+    await this.db
+      .prepare("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock)
+      .run();
+    const row = await this.db
+      .prepare(
+        "SELECT depth,zero_handle,empty_hashes_json,deployment_block FROM namespaces WHERE chain_id=? AND pool=?",
+      )
+      .bind(n.chainId, n.pool)
+      .first<Record<string, unknown>>();
+    if (
+      !row ||
+      row.depth !== n.depth ||
+      row.zero_handle !== n.zero ||
+      row.empty_hashes_json !== JSON.stringify(n.emptyHashes) ||
+      row.deployment_block !== n.deploymentBlock
+    )
+      throw new Error("namespace mismatch");
+    await this.db
+      .prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, ZERO_HASH, 0, null, now())
+      .run();
+  }
+
+  async status(n: Namespace): Promise<Checkpoint> {
+    const row = await this.db
+      .prepare(
+        "SELECT next_block,last_finalized_block,last_finalized_hash,revision,disabled_reason FROM ingestion_state WHERE chain_id=? AND pool=?",
+      )
+      .bind(n.chainId, n.pool)
+      .first<Record<string, unknown>>();
+    if (!row) throw new Error("uninitialized namespace");
+    return {
+      nextBlock: Number(row.next_block),
+      lastFinalizedBlock: Number(row.last_finalized_block),
+      lastFinalizedHash: String(row.last_finalized_hash),
+      revision: Number(row.revision),
+      disabledReason: row.disabled_reason ? String(row.disabled_reason) : undefined,
+    };
+  }
+
+  async ingest(
+    n: Namespace,
+    expected: Checkpoint,
+    logs: readonly ArchiveLog[],
+    headers: readonly BlockHeader[],
+  ): Promise<Checkpoint>;
+  /** Compatibility adapter for the original finalized-block API. New callers pass all headers. */
+  async ingest(
+    n: Namespace,
+    expected: Checkpoint,
+    logs: readonly ArchiveLog[],
+    finalizedBlock: number,
+    finalizedHash: string,
+  ): Promise<Checkpoint>;
+  async ingest(
+    n: Namespace,
+    expected: Checkpoint,
+    logs: readonly ArchiveLog[],
+    headersOrBlock: readonly BlockHeader[] | number,
+    finalHash?: string,
+  ): Promise<Checkpoint> {
+    const headers =
+      typeof headersOrBlock === "number"
+        ? [{ number: headersOrBlock, hash: finalHash!, parentHash: expected.lastFinalizedHash }]
+        : headersOrBlock;
+    const blocks = [...headers].sort((a, b) => a.number - b.number);
+    if (!blocks.length || blocks[0].number !== expected.nextBlock)
+      throw new Error("invalid header range");
+    for (let i = 0; i < blocks.length; i += 1) {
+      if (
+        !Number.isSafeInteger(blocks[i].number) ||
+        blocks[i].number < 0 ||
+        (i && blocks[i].number !== blocks[i - 1].number + 1)
+      )
+        throw new Error("invalid header range");
+      hash32(blocks[i].hash);
+      hash32(blocks[i].parentHash);
+      if (
+        hash32(blocks[i].parentHash) !==
+        (i ? hash32(blocks[i - 1].hash) : expected.lastFinalizedHash)
+      )
+        throw new Error("non-canonical header range");
+    }
+    const statements: D1PreparedStatement[] = [
+      this.commit(n, expected, "ingest", expected.nextBlock, blocks.at(-1)!.number),
+    ];
+    for (const block of blocks)
+      statements.push(
+        this.db
+          .prepare("INSERT INTO canonical_blocks VALUES(?,?,?,?,?)")
+          .bind(n.chainId, n.pool, block.number, hash32(block.hash), hash32(block.parentHash)),
+      );
+    const uniqueLogs = new Map<string, ArchiveLog>();
+    for (const log of logs) {
+      const key = `${log.blockNumber}:${log.logIndex}`;
+      const prior = uniqueLogs.get(key);
+      if (prior && JSON.stringify(prior) !== JSON.stringify(log))
+        throw new Error("conflicting log payload");
+      uniqueLogs.set(key, log);
+    }
+    for (const log of [...uniqueLogs.values()].sort(
+      (a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex,
+    )) {
+      if (log.blockNumber < blocks[0].number || log.blockNumber > blocks.at(-1)!.number)
+        throw new Error("log outside header range");
+      statements.push(
+        this.db
+          .prepare("INSERT INTO event_logs VALUES(?,?,?,?,?)")
+          .bind(
+            n.chainId,
+            n.pool,
+            log.blockNumber,
+            log.logIndex,
+            JSON.stringify({ name: log.name, args: log.args }),
+          ),
+      );
+      if (log.name === "NodeUpdated") {
+        const level = Number(decimal(log.args.level, "level"));
+        const index = decimal(log.args.index, "node index");
+        if (
+          !Number.isSafeInteger(level) ||
+          level < 0 ||
+          level > n.depth ||
+          BigInt(index) >= 1n << BigInt(n.depth - level)
+        )
+          throw new Error("invalid node position");
+        statements.push(
+          this.db
+            .prepare("INSERT INTO node_versions VALUES(?,?,?,?,?,?,?,?)")
+            .bind(
+              n.chainId,
+              n.pool,
+              level,
+              index,
+              log.blockNumber,
+              log.logIndex,
+              hash32(log.args.hash),
+              hash32(log.args.sum),
+            ),
+        );
+      } else if (log.name === "SlotAssigned" || log.name === "SlotReleased")
+        statements.push(
+          this.db
+            .prepare("INSERT INTO slot_versions VALUES(?,?,?,?,?,?,?,?)")
+            .bind(
+              n.chainId,
+              n.pool,
+              checksum(log.args.account),
+              this.slotIndex(n, log.args.index),
+              uint(log.args.generation, 64, "generation"),
+              log.name === "SlotAssigned" ? 1 : 0,
+              log.blockNumber,
+              log.logIndex,
+            ),
+        );
+      else
+        statements.push(
+          this.db
+            .prepare("INSERT INTO draws VALUES(?,?,?,?,?,?,?,?,?)")
+            .bind(
+              n.chainId,
+              n.pool,
+              decimal(log.args.drawId),
+              hash32(log.args.rootHash),
+              hash32(log.args.rootSum),
+              hash32(log.args.ticket),
+              decimal(log.args.upperBound),
+              Number(log.args.closeBlockNumber),
+              log.logIndex,
+            ),
+        );
+    }
+    const final = blocks.at(-1)!;
+    statements.push(
+      this.db
+        .prepare(
+          "UPDATE ingestion_state SET next_block=?,last_finalized_block=?,last_finalized_hash=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?",
+        )
+        .bind(
+          final.number + 1,
+          final.number,
+          hash32(final.hash),
+          now(),
+          n.chainId,
+          n.pool,
+          expected.revision,
+        ),
+    );
+    try {
+      await this.db.batch(statements);
+    } catch (error) {
+      this.conflict(error);
+    }
+    return this.status(n);
+  }
+
+  async rollbackFrom(n: Namespace, expected: Checkpoint, block: number): Promise<Checkpoint> {
+    if (!Number.isSafeInteger(block) || block < n.deploymentBlock || block > expected.nextBlock)
+      throw new Error("invalid rollback block");
+    const predecessor =
+      block === n.deploymentBlock
+        ? ZERO_HASH
+        : await this.db
+            .prepare(
+              "SELECT block_hash FROM canonical_blocks WHERE chain_id=? AND pool=? AND block_number=?",
+            )
+            .bind(n.chainId, n.pool, block - 1)
+            .first<Record<string, unknown>>();
+    if (!predecessor) throw new Error("missing rollback predecessor");
+    const priorHash =
+      typeof predecessor === "string" ? predecessor : String(predecessor.block_hash);
+    const scoped = (sql: string) => this.db.prepare(sql).bind(n.chainId, n.pool, block);
+    try {
+      await this.db.batch([
+        this.commit(n, expected, "rollback", block, block - 1),
+        scoped("DELETE FROM draws WHERE chain_id=? AND pool=? AND close_block_number>=?"),
+        scoped("DELETE FROM node_versions WHERE chain_id=? AND pool=? AND block_number>=?"),
+        scoped("DELETE FROM slot_versions WHERE chain_id=? AND pool=? AND block_number>=?"),
+        scoped("DELETE FROM event_logs WHERE chain_id=? AND pool=? AND block_number>=?"),
+        scoped("DELETE FROM canonical_blocks WHERE chain_id=? AND pool=? AND block_number>=?"),
+        this.db
+          .prepare(
+            "UPDATE ingestion_state SET next_block=?,last_finalized_block=?,last_finalized_hash=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?",
+          )
+          .bind(block, block - 1, priorHash, now(), n.chainId, n.pool, expected.revision),
+      ]);
+    } catch (error) {
+      this.conflict(error);
+    }
+    return this.status(n);
+  }
+
+  async listDraws(n: Namespace, cursor?: string, limit = 20): Promise<Draw[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("invalid limit");
+    const c = cursor === undefined ? undefined : decimal(cursor, "cursor");
+    const predicate =
+      c === undefined
+        ? ""
+        : " AND (length(d.draw_id)<length(?) OR (length(d.draw_id)=length(?) AND d.draw_id<?))";
+    const query = `SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=?${predicate} ORDER BY length(d.draw_id) DESC,d.draw_id DESC LIMIT ?`;
+    const result =
+      c === undefined
+        ? await this.db.prepare(query).bind(n.chainId, n.pool, limit).all<Record<string, unknown>>()
+        : await this.db
+            .prepare(query)
+            .bind(n.chainId, n.pool, c, c, c, limit)
+            .all<Record<string, unknown>>();
+    return result.results.map((row) => this.draw(n, row));
+  }
+
+  async proof(n: Namespace, drawId: string, account: string): Promise<Proof | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=? AND d.draw_id=?",
+      )
+      .bind(n.chainId, n.pool, decimal(drawId))
+      .first<Record<string, unknown>>();
+    if (!row) return null;
+    const draw = this.draw(n, row);
+    const owner = checksum(account);
+    const args = [
+      n.chainId,
+      n.pool,
+      owner,
+      draw.closeBlockNumber,
+      draw.closeBlockNumber,
+      draw.closeLogIndex,
+    ];
+    const slot = await this.db
+      .prepare(
+        `SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND account=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
+      )
+      .bind(...args)
+      .first<Record<string, unknown>>();
+    if (!slot || Number(slot.assigned) !== 1) return null;
+    const occupant = await this.db
+      .prepare(
+        `SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND slot_index=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
+      )
+      .bind(
+        n.chainId,
+        n.pool,
+        String(slot.slot_index),
+        draw.closeBlockNumber,
+        draw.closeBlockNumber,
+        draw.closeLogIndex,
+      )
+      .first<Record<string, unknown>>();
+    if (
+      !occupant ||
+      Number(occupant.assigned) !== 1 ||
+      occupant.account !== owner ||
+      occupant.generation !== slot.generation
+    )
+      throw new Error("ownership history unavailable");
+    let index = BigInt(String(slot.slot_index));
+    const queries: D1PreparedStatement[] = [];
+    for (let level = 0; level <= n.depth; level += 1) {
+      queries.push(this.nodeQuery(n, level, index, draw));
+      if (level < n.depth) queries.push(this.nodeQuery(n, level, index ^ 1n, draw));
+      index >>= 1n;
+    }
+    const results = await this.db.batch(queries);
+    let position = 0;
+    index = BigInt(String(slot.slot_index));
+    const read = (level: number, required: boolean): Node => {
+      const result = results[position++].results[0] as Record<string, unknown> | undefined;
+      if (result) return { hash: String(result.hash), sum: String(result.sum_handle) };
+      if (required) throw new Error("node history unavailable");
+      return { hash: n.emptyHashes[level], sum: n.zero };
+    };
+    let current = read(0, true);
+    if (current.hash !== leafHash(owner, String(slot.generation), current.sum))
+      throw new Error("leaf mismatch");
+    const balance = current.sum;
+    const siblingHashes: string[] = [];
+    const siblingSums: string[] = [];
+    const parentSums: string[] = [];
+    for (let level = 0; level < n.depth; level += 1) {
+      const sibling = read(level, false);
+      const parent = read(level + 1, true);
+      if (
+        parent.hash !==
+        branchHash((index & 1n) === 1n ? sibling : current, (index & 1n) === 1n ? current : sibling)
+      )
+        throw new Error("parent mismatch");
+      siblingHashes.push(sibling.hash);
+      siblingSums.push(sibling.sum);
+      parentSums.push(parent.sum);
+      current = parent;
+      index >>= 1n;
+    }
+    if (current.hash !== draw.rootHash || current.sum !== draw.rootSum)
+      throw new Error("root mismatch");
+    return {
+      ...draw,
+      account: owner,
+      index: String(slot.slot_index),
+      generation: String(slot.generation),
+      balance,
+      siblingHashes,
+      siblingSums,
+      parentSums,
+    };
+  }
+
+  private nodeQuery(n: Namespace, level: number, index: bigint, draw: Draw): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `SELECT hash,sum_handle FROM node_versions WHERE chain_id=? AND pool=? AND level=? AND node_index=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
+      )
+      .bind(
+        n.chainId,
+        n.pool,
+        level,
+        index.toString(),
+        draw.closeBlockNumber,
+        draw.closeBlockNumber,
+        draw.closeLogIndex,
+      );
+  }
+  private slotIndex(n: Namespace, value: string): string {
+    const index = decimal(value, "slot index");
+    if (BigInt(index) >= 1n << BigInt(n.depth)) throw new Error("invalid slot index");
+    return index;
+  }
+  private commit(
+    n: Namespace,
+    expected: Checkpoint,
+    kind: string,
+    from: number,
+    to: number,
+  ): D1PreparedStatement {
+    return this.db
+      .prepare("INSERT INTO ingestion_commits VALUES(?,?,?,?,?,?,?)")
+      .bind(n.chainId, n.pool, expected.revision, kind, from, to, now());
+  }
+  private draw(n: Namespace, row: Record<string, unknown>): Draw {
+    return {
+      drawId: String(row.draw_id),
+      rootHash: String(row.root_hash),
+      rootSum: String(row.root_sum),
+      ticket: String(row.ticket_handle),
+      upperBound: String(row.upper_bound_handle),
+      closeBlockNumber: Number(row.close_block_number),
+      closeLogIndex: Number(row.close_log_index),
+      chainId: n.chainId,
+      pool: n.pool,
+      blockHash: String(row.block_hash),
+    };
+  }
+  private conflict(error: unknown): never {
+    if (
+      String(error).includes("checkpoint conflict") ||
+      String(error).includes("UNIQUE constraint failed: ingestion_commits")
+    )
+      throw new CheckpointConflict();
+    throw error;
+  }
 }
