@@ -1,4 +1,4 @@
-import { type ArchiveLog, type Namespace, hash32 } from "./domain.ts";
+import { type ArchiveLog, type Namespace, hash32, type Node } from "./domain.ts";
 import { D1Archive, type BlockHeader } from "./archive.ts";
 import { CheckpointConflict } from "./domain.ts";
 export interface RpcSource {
@@ -6,11 +6,12 @@ export interface RpcSource {
   finalizedHead(): Promise<{ number: number; hash: string }>;
   block(number: number): Promise<{ number: number; hash: string; parentHash: string }>;
   logs(from: number, to: number): Promise<ArchiveLog[]>;
-  receiptLogs(block: number): Promise<ArchiveLog[]>;
+  receiptLogs(block: BlockHeader): Promise<ArchiveLog[]>;
   drawSnapshot(
     drawId: string,
-    block: number,
+    block: BlockHeader,
   ): Promise<{ rootHash: string; rootSum: string; closeBlock: number }>;
+  membershipRoot(block: BlockHeader): Promise<Node>;
 }
 /** One bounded, finalized slice. Receipt comparison prevents an omitted ownership log from becoming a false negative. */
 export async function ingestOneSlice(
@@ -19,6 +20,8 @@ export async function ingestOneSlice(
   rpc: RpcSource,
   maxBlocks: number,
 ) {
+  if (!Number.isSafeInteger(maxBlocks) || maxBlocks < 1 || maxBlocks > 2)
+    throw new Error("invalid max blocks");
   const state = await archive.status(n);
   if (state.disabledReason) return state;
   if ((await rpc.chainId()) !== n.chainId)
@@ -44,7 +47,13 @@ export async function ingestOneSlice(
   if (!found) return archive.disable(n, state, "deep or unknown canonical fork");
   if (ancestor < state.lastFinalizedBlock) return archive.rollbackFrom(n, state, ancestor + 1);
   if (state.nextBlock > head.number) return state;
+  if (!Number.isSafeInteger(head.number) || head.number < 0) throw new Error("invalid finalized head");
   const to = Math.min(head.number, state.nextBlock + maxBlocks - 1);
+  if (!Number.isSafeInteger(to)) throw new Error("invalid bounded range");
+  const headers: BlockHeader[] = [];
+  for (let block = state.nextBlock; block <= to; block += 1) headers.push(await rpc.block(block));
+  if (headers[0].parentHash !== state.lastFinalizedHash)
+    return archive.disable(n, state, "canonical parent mismatch");
   const logs = await rpc.logs(state.nextBlock, to);
   const unique = new Map<string, ArchiveLog>();
   for (const log of logs) {
@@ -59,22 +68,27 @@ export async function ingestOneSlice(
   );
   for (let b = state.nextBlock; b <= to; b++) {
     const a = ordered.filter((x) => x.blockNumber === b),
-      receipt = await rpc.receiptLogs(b);
-    const canonicalReceipt = [
-      ...new Map(receipt.map((x) => [`${x.blockNumber}:${x.logIndex}`, x])).values(),
-    ].sort((x, y) => x.logIndex - y.logIndex);
+      receipt = await rpc.receiptLogs(headers[b - state.nextBlock]);
+    const receiptUnique = new Map<string, ArchiveLog>();
+    for (const log of receipt) {
+      const key = `${log.blockNumber}:${log.logIndex}`;
+      const prior = receiptUnique.get(key);
+      if (prior && JSON.stringify(prior) !== JSON.stringify(log))
+        throw new Error("conflicting receipt log payload");
+      receiptUnique.set(key, log);
+    }
+    const canonicalReceipt = [...receiptUnique.values()].sort((x, y) => x.logIndex - y.logIndex);
     if (JSON.stringify(a) !== JSON.stringify(canonicalReceipt))
       throw new Error("incomplete pool logs");
   }
-  const headers: BlockHeader[] = [];
-  for (let block = state.nextBlock; block <= to; block += 1) {
-    headers.push(await rpc.block(block));
+  for (const log of ordered) {
+    const header = headers[log.blockNumber - state.nextBlock];
+    if (!header || hash32(log.blockHash) !== hash32(header.hash))
+      throw new Error("log canonical hash mismatch");
   }
-  if (headers[0].parentHash !== state.lastFinalizedHash)
-    return archive.disable(n, state, "canonical parent mismatch");
   for (const log of ordered) {
     if (log.name !== "DrawSnapshotClosed") continue;
-    const snapshot = await rpc.drawSnapshot(log.args.drawId, log.blockNumber);
+    const snapshot = await rpc.drawSnapshot(log.args.drawId, headers[log.blockNumber - state.nextBlock]);
     if (
       hash32(snapshot.rootHash) !== hash32(log.args.rootHash) ||
       hash32(snapshot.rootSum) !== hash32(log.args.rootSum) ||
@@ -82,6 +96,14 @@ export async function ingestOneSlice(
     )
       throw new Error("onchain draw snapshot mismatch");
   }
+  const priorRoot = await archive.membershipRoot(n, state.nextBlock - 1);
+  let reconstructed: Node = priorRoot ?? { hash: n.emptyHashes[n.depth], sum: n.zero };
+  for (const log of ordered)
+    if (log.name === "NodeUpdated" && log.args.level === String(n.depth) && log.args.index === "0")
+      reconstructed = { hash: hash32(log.args.hash), sum: hash32(log.args.sum) };
+  const onchainRoot = await rpc.membershipRoot(headers.at(-1)!);
+  if (reconstructed.hash !== onchainRoot.hash || reconstructed.sum !== onchainRoot.sum)
+    throw new Error("onchain membership root mismatch");
   try {
     return await archive.ingest(n, state, ordered, headers);
   } catch (e) {

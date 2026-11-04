@@ -119,6 +119,17 @@ export class D1Archive {
       : null;
   }
 
+  /** Root immediately after `block`, used to reconstruct and authenticate a new slice. */
+  async membershipRoot(n: Namespace, block: number): Promise<Node | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT hash,sum_handle FROM node_versions WHERE chain_id=? AND pool=? AND level=? AND node_index=? AND block_number<=? ORDER BY block_number DESC,log_index DESC LIMIT 1",
+      )
+      .bind(n.chainId, n.pool, n.depth, "0", block)
+      .first<Record<string, unknown>>();
+    return row ? { hash: hash32(row.hash), sum: hash32(row.sum_handle) } : null;
+  }
+
   async disable(n: Namespace, expected: Checkpoint, reason: string): Promise<Checkpoint> {
     if (!reason || reason.length > 160) throw new Error("invalid disabled reason");
     try {

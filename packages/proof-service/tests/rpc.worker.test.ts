@@ -1,0 +1,121 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { encodeAbiParameters, encodeEventTopics, keccak256, toHex } from "viem";
+import { confidentialPrizePoolAbi } from "@kettigo/protocol";
+import { EthereumRpc, FallbackRpc } from "../src/rpc.ts";
+import { branchHash, leafHash, type Namespace } from "../src/domain.ts";
+import type { RpcSource } from "../src/ingest.ts";
+
+const zero = `0x${"00".repeat(32)}`;
+const pool = "0x00000000000000000000000000000000000000a1" as const;
+const blockHash = `0x${"11".repeat(32)}`;
+const parentHash = `0x${"22".repeat(32)}`;
+const txHash = `0x${"33".repeat(32)}`;
+
+function namespace(): Namespace {
+  const leaf = leafHash("0x0000000000000000000000000000000000000000", "0", zero);
+  return {
+    chainId: "11155111",
+    pool,
+    depth: 1,
+    zero,
+    emptyHashes: [leaf, branchHash({ hash: leaf, sum: zero }, { hash: leaf, sum: zero })],
+    deploymentBlock: 1,
+  };
+}
+
+function response(result: unknown, status = 200): Response {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status });
+}
+
+function rpcLog(overrides: Record<string, unknown> = {}) {
+  const event = confidentialPrizePoolAbi.find((x) => x.type === "event" && x.name === "NodeUpdated")!;
+  return {
+    address: pool,
+    blockNumber: "0x1",
+    blockHash,
+    transactionHash: txHash,
+    transactionIndex: "0x0",
+    logIndex: "0x0",
+    removed: false,
+    topics: encodeEventTopics({ abi: [event], eventName: "NodeUpdated", args: { level: 0n, index: 0n } }),
+    data: encodeAbiParameters(
+      [{ type: "bytes32" }, { type: "bytes32" }],
+      [zero as `0x${string}`, zero as `0x${string}`],
+    ),
+    ...overrides,
+  };
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("EthereumRpc", () => {
+  it("fails closed for a malformed relevant event but ignores unrelated topics", async () => {
+    const relevant = rpcLog({ data: "0x12" });
+    const unrelated = rpcLog({ topics: [keccak256(toHex("unrelated"))], data: "0x" });
+    vi.stubGlobal("fetch", vi.fn(async () => response([unrelated, relevant])));
+    await expect(new EthereumRpc("https://user:secret@example.test/rpc", namespace(), 0).logs(1, 1)).rejects.toThrow(
+      "malformed relevant log",
+    );
+  });
+
+  it("rejects out-of-range, wrong-address, wrong-hash and unsafe numeric logs", async () => {
+    for (const bad of [
+      rpcLog({ address: "0x00000000000000000000000000000000000000a2" }),
+      rpcLog({ blockNumber: "0x2" }),
+      rpcLog({ logIndex: "0x20000000000000" }),
+    ]) {
+      vi.stubGlobal("fetch", vi.fn(async () => response([bad])));
+      await expect(new EthereumRpc("https://example.test", namespace(), 0).logs(1, 1)).rejects.toThrow();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses full-block transactions and every receipt only when block receipts is unsupported", async () => {
+    const indirect = rpcLog();
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      const request = JSON.parse(String(init.body));
+      calls.push(request.method);
+      if (request.method === "eth_getBlockReceipts")
+        return new Response(JSON.stringify({ error: { code: -32601, message: "method not found" } }));
+      if (request.method === "eth_getBlockByNumber")
+        return response({ number: "0x1", hash: blockHash, parentHash, transactions: [txHash] });
+      if (request.method === "eth_getTransactionReceipt")
+        return response({ transactionHash: txHash, blockNumber: "0x1", blockHash, logs: [indirect] });
+      throw new Error(`unexpected ${request.method}`);
+    }));
+    await expect(new EthereumRpc("https://example.test", namespace(), 0).receiptLogs({ number: 1, hash: blockHash, parentHash })).resolves.toHaveLength(1);
+    expect(calls).toEqual(["eth_getBlockReceipts", "eth_getBlockByNumber", "eth_getTransactionReceipt"]);
+  });
+
+  it("does not fall back for a non-unsupported block receipts error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: -32000, message: "busy" } }))));
+    await expect(new EthereumRpc("https://example.test", namespace(), 0).receiptLogs({ number: 1, hash: blockHash, parentHash })).rejects.toThrow("rpc eth_getBlockReceipts failed");
+  });
+});
+
+class FakeRpc implements RpcSource {
+  constructor(readonly label: string, readonly fail = false, readonly chain = "11155111") {}
+  private run<T>(value: T): Promise<T> { if (this.fail) throw new Error(`${this.label} https://token@example.test failed`); return Promise.resolve(value); }
+  chainId() { return this.run(this.chain); }
+  finalizedHead() { return this.run({ number: 1, hash: blockHash }); }
+  block(number: number) { return this.run({ number, hash: blockHash, parentHash }); }
+  logs() { return this.run([]); }
+  receiptLogs() { return this.run([]); }
+  drawSnapshot() { return this.run({ rootHash: zero, rootSum: zero, closeBlock: 1 }); }
+  membershipRoot() { return this.run({ hash: zero, sum: zero }); }
+}
+
+describe("FallbackRpc", () => {
+  it("pins one validated source for an ingestion operation and redacts both provider causes", async () => {
+    const rpc = new FallbackRpc(new FakeRpc("primary", true), new FakeRpc("fallback", true), namespace());
+    await expect(rpc.withSource((source) => source.block(1))).rejects.toThrow("primary");
+    await expect(rpc.withSource((source) => source.block(1))).rejects.toThrow("fallback");
+    await expect(rpc.withSource((source) => source.block(1))).rejects.not.toThrow(/token@example/);
+  });
+
+  it("rejects a fallback source on the wrong chain before using it", async () => {
+    const rpc = new FallbackRpc(new FakeRpc("primary", true), new FakeRpc("fallback", false, "1"), namespace());
+    await expect(rpc.withSource((source) => source.block(1))).rejects.toThrow("chain id mismatch");
+  });
+});

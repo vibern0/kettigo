@@ -13,7 +13,7 @@ function namespace(): Namespace {
   const leaf = leafHash("0x0000000000000000000000000000000000000000", "0", zero);
   return {
     chainId: "11155111",
-    pool: `0x${serial.toString(16).padStart(40, "3")}`,
+    pool: `0x${serial.toString().padStart(40, "3")}`,
     depth: 1,
     zero,
     emptyHashes: [leaf, branchHash({ hash: leaf, sum: zero }, { hash: leaf, sum: zero })],
@@ -27,6 +27,9 @@ class FixtureRpc implements RpcSource {
   constructor(
     readonly blocks: BlockHeader[],
     readonly allLogs: ArchiveLog[] = [],
+    readonly n?: Namespace,
+    readonly root?: { hash: string; sum: string },
+    readonly receipts?: ArchiveLog[],
   ) {}
   async chainId() {
     return "11155111";
@@ -43,12 +46,21 @@ class FixtureRpc implements RpcSource {
   async logs(from: number, to: number) {
     return this.allLogs.filter((x) => x.blockNumber >= from && x.blockNumber <= to);
   }
-  async receiptLogs(block: number) {
-    return this.allLogs.filter((x) => x.blockNumber === block);
+  async receiptLogs(block: BlockHeader) {
+    return (this.receipts ?? this.allLogs).filter((x) => x.blockNumber === block.number);
   }
   async drawSnapshot() {
     throw new Error("unused");
     return { rootHash: zero, rootSum: zero, closeBlock: 0 };
+  }
+  async membershipRoot() {
+    if (this.root) return this.root;
+    const root = [...this.allLogs]
+      .reverse()
+      .find((log) => log.name === "NodeUpdated" && log.args.level === String(this.n?.depth));
+    return root
+      ? { hash: root.args.hash, sum: root.args.sum }
+      : { hash: this.n?.emptyHashes[this.n.depth] ?? zero, sum: zero };
   }
 }
 
@@ -59,7 +71,7 @@ describe("finalized RPC ingestion", () => {
     const anchor = `0x${"9".repeat(64)}`;
     await archive.initialize(n, anchor);
     const first = header(1, "1", anchor);
-    const state = await ingestOneSlice(archive, n, new FixtureRpc([first]), 2);
+    const state = await ingestOneSlice(archive, n, new FixtureRpc([first], [], n), 2);
     expect(state.lastFinalizedHash).toBe(first.hash);
     expect((await archive.canonicalBlock(n, 0))?.hash).toBe(anchor);
   });
@@ -77,7 +89,7 @@ describe("finalized RPC ingestion", () => {
     const state = await ingestOneSlice(
       archive,
       n,
-      new FixtureRpc([h1, replacement2, replacement3]),
+      new FixtureRpc([h1, replacement2, replacement3], [], n),
       2,
     );
     expect(state).toMatchObject({
@@ -102,7 +114,7 @@ describe("finalized RPC ingestion", () => {
     const state = await ingestOneSlice(
       archive,
       n,
-      new FixtureRpc([h1, canonical2, canonical3, canonical4]),
+      new FixtureRpc([h1, canonical2, canonical3, canonical4], [], n),
       2,
     );
     expect(state).toMatchObject({
@@ -120,7 +132,7 @@ describe("finalized RPC ingestion", () => {
     const h1 = header(1, "1"),
       h2 = header(2, "2", h1.hash),
       h3 = header(3, "3", h2.hash);
-    const rpc = new FixtureRpc([h1, h2, h3]);
+    const rpc = new FixtureRpc([h1, h2, h3], [], n);
     await ingestOneSlice(archive, n, rpc, 2);
     const state = await ingestOneSlice(archive, n, rpc, 2);
     expect(state).toMatchObject({
@@ -129,5 +141,24 @@ describe("finalized RPC ingestion", () => {
       lastFinalizedHash: h3.hash,
     });
     expect((await archive.canonicalBlock(n, 2))?.hash).toBe(h2.hash);
+  });
+
+  it("fails closed when the end-of-slice membership root proves an omitted transaction", async () => {
+    const n = namespace(), archive = new D1Archive(env.PROOF_DB);
+    await archive.initialize(n);
+    const h1 = header(1, "1");
+    const rpc = new FixtureRpc([h1], [], n, { hash: `0x${"4".repeat(64)}`, sum: zero });
+    await expect(ingestOneSlice(archive, n, rpc, 2)).rejects.toThrow("onchain membership root mismatch");
+    expect((await archive.status(n)).nextBlock).toBe(1);
+  });
+
+  it("rejects conflicting duplicate receipt logs before archive mutation", async () => {
+    const n = namespace(), archive = new D1Archive(env.PROOF_DB);
+    await archive.initialize(n);
+    const h1 = header(1, "1");
+    const event: ArchiveLog = { blockNumber: 1, blockHash: h1.hash, logIndex: 0, name: "NodeUpdated", args: { level: "1", index: "0", hash: n.emptyHashes[1], sum: zero } };
+    const conflict = { ...event, args: { ...event.args, sum: `0x${"5".repeat(64)}` } };
+    await expect(ingestOneSlice(archive, n, new FixtureRpc([h1], [event], n, undefined, [event, conflict]), 2)).rejects.toThrow("conflicting receipt log payload");
+    expect((await archive.status(n)).nextBlock).toBe(1);
   });
 });
