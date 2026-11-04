@@ -2,6 +2,8 @@ import { env as workerEnv } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { D1Archive, type BlockHeader } from "../src/archive.ts";
 import { branchHash, leafHash, type ArchiveLog, type Namespace } from "../src/domain.ts";
+import { depth32Fixture } from "./fixtures.ts";
+import { otherAccount } from "./fixtures.ts";
 
 const zero = `0x${"00".repeat(32)}`;
 const account = "0x1111111111111111111111111111111111111111";
@@ -85,13 +87,63 @@ describe("D1 proof archive", () => {
   });
   it("builds and verifies a genuine depth-32 historical proof in D1", async () => {
     const a = new D1Archive(env.PROOF_DB);
-    const { n, logs, root } = fixture();
+    const { namespace: n, logs, root, block } = depth32Fixture();
     await a.initialize(n);
-    await a.ingest(n, await a.status(n), [...logs].reverse(), [header()]);
+    await a.ingest(n, await a.status(n), [...logs].reverse(), [block]);
     const proof = await a.proof(n, "1", account);
     expect(proof?.rootHash).toBe(root);
     expect(proof?.siblingHashes).toHaveLength(32);
     expect(proof?.generation).toBe("1");
+  });
+  it("keeps the close-time owner and generation through same-block release, reassignment, and rejoin", async () => {
+    const a = new D1Archive(env.PROOF_DB);
+    const { namespace: n, logs, block } = depth32Fixture();
+    logs.push(
+      {
+        blockNumber: 1,
+        blockHash: block.hash,
+        logIndex: 35,
+        name: "SlotReleased",
+        args: { account, index: "0", generation: "1" },
+      },
+      {
+        blockNumber: 1,
+        blockHash: block.hash,
+        logIndex: 36,
+        name: "SlotAssigned",
+        args: { account: otherAccount, index: "0", generation: "2" },
+      },
+      {
+        blockNumber: 1,
+        blockHash: block.hash,
+        logIndex: 37,
+        name: "SlotReleased",
+        args: { account: otherAccount, index: "0", generation: "2" },
+      },
+      {
+        blockNumber: 1,
+        blockHash: block.hash,
+        logIndex: 38,
+        name: "SlotAssigned",
+        args: { account, index: "0", generation: "3" },
+      },
+    );
+    await a.initialize(n);
+    await a.ingest(n, await a.status(n), logs, [block]);
+    expect(await a.proof(n, "1", account)).toMatchObject({ account, generation: "1" });
+    await expect(a.proof(n, "1", otherAccount)).resolves.toBeNull();
+  });
+  it("fails closed when a required historical node is missing", async () => {
+    const a = new D1Archive(env.PROOF_DB);
+    const { namespace: n, logs, block } = depth32Fixture();
+    await a.initialize(n);
+    await a.ingest(
+      n,
+      await a.status(n),
+      logs.filter((log) => !(log.name === "NodeUpdated" && log.args.level === "10")),
+      [block],
+    );
+    await expect(a.proof(n, "1", account)).rejects.toThrow("node history unavailable");
   });
   it("rejects a closed draw whose assigned range cannot contain its slot", async () => {
     const a = new D1Archive(env.PROOF_DB);
