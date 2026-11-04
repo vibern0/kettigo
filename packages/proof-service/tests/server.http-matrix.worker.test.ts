@@ -113,6 +113,7 @@ describe("native D1 HTTP proof matrix", () => {
       fixture.env,
     );
     expect(await indexing.json()).toEqual({ outcome: "INDEXING" });
+    expect(indexing.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
     rpc(fixture, { close: 0n });
     const unknown = await handle(
       new Request(
@@ -142,6 +143,7 @@ describe("native D1 HTTP proof matrix", () => {
       fixture.env,
     );
     expect(await missing.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
+    expect(missing.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
   });
 
   it("fails closed with CORS for canonical close/checkpoint mismatch, wrong chain, and provider outage", async () => {

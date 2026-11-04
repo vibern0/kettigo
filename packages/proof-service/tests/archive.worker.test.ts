@@ -145,6 +145,19 @@ describe("D1 proof archive", () => {
     );
     await expect(a.proof(n, "1", account)).rejects.toThrow("node history unavailable");
   });
+  it("fails closed when an indexed historical node is corrupted", async () => {
+    const a = new D1Archive(env.PROOF_DB);
+    const { namespace: n, logs, block } = depth32Fixture();
+    await a.initialize(n);
+    await a.ingest(n, await a.status(n), logs, [block]);
+    const mutation = await env.PROOF_DB.prepare(
+      "UPDATE node_versions SET hash=? WHERE chain_id=? AND pool=? AND level=? AND node_index=?",
+    )
+      .bind(`0x${"99".repeat(32)}`, n.chainId, n.pool, 10, "0")
+      .run();
+    expect(mutation.meta.changes).toBe(1);
+    await expect(a.proof(n, "1", account)).rejects.toThrow("parent mismatch");
+  });
   it("rejects a closed draw whose assigned range cannot contain its slot", async () => {
     const a = new D1Archive(env.PROOF_DB);
     const { n, logs } = fixture(1);

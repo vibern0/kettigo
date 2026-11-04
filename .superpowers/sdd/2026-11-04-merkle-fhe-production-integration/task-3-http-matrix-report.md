@@ -46,3 +46,32 @@ exited 0
 This does **not** declare Task 3 complete. Source review/F7, tick deadline
 cancellation (F3), retained backup/restore implementation (F4), remote
 deployment/backfill, and live operational acceptance remain pending.
+
+## Boundary-review evidence follow-up
+
+- `INDEXING` and indexed absent-draw `HISTORY_UNAVAILABLE` now each assert the
+  allowlisted CORS response header.
+- Authenticated `OPTIONS /internal/tick` is asserted as 405 before any RPC/job
+  fetch can start.
+- A native D1 row is actually mutated at required level 10; the test asserts
+  one row changed and the historical proof fails closed with `parent mismatch`.
+
+```text
+pnpm --filter @kettigo/proof-service exec vitest run --config vitest.worker.config.ts tests/archive.worker.test.ts tests/server.worker.test.ts tests/server.http-matrix.worker.test.ts --sequence.concurrent=false
+3 test files passed, 22 tests passed
+
+pnpm --filter @kettigo/proof-service test
+5 test files passed, 39 tests passed
+
+pnpm --filter @kettigo/proof-service typecheck
+tsc --noEmit exited 0
+
+pnpm --filter @kettigo/proof-service build
+wrangler deploy --dry-run exited 0
+
+pnpm exec prettier --check packages/proof-service/tests/archive.worker.test.ts packages/proof-service/tests/server.worker.test.ts packages/proof-service/tests/server.http-matrix.worker.test.ts
+All matched files use Prettier code style
+
+git diff --check
+exited 0
+```

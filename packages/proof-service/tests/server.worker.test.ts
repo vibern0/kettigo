@@ -69,6 +69,18 @@ describe("proof HTTP boundary", () => {
   });
   it("only permits authenticated POST tick requests", async () => {
     const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const options = await worker.fetch(
+      new Request("https://proof.test/internal/tick", {
+        method: "OPTIONS",
+        headers: { authorization: "Bearer x" },
+      }),
+      { ...config, OPERATOR_BEARER: "x" },
+      ctx,
+    );
+    expect(options.status).toBe(405);
+    expect(fetch).not.toHaveBeenCalled();
     const get = await worker.fetch(
       new Request("https://proof.test/internal/tick", { headers: { authorization: "Bearer x" } }),
       { ...config, OPERATOR_BEARER: "x" },
