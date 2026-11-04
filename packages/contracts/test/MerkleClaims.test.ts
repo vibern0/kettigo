@@ -24,7 +24,7 @@ describe("ConfidentialPrizePool snapshot claims", function () {
       await usdc.connect(user).approve(await token.getAddress(), 100n);
       await token.connect(user).wrap(user.address, 100n);
     }
-    return { owner, alice, bob, carol, token, pool };
+    return { owner, alice, bob, carol, usdc, token, pool };
   }
 
   async function deposit(token: any, pool: any, user: any, amount: bigint) {
@@ -86,6 +86,28 @@ describe("ConfidentialPrizePool snapshot claims", function () {
     await pool.closeDraw();
   }
 
+  async function configureWithdrawalAdapter(f: any) {
+    const morpho = await (await ethers.getContractFactory("MockMorphoBlue")).deploy();
+    const marketParams = {
+      loanToken: await f.usdc.getAddress(),
+      collateralToken: f.carol.address,
+      oracle: ethers.ZeroAddress,
+      irm: ethers.ZeroAddress,
+      lltv: 945_000_000_000_000_000n,
+    };
+    await morpho.createMarket(marketParams);
+    const adapter = await (
+      await ethers.getContractFactory("MorphoYieldAdapter")
+    ).deploy(
+      await f.usdc.getAddress(),
+      await f.token.getAddress(),
+      await f.pool.getAddress(),
+      await morpho.getAddress(),
+      marketParams,
+    );
+    await f.pool.setMorphoYieldAdapter(await adapter.getAddress(), 1n);
+  }
+
   it("closeDoesNotScanPopulation", async function () {
     const f = await fixture();
     for (const user of [f.alice, f.bob, f.carol]) {
@@ -105,10 +127,28 @@ describe("ConfidentialPrizePool snapshot claims", function () {
     const p = await proof(f.pool, f.alice.address);
     await fund(f.token, f.pool, f.owner, 5n);
     await close(f.pool);
-    await expect(f.pool.connect(f.alice).exitMembership()).to.be.revertedWithCustomError(
-      f.pool,
-      "MorphoYieldAdapterNotSet",
-    );
+    await configureWithdrawalAdapter(f);
+    await f.pool.connect(f.alice).exitMembership();
+    expect(await f.pool.membershipIndexOf(f.alice.address)).to.equal(0n);
+    await deposit(f.token, f.pool, f.bob, 1n);
+    await admit(f.pool, f.bob.address);
+    expect(await f.pool.membershipIndexOf(f.bob.address)).to.equal(p.index + 1n);
+    expect(await f.pool.generationOf(p.index)).to.equal(p.generation + 1n);
+    await deposit(f.token, f.pool, f.alice, 1n);
+    await admit(f.pool, f.alice.address);
+    expect(await f.pool.membershipIndexOf(f.alice.address)).to.not.equal(p.index + 1n);
+    await expect(
+      f.pool.checkPrize(
+        1n,
+        f.bob.address,
+        p.index,
+        p.generation,
+        p.balance,
+        p.siblingHashes,
+        p.siblingSums,
+        p.parentSums,
+      ),
+    ).to.be.revertedWithCustomError(f.pool, "InvalidDrawProof");
     await f.pool.checkPrize(
       1n,
       f.alice.address,
@@ -120,6 +160,26 @@ describe("ConfidentialPrizePool snapshot claims", function () {
       p.parentSums,
     );
     expect(await f.pool.checked(1n, f.alice.address)).to.equal(true);
+    expect(
+      await fhevm.userDecryptEuint(
+        FhevmType.euint64,
+        await f.pool.encryptedAwardOf(1n, f.alice.address),
+        await f.pool.getAddress(),
+        f.alice,
+      ),
+    ).to.equal(5n);
+    await expect(
+      f.pool.checkPrize(
+        1n,
+        f.alice.address,
+        p.index,
+        p.generation,
+        p.balance,
+        p.siblingHashes,
+        p.siblingSums,
+        p.parentSums,
+      ),
+    ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
   });
 
   it("rejectsWrongOwnerGenerationPathAndDraw", async function () {

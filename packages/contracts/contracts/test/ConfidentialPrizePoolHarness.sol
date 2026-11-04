@@ -36,4 +36,10 @@ contract ConfidentialPrizePoolHarness is ConfidentialPrizePool {
   function seedNextMembershipIndex(uint256 index) external {
     _nextMembershipIndex = index;
   }
+
+  /// @dev Test-only hook for independently checking frozen weighted intervals.
+  function seedDrawTicket(uint256 drawId_, uint128 ticket) external {
+    draws[drawId_].ticket = FHE.asEuint128(ticket);
+    FHE.allowThis(draws[drawId_].ticket);
+  }
 }
