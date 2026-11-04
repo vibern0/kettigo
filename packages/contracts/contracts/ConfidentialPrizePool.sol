@@ -379,8 +379,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     (euint64 accepted, euint64 morphoPortion) = _movePrincipalToWithdrawal(msg.sender, requested);
 
     batchId = currentWithdrawalBatchId;
-    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Open)
+    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Open) {
       revert WithdrawalBatchNotOpen(batchId);
+    }
 
     if (!_hasWithdrawalClaim[batchId][msg.sender]) {
       ++_withdrawalBatchClaimantCount[batchId];
@@ -420,8 +421,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     if (_withdrawalBatchStatus[batchId] == WithdrawalBatchStatus.Funded) {
       revert WithdrawalBatchAlreadyFunded(batchId);
     }
-    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Closed)
+    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Closed) {
       revert WithdrawalBatchNotClosed(batchId);
+    }
     if (cleartextMorphoRestore > cleartextTotal) {
       revert InvalidWithdrawalBatchAmounts(cleartextTotal, cleartextMorphoRestore);
     }
@@ -472,8 +474,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     address account,
     address to
   ) internal returns (bytes32 unwrapRequestId) {
-    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Funded)
+    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Funded) {
       revert WithdrawalBatchNotFunded(batchId);
+    }
     if (!_hasWithdrawalClaim[batchId][account]) {
       revert NoWithdrawalClaim(batchId, account);
     }
@@ -536,8 +539,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   function _closeWithdrawalBatch(uint256 batchId) internal {
-    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Open)
+    if (_withdrawalBatchStatus[batchId] != WithdrawalBatchStatus.Open) {
       revert WithdrawalBatchNotOpen(batchId);
+    }
     uint256 closesAt = _withdrawalBatchClosesAt[batchId];
     if (block.timestamp < closesAt) {
       revert WithdrawalBatchNotReady(closesAt);
@@ -591,8 +595,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   function _requestMorphoPrincipalUnwrap() internal returns (bytes32 unwrapRequestId) {
-    if (address(morphoYieldAdapter) == address(0) || morphoUnwrapInterval == 0)
+    if (address(morphoYieldAdapter) == address(0) || morphoUnwrapInterval == 0) {
       revert MorphoYieldAdapterNotSet();
+    }
 
     euint64 amount = _pendingMorphoPrincipal;
     uint256 depositCount = morphoPendingDepositCount;

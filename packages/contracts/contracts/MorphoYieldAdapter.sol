@@ -170,8 +170,9 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
     nonReentrant
     returns (uint256 restoredAssets)
   {
-    if (assets > suppliedPrincipal)
+    if (assets > suppliedPrincipal) {
       revert PrincipalWithdrawalExceedsSupply(assets, suppliedPrincipal);
+    }
 
     uint256 supplied = suppliedPrincipal;
     bool fullPrincipalRestore = assets == supplied;
@@ -234,8 +235,9 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
     }
 
     harvestedAssets = maxAssets == 0 || maxAssets > accrued ? accrued : maxAssets;
-    if (harvestedAssets > type(uint64).max)
+    if (harvestedAssets > type(uint64).max) {
       revert AmountTooLargeForConfidentialToken(harvestedAssets);
+    }
 
     (uint256 withdrawnAssets, uint256 withdrawnShares) = morpho.withdraw(
       _marketParams,

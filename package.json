@@ -39,7 +39,7 @@
   "scripts": {
     "prepare": "husky",
     "lint:solidity": "solhint \"packages/contracts/contracts/**/*.sol\" && pnpm lint:solidity:conditionals",
-    "lint:solidity:conditionals": "! rg -n '^[[:space:]]*if \\([^\\n]+\\) (revert|return|emit|[A-Za-z_].*;)' packages/contracts/contracts -g '*.sol'",
+    "lint:solidity:conditionals": "! rg -n '^[[:space:]]*if \\([^\\n]+\\) (revert|return|emit|[A-Za-z_].*;)' packages/contracts/contracts -g '*.sol' && ! rg -n -U 'if \\([^\\n]+\\)\\n\\s*(revert|return|emit|[A-Za-z_][^\\n;]*;)' packages/contracts/contracts -g '*.sol'",
     "format:solidity:check": "prettier --check \"packages/contracts/contracts/**/*.sol\"",
     "cf:build": "pnpm --filter @kettigo/landing build",
     "contracts:compile": "npm run compile -w packages/contracts",
