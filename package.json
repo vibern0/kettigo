@@ -38,7 +38,8 @@
   },
   "scripts": {
     "prepare": "husky",
-    "lint:solidity": "solhint \"packages/contracts/contracts/**/*.sol\"",
+    "lint:solidity": "solhint \"packages/contracts/contracts/**/*.sol\" && pnpm lint:solidity:conditionals",
+    "lint:solidity:conditionals": "! rg -n '^[[:space:]]*if \\([^\\n]+\\) (revert|return|emit|[A-Za-z_].*;)' packages/contracts/contracts -g '*.sol'",
     "format:solidity:check": "prettier --check \"packages/contracts/contracts/**/*.sol\"",
     "cf:build": "pnpm --filter @kettigo/landing build",
     "contracts:compile": "npm run compile -w packages/contracts",
@@ -64,7 +65,8 @@
   "lint-staged": {
     "*.sol": [
       "prettier --write",
-      "solhint"
+      "solhint",
+      "pnpm lint:solidity:conditionals"
     ]
   },
   "devDependencies": {

@@ -115,11 +115,15 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
     marketId = id(marketParams_);
 
     IMorphoBlue.MarketParams memory registered = morpho_.idToMarketParams(marketId);
-    if (registered.loanToken != marketParams_.loanToken) revert UnknownMorphoMarket(marketId);
+    if (registered.loanToken != marketParams_.loanToken) {
+      revert UnknownMorphoMarket(marketId);
+    }
   }
 
   modifier onlyPrizePool() {
-    if (msg.sender != address(prizePool)) revert OnlyPrizePool();
+    if (msg.sender != address(prizePool)) {
+      revert OnlyPrizePool();
+    }
     _;
   }
 
@@ -134,7 +138,9 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
     returns (uint256 shares)
   {
     uint256 available = usdc.balanceOf(address(this)) - idlePrincipal;
-    if (assets > available) revert InsufficientAvailablePrincipal(assets, available);
+    if (assets > available) {
+      revert InsufficientAvailablePrincipal(assets, available);
+    }
     (, shares) = _supplyPrincipal(assets);
   }
 
@@ -190,10 +196,14 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
 
     uint256 reserveUsed = fullPrincipalRestore ? idlePrincipal : 0;
     uint256 available = withdrawnAssets + reserveUsed;
-    if (available < assets) revert PrincipalLoss(assets, available);
+    if (available < assets) {
+      revert PrincipalLoss(assets, available);
+    }
 
     suppliedPrincipal = supplied - assets;
-    if (fullPrincipalRestore) idlePrincipal = 0;
+    if (fullPrincipalRestore) {
+      idlePrincipal = 0;
+    }
     _wrapAndSendToPool(assets, false);
 
     uint256 surplusAssets = available - assets;
@@ -219,7 +229,9 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
   {
     morpho.accrueInterest(_marketParams);
     uint256 accrued = accruedYieldAssets();
-    if (accrued == 0) return 0;
+    if (accrued == 0) {
+      return 0;
+    }
 
     harvestedAssets = maxAssets == 0 || maxAssets > accrued ? accrued : maxAssets;
     if (harvestedAssets > type(uint64).max)
@@ -248,7 +260,9 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
   function suppliedAssets() public view returns (uint256) {
     IMorphoBlue.Market memory m = morpho.market(marketId);
     uint256 shares = morpho.position(marketId, address(this)).supplyShares;
-    if (shares == 0) return idlePrincipal;
+    if (shares == 0) {
+      return idlePrincipal;
+    }
     return
       idlePrincipal +
       (shares * (uint256(m.totalSupplyAssets) + VIRTUAL_ASSETS)) /
@@ -287,7 +301,9 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
   }
 
   function _wrapAndSendToPool(uint256 assets, bool asPrizeFunding) private {
-    if (assets > type(uint64).max) revert AmountTooLargeForConfidentialToken(assets);
+    if (assets > type(uint64).max) {
+      revert AmountTooLargeForConfidentialToken(assets);
+    }
 
     usdc.forceApprove(address(confidentialUsdc), assets);
     euint64 wrapped = confidentialUsdc.wrap(address(this), assets);

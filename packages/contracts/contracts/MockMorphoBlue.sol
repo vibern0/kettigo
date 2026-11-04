@@ -61,7 +61,9 @@ contract MockMorphoBlue is IMorphoBlue {
     address onBehalf,
     bytes calldata
   ) external returns (uint256 suppliedAssets, uint256 suppliedShares) {
-    if (shares != 0) revert SharesUnsupported();
+    if (shares != 0) {
+      revert SharesUnsupported();
+    }
 
     accrueInterest(params);
     bytes32 marketId = id(params);
@@ -85,7 +87,9 @@ contract MockMorphoBlue is IMorphoBlue {
     address onBehalf,
     address receiver
   ) external returns (uint256 withdrawnAssets, uint256 withdrawnShares) {
-    if ((assets == 0) == (shares == 0)) revert InconsistentInput();
+    if ((assets == 0) == (shares == 0)) {
+      revert InconsistentInput();
+    }
 
     accrueInterest(params);
     bytes32 marketId = id(params);
@@ -99,7 +103,9 @@ contract MockMorphoBlue is IMorphoBlue {
         ? (withdrawnShares * (uint256(m.totalSupplyAssets) + VIRTUAL_ASSETS)) /
           (uint256(m.totalSupplyShares) + VIRTUAL_SHARES)
         : assets;
-    if (withdrawnShares > p.supplyShares) revert InsufficientShares();
+    if (withdrawnShares > p.supplyShares) {
+      revert InsufficientShares();
+    }
 
     p.supplyShares -= withdrawnShares;
     m.totalSupplyAssets -= withdrawnAssets.toUint128();
@@ -128,7 +134,9 @@ contract MockMorphoBlue is IMorphoBlue {
     uint256 totalAssets,
     uint256 totalShares
   ) private pure returns (uint256) {
-    if (assets == 0 || totalShares == 0) return 0;
+    if (assets == 0 || totalShares == 0) {
+      return 0;
+    }
     return
       (assets * (totalShares + VIRTUAL_SHARES) + totalAssets + VIRTUAL_ASSETS - 1) /
       (totalAssets + VIRTUAL_ASSETS);
