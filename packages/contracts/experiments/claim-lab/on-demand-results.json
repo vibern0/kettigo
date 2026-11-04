@@ -1,0 +1,36 @@
+{
+  "contract": "ReusableMerkleProbe",
+  "backend": "local Hardhat FHE mock",
+  "depth": 32,
+  "passed": true,
+  "pendingDeposit": {
+    "gas": "1067058",
+    "globalHCU": "2844128",
+    "maxHCUDepth": "995000",
+    "calldataBytes": 388
+  },
+  "positiveAdmission": {
+    "gas": "2661938",
+    "globalHCU": "5508000",
+    "maxHCUDepth": "162000",
+    "calldataBytes": 260
+  },
+  "close": {
+    "gas": "392761",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "fullExit": {
+    "gas": "1645609",
+    "globalHCU": "5932032",
+    "maxHCUDepth": "369000",
+    "calldataBytes": 4
+  },
+  "userOnlyCheck": {
+    "gas": "617738",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 3428
+  }
+}

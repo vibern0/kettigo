@@ -1,0 +1,5 @@
+.tools/
+zk/artifacts/
+contracts/generated/
+*.log
+cache/

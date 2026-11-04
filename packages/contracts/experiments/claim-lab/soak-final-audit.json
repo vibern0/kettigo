@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "at": "2026-10-29T16:14:02.439Z",
+  "chainId": 11155111,
+  "pool": "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27",
+  "lastBlock": 12020447,
+  "replayedEvents": 25890,
+  "reconstructedProofs": 382,
+  "verifiedCheckedClaims": 374,
+  "verifiedUntouchedCanaryClaims": 8,
+  "activeCount": 0,
+  "runtimeHashMatches": true,
+  "rpcOnlyReplay": {
+    "status": "blocked",
+    "code": 4444,
+    "message": "pruned history unavailable",
+    "verifiedMissingKnownEventBlocks": [
+      12007448,
+      12007449,
+      12007451,
+      12007452
+    ]
+  },
+  "kind": "independent derived-table rebuild from retained event payloads and onchain flag/root audit; no signing or decryption"
+}

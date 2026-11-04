@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-19",
+  "network": "Sepolia",
+  "chainId": 11155111,
+  "block": 11950533,
+  "executorAddress": "0x92C920834Ec8941d2C77D188936E1f7A6f49c127",
+  "executorVersion": "FHEVMExecutor v0.5.0",
+  "hcuAddress": "0xa10998783c8CF88D886Bc30307e631D6686F0A22",
+  "hcuVersion": "HCULimit v0.3.0",
+  "scope": "Read-only metadata; no deployment, live FHE computation, or limit measurement"
+}

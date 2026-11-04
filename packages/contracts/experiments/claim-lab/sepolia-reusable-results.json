@@ -1,0 +1,180 @@
+{
+  "status": "passed",
+  "transactions": {
+    "deploy": {
+      "hash": "0x3e8b8ed5377407e49132a38c4b306d394723ed30440b7bfa04fce048b5c9c045",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 759,
+      "status": "confirmed",
+      "block": 12007443,
+      "gasUsed": "22002144",
+      "costWei": "2200214400000"
+    },
+    "zero-deposit": {
+      "hash": "0x53414acbc1c63b392ebdb49f63d1a28f779a914a51fde37c9e50f2c08a8af39e",
+      "sender": "0x18B351EE54A51f0e8937Ef592Dc173Dbf4cfa36f",
+      "nonce": 6,
+      "status": "confirmed",
+      "block": 12007445,
+      "gasUsed": "3364646",
+      "costWei": "336464600000"
+    },
+    "zero-admission": {
+      "hash": "0xf4d0852423393c42ad7e509bbc06050c1b92477516ad85b83aee51aa48814c3e",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 760,
+      "status": "confirmed",
+      "block": 12007447,
+      "gasUsed": "691653",
+      "costWei": "69165300000"
+    },
+    "alice-deposit": {
+      "hash": "0xb2731a9aab27092b973374eebf835aa9a1a6fc53c558510e8bddd52ddc5a0815",
+      "sender": "0x18B351EE54A51f0e8937Ef592Dc173Dbf4cfa36f",
+      "nonce": 7,
+      "status": "confirmed",
+      "block": 12007448,
+      "gasUsed": "3286886",
+      "costWei": "328688600000"
+    },
+    "positive-admission": {
+      "hash": "0xdd80daa55749e911f5bda15a1abd010e7f14e37dcffc09175997cd2e67af0404",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 761,
+      "status": "confirmed",
+      "block": 12007449,
+      "gasUsed": "9559698",
+      "costWei": "955969800000"
+    },
+    "prize-funding": {
+      "hash": "0x445928701a6b5cc8706c934a81cca652c8c82bf789d44008422f5893723eceab",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 762,
+      "status": "confirmed",
+      "block": 12007450,
+      "gasUsed": "2310194",
+      "costWei": "231019400000"
+    },
+    "close": {
+      "hash": "0x96d4d53c1bde0526d91107b8b77d60a2661b9a6d293e22fc95db3ef1eb8bfc20",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 763,
+      "status": "confirmed",
+      "block": 12007451,
+      "gasUsed": "1345771",
+      "costWei": "134577100000"
+    },
+    "alice-exit": {
+      "hash": "0x718f9443a55432ad95aabfe9705701544a194fb54c3bf370f0f75971ec395703",
+      "sender": "0x18B351EE54A51f0e8937Ef592Dc173Dbf4cfa36f",
+      "nonce": 8,
+      "status": "confirmed",
+      "block": 12007452,
+      "gasUsed": "3224926",
+      "costWei": "322492600000"
+    },
+    "bob-deposit": {
+      "hash": "0xcde8f36efe6137f4d7b54a3113a8844f681dc98be15d73da700330801a4ffcfa",
+      "sender": "0x39e452AC266c9C869D7068cAcB5C18aF6085DBc1",
+      "nonce": 4,
+      "status": "confirmed",
+      "block": 12007453,
+      "gasUsed": "3482825",
+      "costWei": "348282500000"
+    },
+    "reused-admission": {
+      "hash": "0xd30ff711e6b56393391b900263791cb086d3b121825862bef21ae8f7f3fbef2e",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 764,
+      "status": "confirmed",
+      "block": 12007454,
+      "gasUsed": "3094863",
+      "costWei": "309486300000"
+    },
+    "alice-old-check": {
+      "hash": "0x67a0de9599430c9db4d95d6844f5142f02a177ad892685340102a28103d6e067",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 765,
+      "status": "confirmed",
+      "block": 12007455,
+      "gasUsed": "1775376",
+      "costWei": "177537600000"
+    },
+    "bob-exit": {
+      "hash": "0xc5e472da93f78e8c61c38754666cf29e2886862b8c8d854aae89a79af10a37e2",
+      "sender": "0x39e452AC266c9C869D7068cAcB5C18aF6085DBc1",
+      "nonce": 5,
+      "status": "confirmed",
+      "block": 12007456,
+      "gasUsed": "3226922",
+      "costWei": "322692200000"
+    },
+    "signature-probe-deposit": {
+      "hash": "0xe50472f84aea9e7cf4a8c2f8ed56c3185b5c233ca2c1f2af9daab466c7e78ab6",
+      "sender": "0x39e452AC266c9C869D7068cAcB5C18aF6085DBc1",
+      "nonce": 6,
+      "status": "confirmed",
+      "block": 12007460,
+      "gasUsed": "3286886",
+      "costWei": "328688600000"
+    },
+    "signature-probe-clear": {
+      "hash": "0xee8932b5399469a11cc29476727ba78c40271fbca194a5bb3bf2c7666ab468f7",
+      "sender": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+      "nonce": 766,
+      "status": "confirmed",
+      "block": 12007468,
+      "gasUsed": "585709",
+      "costWei": "58570900000"
+    }
+  },
+  "checks": {
+    "zeroDidNotAllocateSlot": true,
+    "slotReused": true,
+    "userOnlyOldClaimAfterReuseAndRestart": true,
+    "duplicateRejected": true,
+    "otherAwardDecryptionDenied": true,
+    "backingAndPrincipalRoundTrip": true,
+    "redirectRejected": true,
+    "signature-probe-clear-alteredBooleanRejected": "KMSInvalidSigner"
+  },
+  "latencyMs": {
+    "zero-admission": 4465,
+    "positive-admission": 6804,
+    "reused-admission": 6515,
+    "signature-probe-clear": 2262
+  },
+  "chainId": "11155111",
+  "owner": "0xaD4D5cd2Ec5beCdB9608baD4c36F0dBe8b2492Bc",
+  "token": "0x514e9fA654e29e55a8d2529bCC0dfdD20b740f39",
+  "participants": [
+    "0x18B351EE54A51f0e8937Ef592Dc173Dbf4cfa36f",
+    "0x39e452AC266c9C869D7068cAcB5C18aF6085DBc1"
+  ],
+  "feePolicy": {
+    "budgetWei": "100000000000000",
+    "explicitGasPriceWei": "100000"
+  },
+  "pool": "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27",
+  "runtimeHash": "0xe946f09ccf62e0046b11e96237496bb9606c1cea6f78ee1a2025ee1b8bdb2907",
+  "initialBalances": [
+    "999989",
+    "1000000",
+    "1000011"
+  ],
+  "totalFeeWei": "6123849900000",
+  "incidents": [
+    {
+      "code": "ERR_ASSERTION",
+      "message": "Expected KMSInvalidSigner/InvalidKMSSignatures, got 3"
+    },
+    {
+      "code": "ERR_ASSERTION",
+      "message": "Expected KMSInvalidSigner/InvalidKMSSignatures, got 3"
+    },
+    {
+      "code": "ERR_ASSERTION",
+      "message": "Expected KMSInvalidSigner/InvalidKMSSignatures, got 3"
+    }
+  ]
+}

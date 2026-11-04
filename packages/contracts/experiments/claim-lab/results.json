@@ -1,0 +1,173 @@
+{
+  "environment": {
+    "node": "v24.21.0",
+    "platform": "darwin-arm64",
+    "fheExecution": "local Hardhat mock backend",
+    "snark": "real Groth16 proof and Solidity verification; fresh local test setup"
+  },
+  "proofs": [
+    {
+      "name": "range-claim",
+      "publicSignals": 8,
+      "proveAndVerifyMs": 990
+    },
+    {
+      "name": "snapshot-membership",
+      "publicSignals": 73,
+      "proveAndVerifyMs": 4070
+    },
+    {
+      "name": "snapshot-membership",
+      "publicSignals": 73,
+      "proveAndVerifyMs": 4028
+    },
+    {
+      "name": "snapshot-membership",
+      "publicSignals": 73,
+      "proveAndVerifyMs": 4051
+    },
+    {
+      "name": "snapshot-membership",
+      "publicSignals": 73,
+      "proveAndVerifyMs": 4204
+    }
+  ],
+  "rangeCounterexample": {
+    "actualDeposit": "1",
+    "honestDeposit": "100",
+    "forgedRange": [
+      "0",
+      "101"
+    ],
+    "ticket": "0",
+    "stolenPrize": "7",
+    "cryptographicProofVerified": true
+  },
+  "1-deposit": {
+    "gas": "7647775",
+    "globalHCU": "7587128",
+    "maxHCUDepth": "995000",
+    "calldataBytes": 388
+  },
+  "1-close": {
+    "gas": "410545",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "1-withdraw": {
+    "gas": "6079545",
+    "globalHCU": "6151032",
+    "maxHCUDepth": "588000",
+    "calldataBytes": 228
+  },
+  "1-claim-alice": {
+    "gas": "1251465",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 2628
+  },
+  "1-claim-bob": {
+    "gas": "1255634",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 2628
+  },
+  "1-claim-zero": {
+    "gas": "1255670",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 2628
+  },
+  "2-deposit": {
+    "gas": "3283903",
+    "globalHCU": "7587128",
+    "maxHCUDepth": "995000",
+    "calldataBytes": 388
+  },
+  "2-close": {
+    "gas": "393445",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "2-withdraw": {
+    "gas": "1715695",
+    "globalHCU": "6151032",
+    "maxHCUDepth": "588000",
+    "calldataBytes": 228
+  },
+  "2-claim-alice": {
+    "gas": "624317",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 3396
+  },
+  "2-claim-bob": {
+    "gas": "628544",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 3396
+  },
+  "2-claim-zero": {
+    "gas": "628556",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 3396
+  },
+  "scale-deposit-1": {
+    "gas": "3283927",
+    "globalHCU": "7587128",
+    "maxHCUDepth": "995000",
+    "calldataBytes": 388
+  },
+  "scale-close-1": {
+    "gas": "391445",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "scale-deposit-33": {
+    "gas": "2306470",
+    "globalHCU": "7587096",
+    "maxHCUDepth": "995000",
+    "calldataBytes": 388
+  },
+  "scale-close-33": {
+    "gas": "376345",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "scale-deposit-65": {
+    "gas": "2341345",
+    "globalHCU": "7587096",
+    "maxHCUDepth": "995000",
+    "calldataBytes": 388
+  },
+  "scale-close-65": {
+    "gas": "376345",
+    "globalHCU": "2081096",
+    "maxHCUDepth": "1747064",
+    "calldataBytes": 4
+  },
+  "scale-claim-65": {
+    "gas": "626316",
+    "globalHCU": "1288032",
+    "maxHCUDepth": "757000",
+    "calldataBytes": 3396
+  },
+  "scale": {
+    "actualParticipants": "65 plus 1",
+    "totalBeforeAdditionalDeposits": "2145",
+    "treeDepth": 32,
+    "storedNodesBeforeAdditionalAccount": "160",
+    "storedNodesAfterRepeatedDeposit": "161"
+  },
+  "worstPrefix32": {
+    "gas": "1005399",
+    "globalHCU": "6310032",
+    "maxHCUDepth": "1567000",
+    "calldataBytes": 3396
+  }
+}

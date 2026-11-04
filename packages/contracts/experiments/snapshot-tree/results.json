@@ -1,0 +1,352 @@
+{
+  "environment": "Hardhat local mock; not Sepolia measurements",
+  "limits": {
+    "globalHCU": 20000000,
+    "maxHCUDepth": 5000000
+  },
+  "metrics": [
+    {
+      "label": "actual-address-registration",
+      "participants": 32,
+      "gas": 857712,
+      "globalHCU": 1824064,
+      "maxHCUDepth": 581032,
+      "fheEvents": 16
+    },
+    {
+      "label": "actual-address-registration",
+      "participants": 33,
+      "gas": 772066,
+      "globalHCU": 1986064,
+      "maxHCUDepth": 581032,
+      "fheEvents": 17
+    },
+    {
+      "label": "actual-address-registration",
+      "participants": 64,
+      "gas": 971682,
+      "globalHCU": 1986064,
+      "maxHCUDepth": 581032,
+      "fheEvents": 17
+    },
+    {
+      "label": "actual-address-registration",
+      "participants": 65,
+      "gas": 835916,
+      "globalHCU": 2148064,
+      "maxHCUDepth": 581032,
+      "fheEvents": 18
+    },
+    {
+      "label": "encrypted-deposit",
+      "gas": 395511,
+      "globalHCU": 1014032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 11
+    },
+    {
+      "label": "encrypted-withdrawal",
+      "gas": 363033,
+      "globalHCU": 543000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 4
+    },
+    {
+      "label": "materialized-1024-registration",
+      "participants": 1024,
+      "gas": 1427563,
+      "globalHCU": 2634064,
+      "maxHCUDepth": 581032,
+      "fheEvents": 21
+    },
+    {
+      "label": "materialized-1024-close-draw",
+      "participants": 1024,
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "materialized-1024-check-last",
+      "participants": 1024,
+      "gas": 509827,
+      "globalHCU": 2322064,
+      "maxHCUDepth": 1198000,
+      "fheEvents": 18
+    },
+    {
+      "label": "legacy-close-draw",
+      "participants": 2,
+      "outcome": "executed",
+      "gas": 657876,
+      "globalHCU": 3914388,
+      "maxHCUDepth": 2302034,
+      "withinDocumentedLimits": true
+    },
+    {
+      "label": "legacy-close-draw",
+      "participants": 8,
+      "outcome": "executed",
+      "gas": 1895158,
+      "globalHCU": 9764976,
+      "maxHCUDepth": 2596046,
+      "withinDocumentedLimits": true
+    },
+    {
+      "label": "legacy-close-draw",
+      "participants": 16,
+      "outcome": "executed",
+      "gas": 3544939,
+      "globalHCU": 17565760,
+      "maxHCUDepth": 4650032,
+      "withinDocumentedLimits": true
+    },
+    {
+      "label": "legacy-close-draw",
+      "participants": 32,
+      "outcome": "HCU limit revert",
+      "error": "VM Exception while processing transaction: reverted with custom error 'HCUTransactionDepthLimitExceeded()'"
+    },
+    {
+      "label": "tree-encrypted-deposit",
+      "depth": 5,
+      "logicalParticipants": "32",
+      "fixture": "shared-subtree uniform population",
+      "gas": 908929,
+      "globalHCU": 1824032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 16
+    },
+    {
+      "label": "tree-close-draw",
+      "depth": 5,
+      "logicalParticipants": "32",
+      "fixture": "shared-subtree uniform population",
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "tree-check-last-index",
+      "depth": 5,
+      "logicalParticipants": "32",
+      "fixture": "shared-subtree uniform population",
+      "gas": 393123,
+      "globalHCU": 1512064,
+      "maxHCUDepth": 1036000,
+      "fheEvents": 13
+    },
+    {
+      "label": "tree-encrypted-withdrawal",
+      "depth": 5,
+      "logicalParticipants": "32",
+      "fixture": "shared-subtree uniform population",
+      "gas": 820522,
+      "globalHCU": 1191000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 8
+    },
+    {
+      "label": "tree-encrypted-deposit",
+      "depth": 10,
+      "logicalParticipants": "1024",
+      "fixture": "shared-subtree uniform population",
+      "gas": 1481258,
+      "globalHCU": 2634032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 21
+    },
+    {
+      "label": "tree-close-draw",
+      "depth": 10,
+      "logicalParticipants": "1024",
+      "fixture": "shared-subtree uniform population",
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "tree-check-last-index",
+      "depth": 10,
+      "logicalParticipants": "1024",
+      "fixture": "shared-subtree uniform population",
+      "gas": 509827,
+      "globalHCU": 2322064,
+      "maxHCUDepth": 1198000,
+      "fheEvents": 18
+    },
+    {
+      "label": "tree-encrypted-withdrawal",
+      "depth": 10,
+      "logicalParticipants": "1024",
+      "fixture": "shared-subtree uniform population",
+      "gas": 1392332,
+      "globalHCU": 2001000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 13
+    },
+    {
+      "label": "tree-encrypted-deposit",
+      "depth": 14,
+      "logicalParticipants": "16384",
+      "fixture": "shared-subtree uniform population",
+      "gas": 1939134,
+      "globalHCU": 3282032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 25
+    },
+    {
+      "label": "tree-close-draw",
+      "depth": 14,
+      "logicalParticipants": "16384",
+      "fixture": "shared-subtree uniform population",
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "tree-check-last-index",
+      "depth": 14,
+      "logicalParticipants": "16384",
+      "fixture": "shared-subtree uniform population",
+      "gas": 602784,
+      "globalHCU": 2970064,
+      "maxHCUDepth": 1198000,
+      "fheEvents": 22
+    },
+    {
+      "label": "tree-encrypted-withdrawal",
+      "depth": 14,
+      "logicalParticipants": "16384",
+      "fixture": "shared-subtree uniform population",
+      "gas": 1849771,
+      "globalHCU": 2649000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 17
+    },
+    {
+      "label": "tree-encrypted-deposit",
+      "depth": 20,
+      "logicalParticipants": "1048576",
+      "fixture": "shared-subtree uniform population",
+      "gas": 2625966,
+      "globalHCU": 4254032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 31
+    },
+    {
+      "label": "tree-close-draw",
+      "depth": 20,
+      "logicalParticipants": "1048576",
+      "fixture": "shared-subtree uniform population",
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "tree-check-last-index",
+      "depth": 20,
+      "logicalParticipants": "1048576",
+      "fixture": "shared-subtree uniform population",
+      "gas": 743174,
+      "globalHCU": 3942064,
+      "maxHCUDepth": 1360000,
+      "fheEvents": 28
+    },
+    {
+      "label": "tree-encrypted-withdrawal",
+      "depth": 20,
+      "logicalParticipants": "1048576",
+      "fixture": "shared-subtree uniform population",
+      "gas": 2535966,
+      "globalHCU": 3621000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 23
+    },
+    {
+      "label": "tree-encrypted-deposit",
+      "depth": 24,
+      "logicalParticipants": "16777216",
+      "fixture": "shared-subtree uniform population",
+      "gas": 3083838,
+      "globalHCU": 4902032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 35
+    },
+    {
+      "label": "tree-close-draw",
+      "depth": 24,
+      "logicalParticipants": "16777216",
+      "fixture": "shared-subtree uniform population",
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "tree-check-last-index",
+      "depth": 24,
+      "logicalParticipants": "16777216",
+      "fixture": "shared-subtree uniform population",
+      "gas": 836135,
+      "globalHCU": 4590064,
+      "maxHCUDepth": 1360000,
+      "fheEvents": 32
+    },
+    {
+      "label": "tree-encrypted-withdrawal",
+      "depth": 24,
+      "logicalParticipants": "16777216",
+      "fixture": "shared-subtree uniform population",
+      "gas": 2993425,
+      "globalHCU": 4269000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 27
+    },
+    {
+      "label": "tree-encrypted-deposit",
+      "depth": 32,
+      "logicalParticipants": "4294967296",
+      "fixture": "shared-subtree uniform population",
+      "gas": 3999628,
+      "globalHCU": 6198032,
+      "maxHCUDepth": 581000,
+      "fheEvents": 43
+    },
+    {
+      "label": "tree-close-draw",
+      "depth": 32,
+      "logicalParticipants": "4294967296",
+      "fixture": "shared-subtree uniform population",
+      "gas": 394834,
+      "globalHCU": 2081128,
+      "maxHCUDepth": 1747064,
+      "fheEvents": 10
+    },
+    {
+      "label": "tree-check-last-index",
+      "depth": 32,
+      "logicalParticipants": "4294967296",
+      "fixture": "shared-subtree uniform population",
+      "gas": 1022414,
+      "globalHCU": 5886064,
+      "maxHCUDepth": 1360000,
+      "fheEvents": 40
+    },
+    {
+      "label": "tree-encrypted-withdrawal",
+      "depth": 32,
+      "logicalParticipants": "4294967296",
+      "fixture": "shared-subtree uniform population",
+      "gas": 3908353,
+      "globalHCU": 5565000,
+      "maxHCUDepth": 381000,
+      "fheEvents": 35
+    }
+  ]
+}
