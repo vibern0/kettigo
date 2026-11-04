@@ -49,8 +49,10 @@ const before = "(block_number<? OR (block_number=? AND log_index<?))";
 export class D1Archive {
   constructor(private readonly db: D1Database) {}
 
-  async initialize(namespace: Namespace): Promise<void> {
+  /** The deployment-parent anchor is persisted so first ingestion accepts the real chain parent. */
+  async initialize(namespace: Namespace, deploymentParentHash = ZERO_HASH): Promise<void> {
     const n = validateNamespace(namespace);
+    const anchor = hash32(deploymentParentHash, "deployment parent hash");
     await this.db
       .prepare("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,?,?,?)")
       .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock)
@@ -71,8 +73,16 @@ export class D1Archive {
       throw new Error("namespace mismatch");
     await this.db
       .prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
-      .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, ZERO_HASH, 0, null, now())
+      .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, anchor, 0, null, now())
       .run();
+    // A rollback to deployment uses this durable anchor instead of guessing zero.
+    await this.db
+      .prepare("INSERT OR IGNORE INTO canonical_blocks VALUES(?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.deploymentBlock - 1, anchor, ZERO_HASH)
+      .run();
+    const initial = await this.status(n);
+    if (initial.nextBlock === n.deploymentBlock && initial.lastFinalizedHash !== anchor)
+      throw new Error("deployment parent anchor mismatch");
   }
 
   async status(n: Namespace): Promise<Checkpoint> {
@@ -90,6 +100,40 @@ export class D1Archive {
       revision: Number(row.revision),
       disabledReason: row.disabled_reason ? String(row.disabled_reason) : undefined,
     };
+  }
+
+  /** Canonical history is deliberately exposed to ingestion only; proof reads stay temporal. */
+  async canonicalBlock(n: Namespace, number: number): Promise<BlockHeader | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT block_number,block_hash,parent_hash FROM canonical_blocks WHERE chain_id=? AND pool=? AND block_number=?",
+      )
+      .bind(n.chainId, n.pool, number)
+      .first<Record<string, unknown>>();
+    return row
+      ? {
+          number: Number(row.block_number),
+          hash: String(row.block_hash),
+          parentHash: String(row.parent_hash),
+        }
+      : null;
+  }
+
+  async disable(n: Namespace, expected: Checkpoint, reason: string): Promise<Checkpoint> {
+    if (!reason || reason.length > 160) throw new Error("invalid disabled reason");
+    try {
+      await this.db.batch([
+        this.commit(n, expected, "disable", expected.nextBlock, expected.lastFinalizedBlock),
+        this.db
+          .prepare(
+            "UPDATE ingestion_state SET disabled_reason=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?",
+          )
+          .bind(reason, now(), n.chainId, n.pool, expected.revision),
+      ]);
+    } catch (error) {
+      this.conflict(error);
+    }
+    return this.status(n);
   }
 
   async ingest(
@@ -157,6 +201,9 @@ export class D1Archive {
     )) {
       if (log.blockNumber < blocks[0].number || log.blockNumber > blocks.at(-1)!.number)
         throw new Error("log outside header range");
+      const header = blocks[log.blockNumber - blocks[0].number];
+      if (!header || hash32(log.blockHash, "log block hash") !== hash32(header.hash))
+        throw new Error("log block hash mismatch");
       statements.push(
         this.db
           .prepare("INSERT INTO event_logs VALUES(?,?,?,?,?)")
@@ -251,15 +298,12 @@ export class D1Archive {
   async rollbackFrom(n: Namespace, expected: Checkpoint, block: number): Promise<Checkpoint> {
     if (!Number.isSafeInteger(block) || block < n.deploymentBlock || block > expected.nextBlock)
       throw new Error("invalid rollback block");
-    const predecessor =
-      block === n.deploymentBlock
-        ? ZERO_HASH
-        : await this.db
-            .prepare(
-              "SELECT block_hash FROM canonical_blocks WHERE chain_id=? AND pool=? AND block_number=?",
-            )
-            .bind(n.chainId, n.pool, block - 1)
-            .first<Record<string, unknown>>();
+    const predecessor = await this.db
+      .prepare(
+        "SELECT block_hash FROM canonical_blocks WHERE chain_id=? AND pool=? AND block_number=?",
+      )
+      .bind(n.chainId, n.pool, block - 1)
+      .first<Record<string, unknown>>();
     if (!predecessor) throw new Error("missing rollback predecessor");
     const priorHash =
       typeof predecessor === "string" ? predecessor : String(predecessor.block_hash);

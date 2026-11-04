@@ -1,4 +1,4 @@
-import { decodeEventLog, type Log } from "viem";
+import { decodeEventLog, decodeFunctionResult, encodeFunctionData, type Log } from "viem";
 import { confidentialPrizePoolAbi } from "@kettigo/protocol";
 import { checksum, hash32, type ArchiveLog, type Namespace } from "./domain.ts";
 import type { RpcSource } from "./ingest.ts";
@@ -22,6 +22,9 @@ export class EthereumRpc implements RpcSource {
   }
   private n(v: string | number | bigint) {
     return Number(BigInt(v));
+  }
+  async chainId() {
+    return BigInt((await this.call("eth_chainId")) as string).toString();
   }
   async finalizedHead() {
     const latest = this.n((await this.call("eth_blockNumber")) as string);
@@ -84,6 +87,23 @@ export class EthereumRpc implements RpcSource {
       .map((x) => this.decode(x))
       .filter((x): x is ArchiveLog => x !== null);
   }
+  async drawSnapshot(drawId: string, block: number) {
+    const data = encodeFunctionData({
+      abi: confidentialPrizePoolAbi,
+      functionName: "draws",
+      args: [BigInt(drawId)],
+    });
+    const result = (await this.call("eth_call", [
+      { to: checksum(this.namespace.pool), data },
+      `0x${block.toString(16)}`,
+    ])) as `0x${string}`;
+    const draw = decodeFunctionResult({
+      abi: confidentialPrizePoolAbi,
+      functionName: "draws",
+      data: result,
+    });
+    return { rootHash: hash32(draw[0]), rootSum: hash32(draw[1]), closeBlock: this.n(draw[6]) };
+  }
 }
 export class FallbackRpc implements RpcSource {
   constructor(
@@ -100,6 +120,9 @@ export class FallbackRpc implements RpcSource {
   finalizedHead() {
     return this.use((x) => x.finalizedHead());
   }
+  chainId() {
+    return this.use((x) => x.chainId());
+  }
   block(n: number) {
     return this.use((x) => x.block(n));
   }
@@ -108,5 +131,8 @@ export class FallbackRpc implements RpcSource {
   }
   receiptLogs(n: number) {
     return this.use((x) => x.receiptLogs(n));
+  }
+  drawSnapshot(drawId: string, block: number) {
+    return this.use((x) => x.drawSnapshot(drawId, block));
   }
 }

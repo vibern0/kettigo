@@ -10,7 +10,6 @@ export type Env = {
   ZERO_HANDLE: string;
   EMPTY_HASHES_JSON: string;
   DEPLOYMENT_BLOCK: string;
-  RPC_URL?: string;
   PRIMARY_RPC_URL?: string;
   HISTORICAL_RPC_URL?: string;
   CONFIRMATIONS?: string;
@@ -48,13 +47,15 @@ function allow(request: Request) {
   return true;
 }
 async function onchainRoot(e: Env, drawId: string, block: number) {
-  if (!e.RPC_URL) throw new Error("RPC unavailable");
+  // Scheduler and proof verification share this explicit primary/historical endpoint contract.
+  const rpcUrl = e.PRIMARY_RPC_URL ?? e.HISTORICAL_RPC_URL;
+  if (!rpcUrl) throw new Error("RPC unavailable");
   const data = encodeFunctionData({
     abi: confidentialPrizePoolAbi,
     functionName: "draws",
     args: [BigInt(drawId)],
   });
-  const r = await fetch(e.RPC_URL, {
+  const r = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
