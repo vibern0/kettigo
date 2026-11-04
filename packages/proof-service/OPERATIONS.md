@@ -37,12 +37,13 @@ outside this repository, and pin its SHA-256 and complete namespace manifest
 in a separate trusted location:
 
 ```sh
-pnpm --filter @kettigo/proof-service exec wrangler d1 export kettigo-proof-v2-sepolia --remote --output retained/proof.sql
+cd packages/proof-service
+pnpm exec wrangler d1 export kettigo-proof-v2-sepolia --remote --output retained/proof.sql
 node --experimental-transform-types tools/replay-retained.mts seal-sql retained/proof.sql retained/proof.sql.manifest.json retained/namespace.json
 node --experimental-transform-types tools/replay-retained.mts restore-sql retained/proof.sql retained/proof.sql.manifest.json retained/imported.sqlite retained/namespace.json
 node --experimental-transform-types tools/replay-retained.mts export retained/imported.sqlite retained/canonical.json retained/canonical.manifest.json 11155111 0xCHECKSUM_POOL
 node --experimental-transform-types tools/replay-retained.mts restore-canonical retained/canonical.json retained/canonical.manifest.json retained/replayed.sqlite retained/namespace.json
-pnpm --filter @kettigo/proof-service test:restore
+pnpm test:restore
 ```
 
 `retained/namespace.json` is the separately retained release namespace

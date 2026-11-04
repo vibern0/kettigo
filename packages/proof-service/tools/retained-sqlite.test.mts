@@ -52,11 +52,11 @@ async function sourceArchive(path: string) {
       blockHash: second.hash,
       logIndex: 2,
       name: "SlotAssigned" as const,
-      args: { account, index: "1", generation: "2" },
+      args: { account, index: "1", generation: "1" },
     },
   ];
   let left = { hash: leafHash(otherAccount, "2", zero), sum: zero };
-  let right = { hash: leafHash(account, "2", zero), sum: zero };
+  let right = { hash: leafHash(account, "1", zero), sum: zero };
   logs.push({
     blockNumber: 2,
     blockHash: second.hash,
@@ -215,6 +215,7 @@ test("CLI imports a sealed SQL snapshot, maps D1 namespace columns, and replays 
       ["--experimental-transform-types", "tools/replay-retained.mts", ...args],
       { cwd: process.cwd(), stdio: "pipe" },
     );
+  run("seal-sql", sql, sqlManifest, namespace);
   run("restore-sql", sql, sqlManifest, imported, namespace);
   const canonical = join(dir, "canonical.json"),
     manifest = join(dir, "canonical.manifest.json"),
@@ -224,6 +225,6 @@ test("CLI imports a sealed SQL snapshot, maps D1 namespace columns, and replays 
   const restored = new D1Archive(new SqliteD1(new DatabaseSync(replayed)));
   const proof = await restored.proof(fixture.namespace, "2", account);
   assert.ok(proof);
-  assert.equal(proof.generation, "2");
+  assert.equal(proof.generation, "1");
   assert.equal(proof.siblingHashes.length, 32);
 });

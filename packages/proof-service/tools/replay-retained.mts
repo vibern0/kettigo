@@ -126,6 +126,33 @@ function checkpointInfo(row: Record<string, unknown>) {
     throw new Error("invalid checkpoint");
   return value;
 }
+function validateStoredCheckpoint(db: DatabaseSync, n: Namespace) {
+  const state = db
+    .prepare("SELECT * FROM ingestion_state WHERE chain_id=? AND pool=?")
+    .get(n.chainId, n.pool) as Record<string, unknown> | undefined;
+  const blocks = db
+    .prepare(
+      "SELECT block_number,block_hash,parent_hash FROM canonical_blocks WHERE chain_id=? AND pool=? ORDER BY block_number",
+    )
+    .all(n.chainId, n.pool) as Record<string, unknown>[];
+  if (!state || blocks.length < 2) throw new Error("incomplete archive");
+  const checkpoint = checkpointInfo(state);
+  for (let i = 1; i < blocks.length; i++) {
+    if (
+      Number(blocks[i].block_number) !== Number(blocks[i - 1].block_number) + 1 ||
+      hash32(blocks[i].parent_hash) !== hash32(blocks[i - 1].block_hash)
+    )
+      throw new Error("source canonical continuity mismatch");
+  }
+  const final = blocks.at(-1)!;
+  if (
+    checkpoint.nextBlock !== Number(final.block_number) + 1 ||
+    checkpoint.lastFinalizedBlock !== Number(final.block_number) ||
+    checkpoint.lastFinalizedHash !== hash32(final.block_hash)
+  )
+    throw new Error("source checkpoint range mismatch");
+  return checkpoint;
+}
 
 export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
   const namespace = validateNamespace(supplied);
@@ -136,16 +163,13 @@ export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
       .get(namespace.chainId, namespace.pool) as Record<string, unknown> | undefined;
     if (!storedNamespace || !sameNamespace(namespaceFromRow(storedNamespace), namespace))
       throw new Error("source namespace mismatch");
-    const state = db
-      .prepare("SELECT * FROM ingestion_state WHERE chain_id=? AND pool=?")
-      .get(namespace.chainId, namespace.pool) as Record<string, unknown> | undefined;
     const rows = db
       .prepare(
         "SELECT block_number,block_hash,parent_hash FROM canonical_blocks WHERE chain_id=? AND pool=? ORDER BY block_number",
       )
       .all(namespace.chainId, namespace.pool) as Record<string, unknown>[];
-    if (!state || rows.length < 2) throw new Error("incomplete archive");
-    const checkpoint = checkpointInfo(state);
+    if (rows.length < 2) throw new Error("incomplete archive");
+    const checkpoint = validateStoredCheckpoint(db, namespace);
     const anchor = rows.find((r) => Number(r.block_number) === namespace.deploymentBlock - 1);
     const headers = rows
       .filter((r) => Number(r.block_number) >= namespace.deploymentBlock)
@@ -173,12 +197,6 @@ export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
         ...payload,
       };
     });
-    if (
-      checkpoint.nextBlock !== headers.at(-1)!.number + 1 ||
-      checkpoint.lastFinalizedBlock !== headers.at(-1)!.number ||
-      checkpoint.lastFinalizedHash !== hash32(headers.at(-1)!.hash)
-    )
-      throw new Error("source checkpoint range mismatch");
     const payload = {
       namespace,
       deploymentParentHash: String(anchor.block_hash),
@@ -365,6 +383,7 @@ export function writeSqlSnapshot(
       .get(n.chainId, n.pool) as Record<string, unknown> | undefined;
     if (!stored || !sameNamespace(namespaceFromRow(stored), n))
       throw new Error("source namespace mismatch");
+    validateStoredCheckpoint(db, n);
     const lines = [
       "PRAGMA foreign_keys=ON;",
       readFileSync(new URL("0001_proof_archive.sql", migrations), "utf8"),
@@ -433,6 +452,7 @@ export async function restoreSqlSnapshot(
       Number(row.deployment_block) !== n.deploymentBlock
     )
       throw new Error("invalid SQL snapshot");
+    validateStoredCheckpoint(db, n);
     await verify(db, n);
     db.close();
     db = undefined;
