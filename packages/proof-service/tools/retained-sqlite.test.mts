@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { D1Archive } from "../src/archive.ts";
+import { branchHash, leafHash } from "../src/domain.ts";
 import { account, depth32Fixture, otherAccount, zero } from "../tests/fixtures.ts";
 import {
   SqliteD1,
@@ -28,29 +30,83 @@ async function sourceArchive(path: string) {
   await archive.ingest(fixture.namespace, await archive.status(fixture.namespace), fixture.logs, [
     fixture.block,
   ]);
-  // Later reuse must not alter the historical owner/generation at draw 1.
+  // Full exit/reuse/rejoin with real node transitions and a second draw.
   const second = { number: 2, hash: hex(2), parentHash: fixture.block.hash };
-  await archive.ingest(
-    fixture.namespace,
-    await archive.status(fixture.namespace),
-    [
-      {
-        blockNumber: 2,
-        blockHash: second.hash,
-        logIndex: 0,
-        name: "SlotReleased",
-        args: { account, index: "0", generation: "1" },
-      },
-      {
-        blockNumber: 2,
-        blockHash: second.hash,
-        logIndex: 1,
-        name: "SlotAssigned",
-        args: { account: otherAccount, index: "0", generation: "2" },
-      },
-    ],
-    [second],
-  );
+  const logs = [
+    {
+      blockNumber: 2,
+      blockHash: second.hash,
+      logIndex: 0,
+      name: "SlotReleased" as const,
+      args: { account, index: "0", generation: "1" },
+    },
+    {
+      blockNumber: 2,
+      blockHash: second.hash,
+      logIndex: 1,
+      name: "SlotAssigned" as const,
+      args: { account: otherAccount, index: "0", generation: "2" },
+    },
+    {
+      blockNumber: 2,
+      blockHash: second.hash,
+      logIndex: 2,
+      name: "SlotAssigned" as const,
+      args: { account, index: "1", generation: "2" },
+    },
+  ];
+  let left = { hash: leafHash(otherAccount, "2", zero), sum: zero };
+  let right = { hash: leafHash(account, "2", zero), sum: zero };
+  logs.push({
+    blockNumber: 2,
+    blockHash: second.hash,
+    logIndex: 3,
+    name: "NodeUpdated",
+    args: { level: "0", index: "0", hash: left.hash, sum: zero },
+  });
+  logs.push({
+    blockNumber: 2,
+    blockHash: second.hash,
+    logIndex: 4,
+    name: "NodeUpdated",
+    args: { level: "0", index: "1", hash: right.hash, sum: zero },
+  });
+  let parent = { hash: branchHash(left, right), sum: zero };
+  logs.push({
+    blockNumber: 2,
+    blockHash: second.hash,
+    logIndex: 5,
+    name: "NodeUpdated",
+    args: { level: "1", index: "0", hash: parent.hash, sum: zero },
+  });
+  for (let level = 1; level < 32; level += 1) {
+    parent = {
+      hash: branchHash(parent, { hash: fixture.namespace.emptyHashes[level], sum: zero }),
+      sum: zero,
+    };
+    logs.push({
+      blockNumber: 2,
+      blockHash: second.hash,
+      logIndex: level + 5,
+      name: "NodeUpdated",
+      args: { level: String(level + 1), index: "0", hash: parent.hash, sum: zero },
+    });
+  }
+  logs.push({
+    blockNumber: 2,
+    blockHash: second.hash,
+    logIndex: 37,
+    name: "DrawSnapshotClosed",
+    args: {
+      drawId: "2",
+      rootHash: parent.hash,
+      rootSum: zero,
+      ticket: zero,
+      upperBound: "2",
+      closeBlockNumber: "2",
+    },
+  });
+  await archive.ingest(fixture.namespace, await archive.status(fixture.namespace), logs, [second]);
   return { db, archive, fixture };
 }
 
@@ -58,9 +114,15 @@ test("canonical and trusted SQL restores retain the exact depth-32 historical pr
   const dir = mkdtempSync(join(tmpdir(), "kettigo-proof-"));
   const sourcePath = join(dir, "source.sqlite");
   const { db, archive, fixture } = await sourceArchive(sourcePath);
-  const original = await archive.proof(fixture.namespace, "1", account);
-  assert.ok(original);
-  assert.equal(original.siblingHashes.length, 32);
+  const originals = [
+    await archive.proof(fixture.namespace, "1", account),
+    await archive.proof(fixture.namespace, "2", account),
+    await archive.proof(fixture.namespace, "2", otherAccount),
+  ];
+  for (const proof of originals) {
+    assert.ok(proof);
+    assert.equal(proof.siblingHashes.length, 32);
+  }
   const exported = exportArchive(db, fixture.namespace);
   const canonical = join(dir, "canonical.json"),
     trusted = join(dir, "canonical.manifest.json");
@@ -74,19 +136,22 @@ test("canonical and trusted SQL restores retain the exact depth-32 historical pr
   const canonicalTarget = join(dir, "canonical.sqlite");
   await restoreCanonical(canonical, trusted, canonicalTarget, fixture.namespace);
   const canonicalDb = new DatabaseSync(canonicalTarget);
-  const canonicalProof = await new D1Archive(new SqliteD1(canonicalDb)).proof(
-    fixture.namespace,
-    "1",
-    account,
+  const canonicalArchive = new D1Archive(new SqliteD1(canonicalDb));
+  assert.deepEqual(await canonicalArchive.proof(fixture.namespace, "1", account), originals[0]);
+  assert.deepEqual(await canonicalArchive.proof(fixture.namespace, "2", account), originals[1]);
+  assert.deepEqual(
+    await canonicalArchive.proof(fixture.namespace, "2", otherAccount),
+    originals[2],
   );
-  assert.deepEqual(canonicalProof, original);
   canonicalDb.close();
 
   const sqlTarget = join(dir, "sql.sqlite");
   await restoreSqlSnapshot(sql, sqlManifest, sqlTarget, fixture.namespace);
   const sqlDb = new DatabaseSync(sqlTarget);
-  const sqlProof = await new D1Archive(new SqliteD1(sqlDb)).proof(fixture.namespace, "1", account);
-  assert.deepEqual(sqlProof, original);
+  const sqlArchive = new D1Archive(new SqliteD1(sqlDb));
+  assert.deepEqual(await sqlArchive.proof(fixture.namespace, "1", account), originals[0]);
+  assert.deepEqual(await sqlArchive.proof(fixture.namespace, "2", account), originals[1]);
+  assert.deepEqual(await sqlArchive.proof(fixture.namespace, "2", otherAccount), originals[2]);
   sqlDb.close();
 });
 
@@ -112,4 +177,53 @@ test("restore rejects tampering before publishing a target and preserves source"
   );
   assert.equal(existsSync(target), false);
   assert.equal(createHash("sha256").update(readFileSync(source)).digest("hex"), before);
+});
+
+test("restore never replaces an existing target", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kettigo-proof-target-"));
+  const source = join(dir, "source.sqlite");
+  const { db, fixture } = await sourceArchive(source);
+  const retained = exportArchive(db, fixture.namespace);
+  db.close();
+  const exportPath = join(dir, "canonical.json"),
+    manifest = join(dir, "manifest.json"),
+    target = join(dir, "target.sqlite");
+  writeFileSync(exportPath, JSON.stringify(retained));
+  writeFileSync(manifest, JSON.stringify(retained.manifest));
+  writeFileSync(target, "do-not-replace");
+  await assert.rejects(
+    () => restoreCanonical(exportPath, manifest, target, fixture.namespace),
+    /already exists/,
+  );
+  assert.equal(readFileSync(target, "utf8"), "do-not-replace");
+});
+
+test("CLI imports a sealed SQL snapshot, maps D1 namespace columns, and replays canonical history", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kettigo-proof-cli-"));
+  const source = join(dir, "source.sqlite");
+  const { db, fixture } = await sourceArchive(source);
+  db.close();
+  const namespace = join(dir, "namespace.json");
+  writeFileSync(namespace, JSON.stringify(fixture.namespace));
+  const sql = join(dir, "retained.sql"),
+    sqlManifest = join(dir, "trusted.sql.json"),
+    imported = join(dir, "imported.sqlite");
+  writeSqlSnapshot(source, sql, sqlManifest, fixture.namespace);
+  const run = (...args: string[]) =>
+    execFileSync(
+      process.execPath,
+      ["--experimental-transform-types", "tools/replay-retained.mts", ...args],
+      { cwd: process.cwd(), stdio: "pipe" },
+    );
+  run("restore-sql", sql, sqlManifest, imported, namespace);
+  const canonical = join(dir, "canonical.json"),
+    manifest = join(dir, "canonical.manifest.json"),
+    replayed = join(dir, "replayed.sqlite");
+  run("export", imported, canonical, manifest, fixture.namespace.chainId, fixture.namespace.pool);
+  run("restore-canonical", canonical, manifest, replayed, namespace);
+  const restored = new D1Archive(new SqliteD1(new DatabaseSync(replayed)));
+  const proof = await restored.proof(fixture.namespace, "2", account);
+  assert.ok(proof);
+  assert.equal(proof.generation, "2");
+  assert.equal(proof.siblingHashes.length, 32);
 });

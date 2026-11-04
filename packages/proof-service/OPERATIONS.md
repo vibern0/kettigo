@@ -38,10 +38,18 @@ in a separate trusted location:
 
 ```sh
 pnpm --filter @kettigo/proof-service exec wrangler d1 export kettigo-proof-v2-sepolia --remote --output retained/proof.sql
-sha256sum retained/proof.sql
-node --experimental-transform-types tools/replay-retained.mts export retained/proof.sqlite retained/canonical.json retained/canonical.manifest.json 11155111 0xCHECKSUM_POOL
+node --experimental-transform-types tools/replay-retained.mts seal-sql retained/proof.sql retained/proof.sql.manifest.json retained/namespace.json
+node --experimental-transform-types tools/replay-retained.mts restore-sql retained/proof.sql retained/proof.sql.manifest.json retained/imported.sqlite retained/namespace.json
+node --experimental-transform-types tools/replay-retained.mts export retained/imported.sqlite retained/canonical.json retained/canonical.manifest.json 11155111 0xCHECKSUM_POOL
+node --experimental-transform-types tools/replay-retained.mts restore-canonical retained/canonical.json retained/canonical.manifest.json retained/replayed.sqlite retained/namespace.json
 pnpm --filter @kettigo/proof-service test:restore
 ```
+
+`retained/namespace.json` is the separately retained release namespace
+configuration (checksum pool address, depth, zero handle, all empty hashes and
+deployment block). It is not generated from a backup payload. Each restore
+target must be a new pathname; publication fails atomically if it already
+exists.
 
 The SQL file is restored only after its separately retained digest/namespace
 manifest is verified; the canonical export is replayed only after its separate

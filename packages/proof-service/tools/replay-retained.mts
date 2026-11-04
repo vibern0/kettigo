@@ -1,6 +1,15 @@
 /** Node 24-only archive recovery tool. This module is never bundled into the Worker. */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  linkSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { D1Archive, type ArchiveDatabase, type BlockHeader } from "../src/archive.ts";
 import {
@@ -15,6 +24,15 @@ const migrations = new URL("../migrations/", import.meta.url);
 const VERSION = 2;
 const digest = (v: string | Uint8Array) => createHash("sha256").update(v).digest("hex");
 const json = (v: unknown) => JSON.stringify(v);
+const stable = (v: unknown): string =>
+  Array.isArray(v)
+    ? `[${v.map(stable).join(",")}]`
+    : v && typeof v === "object"
+      ? `{${Object.keys(v as Record<string, unknown>)
+          .sort()
+          .map((key) => `${JSON.stringify(key)}:${stable((v as Record<string, unknown>)[key])}`)
+          .join(",")}}`
+      : JSON.stringify(v);
 const tables = [
   "namespaces",
   "canonical_blocks",
@@ -62,6 +80,7 @@ export class SqliteD1 implements ArchiveDatabase {
 
 type Manifest = {
   version: number;
+  exportedAt?: string;
   sha256: string;
   namespace: Namespace;
   headers: number;
@@ -81,13 +100,43 @@ type Retained = {
   };
 };
 const sameNamespace = (a: Namespace, b: Namespace) =>
-  json(validateNamespace(a)) === json(validateNamespace(b));
+  stable(validateNamespace(a)) === stable(validateNamespace(b));
+
+function namespaceFromRow(row: Record<string, unknown>): Namespace {
+  return validateNamespace({
+    chainId: String(row.chain_id),
+    pool: checksum(String(row.pool)),
+    depth: Number(row.depth),
+    zero: String(row.zero_handle),
+    emptyHashes: JSON.parse(String(row.empty_hashes_json)),
+    deploymentBlock: Number(row.deployment_block),
+  });
+}
+function checkpointInfo(row: Record<string, unknown>) {
+  const value = {
+    nextBlock: Number(row.nextBlock ?? row.next_block),
+    lastFinalizedBlock: Number(row.lastFinalizedBlock ?? row.last_finalized_block),
+    lastFinalizedHash: hash32(row.lastFinalizedHash ?? row.last_finalized_hash),
+    disabledReason:
+      (row.disabledReason ?? row.disabled_reason) == null
+        ? null
+        : String(row.disabledReason ?? row.disabled_reason),
+  };
+  if (!Number.isSafeInteger(value.nextBlock) || !Number.isSafeInteger(value.lastFinalizedBlock))
+    throw new Error("invalid checkpoint");
+  return value;
+}
 
 export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
   const namespace = validateNamespace(supplied);
   db.exec("BEGIN");
   try {
-    const checkpoint = db
+    const storedNamespace = db
+      .prepare("SELECT * FROM namespaces WHERE chain_id=? AND pool=?")
+      .get(namespace.chainId, namespace.pool) as Record<string, unknown> | undefined;
+    if (!storedNamespace || !sameNamespace(namespaceFromRow(storedNamespace), namespace))
+      throw new Error("source namespace mismatch");
+    const state = db
       .prepare("SELECT * FROM ingestion_state WHERE chain_id=? AND pool=?")
       .get(namespace.chainId, namespace.pool) as Record<string, unknown> | undefined;
     const rows = db
@@ -95,7 +144,8 @@ export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
         "SELECT block_number,block_hash,parent_hash FROM canonical_blocks WHERE chain_id=? AND pool=? ORDER BY block_number",
       )
       .all(namespace.chainId, namespace.pool) as Record<string, unknown>[];
-    if (!checkpoint || rows.length < 2) throw new Error("incomplete archive");
+    if (!state || rows.length < 2) throw new Error("incomplete archive");
+    const checkpoint = checkpointInfo(state);
     const anchor = rows.find((r) => Number(r.block_number) === namespace.deploymentBlock - 1);
     const headers = rows
       .filter((r) => Number(r.block_number) >= namespace.deploymentBlock)
@@ -123,6 +173,12 @@ export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
         ...payload,
       };
     });
+    if (
+      checkpoint.nextBlock !== headers.at(-1)!.number + 1 ||
+      checkpoint.lastFinalizedBlock !== headers.at(-1)!.number ||
+      checkpoint.lastFinalizedHash !== hash32(headers.at(-1)!.hash)
+    )
+      throw new Error("source checkpoint range mismatch");
     const payload = {
       namespace,
       deploymentParentHash: String(anchor.block_hash),
@@ -132,6 +188,7 @@ export function exportArchive(db: DatabaseSync, supplied: Namespace): Retained {
     };
     const manifest = {
       version: VERSION,
+      exportedAt: new Date().toISOString(),
       sha256: digest(json(payload)),
       namespace,
       headers: headers.length,
@@ -162,7 +219,7 @@ function validate(exported: Retained, trusted: Manifest, supplied: Namespace) {
     !sameNamespace(n, exported.payload.namespace) ||
     !sameNamespace(n, exported.manifest.namespace) ||
     !sameNamespace(n, trusted.namespace) ||
-    json(trusted) !== json(exported.manifest)
+    stable(trusted) !== stable(exported.manifest)
   )
     throw new Error("trusted manifest or namespace mismatch");
   if (
@@ -171,6 +228,12 @@ function validate(exported: Retained, trusted: Manifest, supplied: Namespace) {
     logs.length !== exported.manifest.logs
   )
     throw new Error("retained export row count mismatch");
+  if (
+    exported.manifest.firstBlock !== n.deploymentBlock ||
+    exported.manifest.lastBlock !== headers.at(-1)!.number ||
+    stable(exported.manifest.checkpoint) !== stable(exported.payload.checkpoint)
+  )
+    throw new Error("retained export range mismatch");
   let lastBlock = -1,
     lastLog = -1;
   for (let i = 0; i < headers.length; i++) {
@@ -194,6 +257,13 @@ function validate(exported: Retained, trusted: Manifest, supplied: Namespace) {
     lastBlock = log.blockNumber;
     lastLog = log.logIndex;
   }
+  const state = checkpointInfo(exported.payload.checkpoint);
+  if (
+    state.nextBlock !== headers.at(-1)!.number + 1 ||
+    state.lastFinalizedBlock !== headers.at(-1)!.number ||
+    state.lastFinalizedHash !== hash32(headers.at(-1)!.hash)
+  )
+    throw new Error("retained checkpoint mismatch");
 }
 function migrate(path: string) {
   const db = new DatabaseSync(path);
@@ -201,10 +271,18 @@ function migrate(path: string) {
     db.exec(readFileSync(new URL(name, migrations), "utf8"));
   return db;
 }
-const temp = (target: string) => `${target}.restore-${process.pid}-${Date.now()}.tmp`;
+const temp = (target: string) =>
+  `${target}.restore-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`;
+function createTemp(target: string) {
+  const path = temp(target);
+  const fd = openSync(path, "wx");
+  closeSync(fd);
+  return path;
+}
 function publish(from: string, to: string) {
-  if (existsSync(to)) throw new Error("restore target already exists");
-  renameSync(from, to);
+  // link(2) is atomic and fails if a racing writer created the target.
+  linkSync(from, to);
+  unlinkSync(from);
 }
 async function verify(db: DatabaseSync, n: Namespace) {
   const archive = new D1Archive(new SqliteD1(db));
@@ -236,7 +314,7 @@ export async function restoreCanonical(
     trusted = JSON.parse(readFileSync(trustedManifestPath, "utf8")) as Manifest,
     n = validateNamespace(supplied);
   validate(exported, trusted, n);
-  const tmp = temp(target);
+  const tmp = createTemp(target);
   let db: DatabaseSync | undefined;
   try {
     db = migrate(tmp);
@@ -248,6 +326,18 @@ export async function restoreCanonical(
       exported.payload.logs,
       exported.payload.headers,
     );
+    const expected = checkpointInfo(exported.payload.checkpoint);
+    let rebuilt = await archive.status(n);
+    if (
+      rebuilt.nextBlock !== expected.nextBlock ||
+      rebuilt.lastFinalizedBlock !== expected.lastFinalizedBlock ||
+      rebuilt.lastFinalizedHash !== expected.lastFinalizedHash
+    )
+      throw new Error("replayed checkpoint mismatch");
+    if (expected.disabledReason)
+      rebuilt = await archive.disable(n, rebuilt, expected.disabledReason);
+    if ((rebuilt.disabledReason ?? null) !== expected.disabledReason)
+      throw new Error("replayed disabled state mismatch");
     await verify(db, n);
     db.close();
     db = undefined;
@@ -268,7 +358,13 @@ export function writeSqlSnapshot(
 ) {
   const n = validateNamespace(supplied),
     db = new DatabaseSync(source, { readOnly: true });
+  db.exec("BEGIN");
   try {
+    const stored = db
+      .prepare("SELECT * FROM namespaces WHERE chain_id=? AND pool=?")
+      .get(n.chainId, n.pool) as Record<string, unknown> | undefined;
+    if (!stored || !sameNamespace(namespaceFromRow(stored), n))
+      throw new Error("source namespace mismatch");
     const lines = [
       "PRAGMA foreign_keys=ON;",
       readFileSync(new URL("0001_proof_archive.sql", migrations), "utf8"),
@@ -291,8 +387,17 @@ export function writeSqlSnapshot(
     );
     const body = `${lines.join("\n")}\n`;
     writeFileSync(destination, body);
-    writeFileSync(manifestPath, json({ version: VERSION, sha256: digest(body), namespace: n }));
+    writeFileSync(
+      manifestPath,
+      json({
+        version: VERSION,
+        exportedAt: new Date().toISOString(),
+        sha256: digest(body),
+        namespace: n,
+      }),
+    );
   } finally {
+    db.exec("ROLLBACK");
     db.close();
   }
 }
@@ -312,7 +417,7 @@ export async function restoreSqlSnapshot(
     !sameNamespace(trusted.namespace, n)
   )
     throw new Error("trusted SQL snapshot mismatch");
-  const tmp = temp(target);
+  const tmp = createTemp(target);
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(tmp);
@@ -341,7 +446,23 @@ export async function restoreSqlSnapshot(
 
 if (import.meta.main) {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "export") {
+  if (command === "seal-sql") {
+    const [source, manifest, namespacePath] = args;
+    if (!source || !manifest || !namespacePath)
+      throw new Error(
+        "usage: replay-retained.mts seal-sql retained.sql trusted.sql.manifest.json namespace.json",
+      );
+    const namespace = validateNamespace(JSON.parse(readFileSync(namespacePath, "utf8")));
+    writeFileSync(
+      manifest,
+      json({
+        version: VERSION,
+        exportedAt: new Date().toISOString(),
+        sha256: digest(readFileSync(source)),
+        namespace,
+      }),
+    );
+  } else if (command === "export") {
     const [source, output, manifest, chainId, pool] = args;
     if (!source || !output || !manifest || !chainId || !pool)
       throw new Error(
@@ -349,10 +470,11 @@ if (import.meta.main) {
       );
     const db = new DatabaseSync(source, { readOnly: true });
     try {
-      const namespace = db
+      const row = db
         .prepare("SELECT * FROM namespaces WHERE chain_id=? AND pool=?")
-        .get(chainId, checksum(pool)) as Namespace;
-      const retained = exportArchive(db, namespace);
+        .get(chainId, checksum(pool)) as Record<string, unknown> | undefined;
+      if (!row) throw new Error("namespace not found");
+      const retained = exportArchive(db, namespaceFromRow(row));
       writeFileSync(output, json(retained));
       writeFileSync(manifest, json(retained.manifest));
     } finally {
@@ -382,5 +504,6 @@ if (import.meta.main) {
       target,
       JSON.parse(readFileSync(namespacePath, "utf8")),
     );
-  } else throw new Error("usage: replay-retained.mts <export|restore-canonical|restore-sql> …");
+  } else
+    throw new Error("usage: replay-retained.mts <seal-sql|export|restore-canonical|restore-sql> …");
 }
