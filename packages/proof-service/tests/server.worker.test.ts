@@ -1,5 +1,5 @@
 import { env as workerEnv } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { branchHash, leafHash } from "../src/domain.ts";
 import { handle, type Env } from "../src/server.ts";
 import worker from "../src/worker.ts";
@@ -19,6 +19,8 @@ const config = {
   ]),
   DEPLOYMENT_BLOCK: "1",
 } as Env;
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("proof HTTP boundary", () => {
   it("returns an allowlisted CORS preflight and keeps disallowed origins opaque", async () => {
@@ -88,5 +90,63 @@ describe("proof HTTP boundary", () => {
       ctx,
     );
     expect(oversized.status).toBe(413);
+
+    const streamed = await worker.fetch(
+      new Request("https://proof.test/internal/tick", {
+        method: "POST",
+        headers: { authorization: "Bearer x" },
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(1025));
+            controller.close();
+          },
+        }),
+      }),
+      { ...config, OPERATOR_BEARER: "x" },
+      ctx,
+    );
+    expect(streamed.status).toBe(413);
+  });
+  it("returns the actual post-tick checkpoint without storing the result", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const method = JSON.parse(String(init.body)).method;
+        calls.push(method);
+        if (method === "eth_chainId")
+          return Response.json({ jsonrpc: "2.0", id: 1, result: "0xaa36a7" });
+        if (method === "eth_blockNumber")
+          return Response.json({ jsonrpc: "2.0", id: 1, result: "0x0" });
+        if (method === "eth_getBlockByNumber") {
+          const number = JSON.parse(String(init.body)).params[0];
+          return Response.json({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { number, hash: zero, parentHash: zero },
+          });
+        }
+        throw new Error(`unexpected ${method}`);
+      }),
+    );
+    const response = await worker.fetch(
+      new Request("https://proof.test/internal/tick", {
+        method: "POST",
+        headers: { authorization: "Bearer x" },
+        body: "",
+      }),
+      {
+        ...config,
+        POOL_ADDRESS: "0x00000000000000000000000000000000000000A2",
+        OPERATOR_BEARER: "x",
+        PRIMARY_RPC_URL: "https://primary.test",
+        HISTORICAL_RPC_URL: "https://historical.test",
+      },
+      { waitUntil: () => undefined } as unknown as ExecutionContext,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ nextBlock: 1, lastFinalizedBlock: 0 });
+    expect(calls).toContain("eth_chainId");
   });
 });

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, keccak256, toHex } from "viem";
 import { confidentialPrizePoolAbi } from "@kettigo/protocol";
 import { EthereumRpc, FallbackRpc } from "../src/rpc.ts";
+import { runWithinDeadline } from "../src/worker.ts";
 import { branchHash, leafHash, type Namespace } from "../src/domain.ts";
 import type { RpcSource } from "../src/ingest.ts";
 
@@ -55,6 +56,31 @@ function rpcLog(overrides: Record<string, unknown> = {}) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("EthereumRpc", () => {
+  it("aborts an in-flight provider request at the operation deadline", async () => {
+    vi.useFakeTimers();
+    let aborted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      ),
+    );
+    const result = runWithinDeadline(
+      (signal) => new EthereumRpc("https://example.test", namespace(), 0).chainId(signal),
+      25,
+    );
+    const rejected = expect(result).rejects.toThrow("tick deadline exceeded");
+    await vi.advanceTimersByTimeAsync(25);
+    await rejected;
+    expect(aborted).toBe(true);
+    vi.useRealTimers();
+  });
   it("fails closed for a malformed relevant event but ignores unrelated topics", async () => {
     const relevant = rpcLog({ data: "0x12" });
     const unrelated = rpcLog({ topics: [keccak256(toHex("unrelated"))], data: "0x" });
@@ -235,6 +261,36 @@ class FakeRpc implements RpcSource {
 }
 
 describe("FallbackRpc", () => {
+  it("does not start the fallback source after the operation has been aborted", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        const method = JSON.parse(String(init.body)).method;
+        calls.push(method);
+        return new Promise<Response>((_resolve, reject) =>
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          ),
+        );
+      }),
+    );
+    const rpc = new FallbackRpc(
+      new EthereumRpc("https://primary.test", namespace(), 0),
+      new EthereumRpc("https://historical.test", namespace(), 0),
+      namespace(),
+    );
+    const result = runWithinDeadline(
+      (signal) => rpc.withSource((source) => source.block(1, signal), signal),
+      25,
+    );
+    const rejected = expect(result).rejects.toThrow("tick deadline exceeded");
+    await vi.advanceTimersByTimeAsync(25);
+    await rejected;
+    expect(calls).toEqual(["eth_chainId"]);
+    vi.useRealTimers();
+  });
   it("pins one validated source for an ingestion operation and redacts both provider causes", async () => {
     const rpc = new FallbackRpc(
       new FakeRpc("primary", true),

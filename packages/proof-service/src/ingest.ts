@@ -2,15 +2,19 @@ import { type ArchiveLog, type Namespace, hash32, type Node } from "./domain.ts"
 import { D1Archive, type BlockHeader } from "./archive.ts";
 import { CheckpointConflict } from "./domain.ts";
 export interface RpcSource {
-  chainId(): Promise<string>;
-  finalizedHead(): Promise<{ number: number; hash: string }>;
-  latestHead(): Promise<BlockHeader>;
-  block(number: number): Promise<{ number: number; hash: string; parentHash: string }>;
-  logs(from: number, to: number): Promise<ArchiveLog[]>;
-  receiptLogs(block: BlockHeader): Promise<ArchiveLog[]>;
+  chainId(signal?: AbortSignal): Promise<string>;
+  finalizedHead(signal?: AbortSignal): Promise<{ number: number; hash: string }>;
+  latestHead(signal?: AbortSignal): Promise<BlockHeader>;
+  block(
+    number: number,
+    signal?: AbortSignal,
+  ): Promise<{ number: number; hash: string; parentHash: string }>;
+  logs(from: number, to: number, signal?: AbortSignal): Promise<ArchiveLog[]>;
+  receiptLogs(block: BlockHeader, signal?: AbortSignal): Promise<ArchiveLog[]>;
   drawSnapshot(
     drawId: string,
     block: BlockHeader,
+    signal?: AbortSignal,
   ): Promise<{
     rootHash: string;
     rootSum: string;
@@ -18,22 +22,36 @@ export interface RpcSource {
     upperBound: string;
     closeBlock: number;
   }>;
-  membershipRoot(block: BlockHeader): Promise<Node>;
+  membershipRoot(block: BlockHeader, signal?: AbortSignal): Promise<Node>;
 }
+export const throwIfAborted = (signal?: AbortSignal) => {
+  if (signal?.aborted)
+    throw signal.reason instanceof Error ? signal.reason : new Error("operation aborted");
+};
+const rpcCall = async <T>(signal: AbortSignal | undefined, operation: () => Promise<T>) => {
+  throwIfAborted(signal);
+  const value = await operation();
+  throwIfAborted(signal);
+  return value;
+};
 /** One bounded, finalized slice. Receipt comparison prevents an omitted ownership log from becoming a false negative. */
 export async function ingestOneSlice(
   archive: D1Archive,
   n: Namespace,
   rpc: RpcSource,
   maxBlocks: number,
+  signal?: AbortSignal,
 ) {
   if (!Number.isSafeInteger(maxBlocks) || maxBlocks < 1 || maxBlocks > 2)
     throw new Error("invalid max blocks");
   const state = await archive.status(n);
+  throwIfAborted(signal);
   if (state.disabledReason) return state;
-  if ((await rpc.chainId()) !== n.chainId)
+  if ((await rpcCall(signal, () => rpc.chainId(signal))) !== n.chainId) {
+    throwIfAborted(signal);
     return archive.disable(n, state, "rpc chain id mismatch");
-  const head = await rpc.finalizedHead();
+  }
+  const head = await rpcCall(signal, () => rpc.finalizedHead(signal));
   // Check stored history even when there is no new finalized work. Otherwise a
   // reorg that leaves nextBlock beyond head is never discovered.
   const newest = Math.min(state.lastFinalizedBlock, head.number);
@@ -42,27 +60,42 @@ export async function ingestOneSlice(
   const floor = Math.max(n.deploymentBlock, newest - 127);
   for (let b = newest; b >= floor; b -= 1) {
     const saved = await archive.canonicalBlock(n, b);
-    if (!saved) return archive.disable(n, state, "canonical checkpoint unavailable");
-    const canonical = await rpc.block(b);
-    if (canonical.number !== b) return archive.disable(n, state, "rpc block number mismatch");
+    if (!saved) {
+      throwIfAborted(signal);
+      return archive.disable(n, state, "canonical checkpoint unavailable");
+    }
+    const canonical = await rpcCall(signal, () => rpc.block(b, signal));
+    if (canonical.number !== b) {
+      throwIfAborted(signal);
+      return archive.disable(n, state, "rpc block number mismatch");
+    }
     if (hash32(saved.hash) === hash32(canonical.hash)) {
       ancestor = b;
       found = true;
       break;
     }
   }
-  if (!found) return archive.disable(n, state, "deep or unknown canonical fork");
-  if (ancestor < state.lastFinalizedBlock) return archive.rollbackFrom(n, state, ancestor + 1);
+  if (!found) {
+    throwIfAborted(signal);
+    return archive.disable(n, state, "deep or unknown canonical fork");
+  }
+  if (ancestor < state.lastFinalizedBlock) {
+    throwIfAborted(signal);
+    return archive.rollbackFrom(n, state, ancestor + 1);
+  }
   if (state.nextBlock > head.number) return state;
   if (!Number.isSafeInteger(head.number) || head.number < 0)
     throw new Error("invalid finalized head");
   const to = Math.min(head.number, state.nextBlock + maxBlocks - 1);
   if (!Number.isSafeInteger(to)) throw new Error("invalid bounded range");
   const headers: BlockHeader[] = [];
-  for (let block = state.nextBlock; block <= to; block += 1) headers.push(await rpc.block(block));
-  if (headers[0].parentHash !== state.lastFinalizedHash)
+  for (let block = state.nextBlock; block <= to; block += 1)
+    headers.push(await rpcCall(signal, () => rpc.block(block, signal)));
+  if (headers[0].parentHash !== state.lastFinalizedHash) {
+    throwIfAborted(signal);
     return archive.disable(n, state, "canonical parent mismatch");
-  const logs = await rpc.logs(state.nextBlock, to);
+  }
+  const logs = await rpcCall(signal, () => rpc.logs(state.nextBlock, to, signal));
   const unique = new Map<string, ArchiveLog>();
   for (const log of logs) {
     const key = `${log.blockNumber}:${log.logIndex}`;
@@ -76,7 +109,7 @@ export async function ingestOneSlice(
   );
   for (let b = state.nextBlock; b <= to; b++) {
     const a = ordered.filter((x) => x.blockNumber === b),
-      receipt = await rpc.receiptLogs(headers[b - state.nextBlock]);
+      receipt = await rpcCall(signal, () => rpc.receiptLogs(headers[b - state.nextBlock], signal));
     const receiptUnique = new Map<string, ArchiveLog>();
     for (const log of receipt) {
       const key = `${log.blockNumber}:${log.logIndex}`;
@@ -96,9 +129,8 @@ export async function ingestOneSlice(
   }
   for (const log of ordered) {
     if (log.name !== "DrawSnapshotClosed") continue;
-    const snapshot = await rpc.drawSnapshot(
-      log.args.drawId,
-      headers[log.blockNumber - state.nextBlock],
+    const snapshot = await rpcCall(signal, () =>
+      rpc.drawSnapshot(log.args.drawId, headers[log.blockNumber - state.nextBlock], signal),
     );
     if (
       hash32(snapshot.rootHash) !== hash32(log.args.rootHash) ||
@@ -112,10 +144,12 @@ export async function ingestOneSlice(
   for (const log of ordered)
     if (log.name === "NodeUpdated" && log.args.level === String(n.depth) && log.args.index === "0")
       reconstructed = { hash: hash32(log.args.hash), sum: hash32(log.args.sum) };
-  const onchainRoot = await rpc.membershipRoot(headers.at(-1)!);
+  const onchainRoot = await rpcCall(signal, () => rpc.membershipRoot(headers.at(-1)!, signal));
   if (reconstructed.hash !== onchainRoot.hash || reconstructed.sum !== onchainRoot.sum)
     throw new Error("onchain membership root mismatch");
   try {
+    // D1 batches are atomic but cannot be cancelled; once this starts we await its settlement.
+    throwIfAborted(signal);
     return await archive.ingest(n, state, ordered, headers);
   } catch (e) {
     if (e instanceof CheckpointConflict) return archive.status(n);

@@ -3,8 +3,11 @@ import { D1Archive } from "./archive.ts";
 import { validateNamespace } from "./domain.ts";
 import { ingestOneSlice } from "./ingest.ts";
 import { createRpc } from "./rpc.ts";
+import { throwIfAborted } from "./ingest.ts";
 
 const MAX_TICK_MS = 25_000;
+
+const MAX_OPERATOR_INPUT_BYTES = 1024;
 
 async function fixedTokenMatch(actual: string | null, expected: string | undefined) {
   if (!expected) return false;
@@ -17,23 +20,41 @@ async function fixedTokenMatch(actual: string | null, expected: string | undefin
     crypto.subtle as SubtleCrypto & { timingSafeEqual(a: ArrayBuffer, b: ArrayBuffer): boolean }
   ).timingSafeEqual(actualDigest, expectedDigest);
 }
-async function boundedTick(env: Env) {
-  let timer: number | undefined;
+async function readBoundedBody(request: Request) {
+  const reader = request.body?.getReader();
+  if (!reader) return;
+  let total = 0;
   try {
-    return await Promise.race([
-      tick(env),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("tick timeout")),
-          MAX_TICK_MS,
-        ) as unknown as number;
-      }),
-    ]);
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) return;
+      total += part.value.byteLength;
+      if (total > MAX_OPERATOR_INPUT_BYTES) throw new Error("operator body too large");
+    }
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (total > MAX_OPERATOR_INPUT_BYTES) await reader.cancel();
   }
 }
-async function tick(env: Env) {
+/** Cancels future network work at the deadline; an already-started D1 batch still settles atomically. */
+export async function runWithinDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  deadlineMs = MAX_TICK_MS,
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("tick deadline exceeded")),
+    deadlineMs,
+  ) as unknown as number;
+  try {
+    return await operation(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function boundedTick(env: Env) {
+  return runWithinDeadline((signal) => tick(env, signal));
+}
+async function tick(env: Env, signal?: AbortSignal) {
   const n = validateNamespace({
     chainId: env.CHAIN_ID,
     pool: env.POOL_ADDRESS as `0x${string}`,
@@ -54,16 +75,24 @@ async function tick(env: Env) {
   const status = await archive.status(n).catch(() => undefined);
   if (!status) {
     if (n.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
-    const anchor = await rpc.withSource((source) => source.block(n.deploymentBlock - 1));
+    const anchor = await rpc.withSource(
+      (source) => source.block(n.deploymentBlock - 1, signal),
+      signal,
+    );
+    throwIfAborted(signal);
     await archive.initialize(n, anchor.hash);
   } else await archive.assertNamespace(n);
-  return rpc.withSource((source) =>
-    ingestOneSlice(
-      archive,
-      n,
-      source,
-      Math.min(2, Math.max(1, Number(env.MAX_BLOCKS_PER_SLICE ?? "2"))),
-    ),
+  throwIfAborted(signal);
+  return rpc.withSource(
+    (source) =>
+      ingestOneSlice(
+        archive,
+        n,
+        source,
+        Math.min(2, Math.max(1, Number(env.MAX_BLOCKS_PER_SLICE ?? "2"))),
+        signal,
+      ),
+    signal,
   );
 }
 export default {
@@ -72,11 +101,19 @@ export default {
     if (u.pathname === "/internal/tick") {
       if (request.method !== "POST")
         return new Response(null, { status: 405, headers: { allow: "POST" } });
+      const contentLength = request.headers.get("content-length");
       if (
-        request.headers.get("content-length") &&
-        Number(request.headers.get("content-length")) > 1024
+        (contentLength !== null &&
+          (!/^\d+$/.test(contentLength) || Number(contentLength) > MAX_OPERATOR_INPUT_BYTES)) ||
+        new TextEncoder().encode(request.headers.get("authorization") ?? "").byteLength >
+          MAX_OPERATOR_INPUT_BYTES
       )
         return new Response(null, { status: 413 });
+      try {
+        await readBoundedBody(request);
+      } catch {
+        return new Response(null, { status: 413, headers: { "cache-control": "no-store" } });
+      }
       if (
         !(await fixedTokenMatch(
           request.headers.get("authorization"),
@@ -86,12 +123,18 @@ export default {
         return new Response(null, { status: 401 });
       try {
         const state = await boundedTick(env);
-        return Response.json({
-          nextBlock: state.nextBlock,
-          lastFinalizedBlock: state.lastFinalizedBlock,
-        });
+        return Response.json(
+          {
+            nextBlock: state.nextBlock,
+            lastFinalizedBlock: state.lastFinalizedBlock,
+          },
+          { headers: { "cache-control": "no-store" } },
+        );
       } catch {
-        return Response.json({ outcome: "HISTORY_UNAVAILABLE" }, { status: 503 });
+        return Response.json(
+          { outcome: "HISTORY_UNAVAILABLE" },
+          { status: 503, headers: { "cache-control": "no-store" } },
+        );
       }
     }
     return handle(request, env);

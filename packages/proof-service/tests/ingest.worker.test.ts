@@ -158,6 +158,18 @@ describe("finalized RPC ingestion", () => {
     expect((await archive.status(n)).nextBlock).toBe(1);
   });
 
+  it("does not mutate the archive when an operation is cancelled before ingestion", async () => {
+    const n = namespace(),
+      archive = new D1Archive(env.PROOF_DB),
+      controller = new AbortController();
+    await archive.initialize(n);
+    controller.abort(new Error("tick deadline exceeded"));
+    await expect(
+      ingestOneSlice(archive, n, new FixtureRpc([header(1, "1")], [], n), 2, controller.signal),
+    ).rejects.toThrow("tick deadline exceeded");
+    expect(await archive.status(n)).toMatchObject({ nextBlock: 1, lastFinalizedBlock: 0 });
+  });
+
   it("rejects conflicting duplicate receipt logs before archive mutation", async () => {
     const n = namespace(),
       archive = new D1Archive(env.PROOF_DB);
