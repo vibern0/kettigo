@@ -111,14 +111,20 @@ async function authenticateCheckpoint(
     if (checkpoint.hash !== state.lastFinalizedHash) throw new Error("orphaned checkpoint");
   });
 }
-async function absentDrawOutcome(archive: D1Archive, env: Env, n: Namespace, drawId: string) {
+async function absentDrawOutcome(
+  archive: D1Archive,
+  env: Env,
+  n: Namespace,
+  drawId: string,
+  headers: HeadersInit,
+) {
   const state = await archive.status(n);
   return rpc(env, n).withSource(async (source) => {
     const head = await source.latestHead();
     const chainDraw = await source.drawSnapshot(drawId, head);
-    if (chainDraw.closeBlock === 0) return outcome("HISTORY_UNAVAILABLE", 404);
-    if (chainDraw.closeBlock >= state.nextBlock) return outcome("INDEXING");
-    return outcome("HISTORY_UNAVAILABLE");
+    if (chainDraw.closeBlock === 0) return outcome("HISTORY_UNAVAILABLE", 404, headers);
+    if (chainDraw.closeBlock >= state.nextBlock) return outcome("INDEXING", 409, headers);
+    return outcome("HISTORY_UNAVAILABLE", 409, headers);
   });
 }
 
@@ -175,7 +181,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     const state = await archive.status(n);
     if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
     const draw = await archive.drawById(n, match[3]);
-    if (!draw) return absentDrawOutcome(archive, env, n, match[3]);
+    if (!draw) return absentDrawOutcome(archive, env, n, match[3], headers);
     await authenticate(draw, env, n);
     const proof = await archive.proof(n, match[3], match[4]);
     return proof ? response({ proof }, 200, headers) : outcome("NOT_ELIGIBLE", 404, headers);
