@@ -7,7 +7,7 @@
     "test": "vitest run --config vitest.worker.config.ts",
     "typecheck": "tsc --noEmit",
     "build": "wrangler deploy --dry-run --config wrangler.jsonc",
-    "test:restore": "node --test tools/retained-sqlite.test.mjs"
+    "test:restore": "node --experimental-transform-types --test tools/retained-sqlite.test.mts"
   },
   "dependencies": {
     "@kettigo/protocol": "workspace:*",

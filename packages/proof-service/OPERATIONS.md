@@ -32,12 +32,33 @@ approved independent location and exercise both SQL restore and full RPC
 backfill separately before asserting recovery readiness.
 
 The local retained-export path requires Node 24 and uses the native SQLite
-adapter. Run `pnpm --filter @kettigo/proof-service test:restore` to exercise a
-clean export, digest/namespace validation, canonical-log replay into a separate
-SQLite file, and `PRAGMA integrity_check`. The export must contain only the
-canonical namespace, headers, and retained event logs; derived tables are
-rebuilt during restore and are never trusted from an export. Keep the SQL/D1
-snapshot restore exercise separate from a complete archival-RPC backfill.
+adapter. Use the pinned Wrangler to create a dedicated D1 SQL export, retain it
+outside this repository, and pin its SHA-256 and complete namespace manifest
+in a separate trusted location:
+
+```sh
+pnpm --filter @kettigo/proof-service exec wrangler d1 export kettigo-proof-v2-sepolia --remote --output retained/proof.sql
+sha256sum retained/proof.sql
+node --experimental-transform-types tools/replay-retained.mts export retained/proof.sqlite retained/canonical.json retained/canonical.manifest.json 11155111 0xCHECKSUM_POOL
+pnpm --filter @kettigo/proof-service test:restore
+```
+
+The SQL file is restored only after its separately retained digest/namespace
+manifest is verified; the canonical export is replayed only after its separate
+trusted manifest exactly matches. The tool imports a trusted, explicitly named
+SQL snapshot into a new isolated target; it never runs a wildcard directory of
+SQL and never replaces a source or existing target. Canonical replay rebuilds
+all derived production tables from namespace metadata, the deployment-parent
+anchor, continuous headers (including empty blocks), and original logs.
+
+`test:restore` exercises clean SQL-snapshot restoration and canonical replay
+into separate targets, verifies SQLite integrity, and compares every field of
+a genuine depth-32 historical proof after an exit/reuse/rejoin sequence. The
+digest detects accidental mutation, while the separately pinned manifest binds
+the expected namespace/ranges/counts. Neither alone authenticates a fully
+malicious backup provider: verify canonical close blocks and roots against an
+independent Ethereum source before operational recovery. Keep this separate
+from the complete archival-RPC backfill exercise.
 
 No Worker endpoint serves exports. Retained local exports are an operator task,
 not an automated cloud backup claim.
