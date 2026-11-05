@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPublicClient, getAddress, http, type Address, type Hex } from "viem";
 import { sepolia } from "viem/chains";
 
@@ -17,6 +17,11 @@ import type { PasskeySmartSession, PreparedSmartTransaction } from "@/lib/smart-
 import { decryptExistingSmartUint64, prepareSmartReadSessionCalls } from "@/lib/zama";
 import { useActionCenter } from "@/components/ActionCenter";
 import { PrizeHistorySelection } from "./PrizeHistorySelection";
+import { drawOperationKey } from "./draw-page-utils";
+import {
+  completeKnownPrizeHistoryOperation,
+  completeObservedPrizeHistoryOperations,
+} from "./prize-history-operation-lease";
 import type { ReviewLease } from "./review-lease";
 
 const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
@@ -78,7 +83,7 @@ function validRound(value: string): bigint | undefined {
 }
 
 export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: PrizeHistoryProps) {
-  const { actions, runAction } = useActionCenter();
+  const { actions = [], runAction } = useActionCenter();
   const [draws, setDraws] = useState<readonly ListedDraw[]>([]);
   const [nextCursor, setNextCursor] = useState<bigint>();
   const [historyUnavailable, setHistoryUnavailable] = useState(false);
@@ -94,6 +99,8 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
   const confirmingAccessRef = useRef<PreparedSmartTransaction>();
   const checkOwnerRef = useRef<symbol>();
   const accessOwnerRef = useRef<symbol>();
+  const operationOwnersRef = useRef(new Map<string, symbol>());
+  const scopeRef = useRef(`${account}:${pool}`);
   const recoveredActionRef = useRef<string>();
   const cancelList = useCallback(() => {
     listEpoch.current += 1;
@@ -255,6 +262,23 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
     };
   }, [cancelList, cancelSelection, loadPage, proofUrl]);
 
+  useLayoutEffect(() => {
+    const scope = `${account}:${pool}`;
+    if (scopeRef.current === scope) return;
+    scopeRef.current = scope;
+    cancelList();
+    cancelSelection();
+    setDraws([]);
+    setNextCursor(undefined);
+    setHistoryUnavailable(false);
+    setRequestedRound("");
+    setSelection(undefined);
+  }, [account, cancelList, cancelSelection, pool]);
+
+  useEffect(() => {
+    completeObservedPrizeHistoryOperations(actions, operationOwnersRef.current, reviewLease);
+  }, [actions, reviewLease]);
+
   useEffect(() => {
     if (
       !selection ||
@@ -350,7 +374,8 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
     if (!selection || selection.kind !== "ready") return;
     const prepared = selection.prepared;
     if (confirmingCheckRef.current === prepared) return;
-    if (!checkOwnerRef.current || !reviewLease.confirm(checkOwnerRef.current)) return;
+    const owner = checkOwnerRef.current;
+    if (!owner || !reviewLease.confirm(owner)) return;
     confirmingCheckRef.current = prepared;
     runAction(
       { label: "Check prize", type: "check", account: session.address },
@@ -358,12 +383,16 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
         update({ status: "waiting-wallet" });
         try {
           const checked = await prepared.confirm({
-            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+            onOperationPrepared: (operation) => {
+              operationOwnersRef.current.set(drawOperationKey(operation), owner);
+              update({ status: "confirming", operation });
+            },
           });
           update({ status: "completed" });
           if (checkOwnerRef.current) reviewLease.complete(checkOwnerRef.current);
           await viewRound(checked.drawId);
         } catch (error) {
+          completeKnownPrizeHistoryOperation(owner, error, operationOwnersRef.current, reviewLease);
           const saved = selection.pending(selection.drawId);
           if (saved)
             update({
@@ -425,7 +454,8 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
     const prepared = selection.prepared;
     const drawId = selection.drawId;
     if (confirmingAccessRef.current === prepared) return;
-    if (!accessOwnerRef.current || !reviewLease.confirm(accessOwnerRef.current)) return;
+    const owner = accessOwnerRef.current;
+    if (!owner || !reviewLease.confirm(owner)) return;
     confirmingAccessRef.current = prepared;
     runAction(
       { label: "Review account access", type: "approval", account: session.address },
@@ -433,11 +463,17 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
         update({ status: "waiting-wallet" });
         try {
           await prepared.send({
-            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+            onOperationPrepared: (operation) => {
+              operationOwnersRef.current.set(drawOperationKey(operation), owner);
+              update({ status: "confirming", operation });
+            },
           });
           update({ status: "completed" });
           if (accessOwnerRef.current) reviewLease.complete(accessOwnerRef.current);
           await viewRound(drawId);
+        } catch (error) {
+          completeKnownPrizeHistoryOperation(owner, error, operationOwnersRef.current, reviewLease);
+          throw error;
         } finally {
           if (confirmingAccessRef.current === prepared) confirmingAccessRef.current = undefined;
           if (preparedAccessRef.current === prepared) preparedAccessRef.current = undefined;

@@ -112,3 +112,38 @@ test("replaces account and configured pool before reading the new selected round
   expect(screen.queryByText("Round #12")).toBeNull();
   expect(fixture.readerFactory).toHaveBeenLastCalledWith(expect.anything(), fixture.alternatePool);
 });
+
+test.each([
+  ["account", true, false],
+  ["pool", false, true],
+])(
+  "clears a checked result immediately when the %s scope changes",
+  async (_scope, changeAccount, changePool) => {
+    fixture.pool = "0x3333333333333333333333333333333333333333";
+    fixture.session = {
+      address: fixture.account,
+      prepareTransaction: vi.fn(),
+      sendTransaction: vi.fn(),
+    };
+    fixture.readerFactory.mockReturnValue({
+      readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+      readChecked: vi.fn(async () => true),
+      readAward: vi.fn(async () => fixture.award),
+    });
+
+    const rendered = render(tree());
+    await screen.findByText("Your past results");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+      target: { value: "12" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "View round" }));
+    expect(await screen.findByText("5.000000 USDC")).toBeTruthy();
+
+    if (changePool) fixture.pool = fixture.alternatePool;
+    if (changeAccount) fixture.session = { ...fixture.session, address: fixture.alternateAccount };
+    rendered.rerender(tree());
+
+    expect(screen.queryByText("Round #12")).toBeNull();
+    expect(screen.queryByText("5.000000 USDC")).toBeNull();
+  },
+);

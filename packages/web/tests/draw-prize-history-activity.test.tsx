@@ -1,7 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { ZamaReadSessionAccessRequiredError } from "@/lib/zama-session-manager";
+import {
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "@/lib/passkey-operation";
 
 const fixture = vi.hoisted(() => {
   const account = "0x1111111111111111111111111111111111111111" as const;
@@ -87,59 +92,15 @@ vi.mock("canvas-confetti", () => ({
   default: { create: () => Object.assign(() => {}, { reset() {} }) },
 }));
 
-import DrawPage from "@/app/draw/page";
-import { ActionCenterProvider, useActionCenter } from "@/components/ActionCenter";
-import { ToastProvider } from "@/components/Toast";
-
-function ActionProbe() {
-  const { actions } = useActionCenter();
-  return <output data-testid="actions">{JSON.stringify(actions)}</output>;
-}
-
-function mount() {
-  return render(
-    <ToastProvider>
-      <ActionCenterProvider>
-        <DrawPage />
-        <ActionProbe />
-      </ActionCenterProvider>
-    </ToastProvider>,
-  );
-}
-
-async function prepareCheck() {
-  mount();
-  await screen.findByText("Your past results");
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
-    target: { value: "12" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "View round" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
-  return screen.findByRole("button", { name: "Confirm" });
-}
+import {
+  mountPrizeHistory as mount,
+  preparePrizeCheck as prepareCheck,
+  savedPrizeIntent,
+  viewPrizeRound as viewRound,
+} from "./draw-prize-history-harness";
 
 function savedIntent(drawId = 12n) {
-  return {
-    chainId: 11155111 as const,
-    pool: fixture.pool,
-    account: fixture.account,
-    drawId,
-    action: "checkPrize" as const,
-    operation: {
-      chainId: 11155111 as const,
-      entryPoint: entryPoint07Address,
-      sender: fixture.account,
-      userOperationHash: `0x${"e".repeat(64)}` as const,
-    },
-  };
-}
-
-async function viewRound() {
-  await screen.findByText("Your past results");
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
-    target: { value: "12" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  return savedPrizeIntent({ account: fixture.account, drawId, pool: fixture.pool });
 }
 
 beforeEach(() => {
@@ -258,6 +219,55 @@ test("double Confirm creates one Activity action and sends one prepared prize ch
   resolveConfirm();
 });
 
+test.each([
+  [
+    "rejected",
+    (operation: ReturnType<typeof savedIntent>["operation"]) =>
+      new SafeUserOperationRejectedError(operation, 4001),
+  ],
+  [
+    "not-submitted",
+    (operation: ReturnType<typeof savedIntent>["operation"]) =>
+      new SafeUserOperationNotSubmittedError(operation),
+  ],
+  [
+    "failed",
+    (operation: ReturnType<typeof savedIntent>["operation"]) =>
+      new SafeUserOperationFailedError(operation),
+  ],
+] as const)(
+  "allows a fresh prize-check review after its exact operation is %s",
+  async (status, terminal) => {
+    const operation = savedIntent().operation;
+    const review = vi.fn(async () => ({ state: "ready", drawId: 12n, proof: {} }));
+    fixture.coordinator.mockReturnValue({
+      pending: () => null,
+      reconcile: vi.fn(),
+      review,
+      prepare: fixture.prepare,
+    });
+    fixture.prepare.mockResolvedValue({
+      cancel: vi.fn(),
+      confirm: ({
+        onOperationPrepared,
+      }: {
+        onOperationPrepared: (value: typeof operation) => void;
+      }) => {
+        onOperationPrepared(operation);
+        throw terminal(operation);
+      },
+    });
+
+    fireEvent.click(await prepareCheck());
+    await waitFor(() => expect(screen.getByTestId("actions").textContent).toContain(status));
+    fireEvent.click(screen.getByRole("button", { name: "View round" }));
+    await screen.findByRole("button", { name: "Review check" });
+    fireEvent.click(screen.getByRole("button", { name: "Review check" }));
+
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(2));
+  },
+);
+
 test("reloads an exact pending prize check without preparing another action", async () => {
   const intent = savedIntent();
   fixture.coordinator.mockReturnValue({
@@ -374,6 +384,52 @@ test("reviews missing historical access once and retries the same checked result
   expect(fixture.coordinator).not.toHaveBeenCalled();
   expect(await screen.findByText("5.000000 USDC")).toBeTruthy();
 });
+
+test.each([
+  [
+    "rejected",
+    (operation: ReturnType<typeof savedIntent>["operation"]) =>
+      new SafeUserOperationRejectedError(operation, 4001),
+  ],
+  [
+    "not-submitted",
+    (operation: ReturnType<typeof savedIntent>["operation"]) =>
+      new SafeUserOperationNotSubmittedError(operation),
+  ],
+  [
+    "failed",
+    (operation: ReturnType<typeof savedIntent>["operation"]) =>
+      new SafeUserOperationFailedError(operation),
+  ],
+] as const)(
+  "allows a fresh access review after its exact operation is %s",
+  async (status, terminal) => {
+    const operation = savedIntent().operation;
+    const send = vi.fn(
+      ({ onOperationPrepared }: { onOperationPrepared: (value: typeof operation) => void }) => {
+        onOperationPrepared(operation);
+        throw terminal(operation);
+      },
+    );
+    fixture.readerFactory.mockReturnValue({
+      readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+      readChecked: vi.fn(async () => true),
+      readAward: vi.fn(async () => fixture.award),
+    });
+    fixture.decrypt.mockRejectedValue(new ZamaReadSessionAccessRequiredError());
+    fixture.prepare.mockResolvedValue({ cancel: vi.fn(), send });
+
+    mount();
+    await viewRound();
+    fireEvent.click(await screen.findByRole("button", { name: "Review access" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByTestId("actions").textContent).toContain(status));
+    fireEvent.click(screen.getByRole("button", { name: "View round" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review access" }));
+
+    await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(2));
+  },
+);
 
 test("cancels an unused historical access review without losing the checked result", async () => {
   const cancel = vi.fn();
