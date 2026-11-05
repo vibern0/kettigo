@@ -3,9 +3,14 @@ import test from "node:test";
 
 import {
   actionForPendingOperation,
+  applyRunnerErrorFromPendingReader,
   patchForPendingRecovery,
   patchForRunnerError,
 } from "../src/lib/action-center-pending.ts";
+import {
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "../src/lib/passkey-operation.ts";
 
 const operation = {
   chainId: 11155111,
@@ -55,4 +60,32 @@ test("keeps a known declined approval separate from an uncertain action", () => 
   const patch = patchForRunnerError(action, null, { code: 4001 });
 
   assert.deepEqual(patch, { status: "rejected", error: "Approval was not completed." });
+});
+
+test("classifies typed terminal Safe runner errors after the guard clears", () => {
+  const action = actionForPendingOperation({ ...operation, phase: "prepared" }, 2_000);
+
+  assert.equal(
+    patchForRunnerError(action, null, new SafeUserOperationRejectedError(operation, 4001)).status,
+    "rejected",
+  );
+  assert.equal(
+    patchForRunnerError(action, null, new SafeUserOperationNotSubmittedError(operation)).status,
+    "not-submitted",
+  );
+});
+
+test("reader failure keeps an action non-final and unavailable", () => {
+  const action = actionForPendingOperation({ ...operation, phase: "prepared" }, 2_000);
+  const [updated] = applyRunnerErrorFromPendingReader(
+    [action],
+    action.id,
+    () => {
+      throw new Error("storage failure");
+    },
+    new Error("after send"),
+  );
+
+  assert.equal(updated.status, "confirming");
+  assert.equal(updated.error, "Status is unavailable right now. Check status later.");
 });

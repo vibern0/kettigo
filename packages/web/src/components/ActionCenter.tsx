@@ -30,6 +30,7 @@ import {
   applyRunnerErrorFromPendingReader,
   matchesPendingOperation,
   patchForPendingRecovery,
+  unavailableStatusPatch,
 } from "@/lib/action-center-pending";
 import { useWallet } from "@/lib/wallet-context";
 import type { PendingOperationRecord } from "@/lib/smart-session";
@@ -255,10 +256,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
     async (action: AsyncAction) => {
       const currentSession = sessionRef.current;
       if (!currentSession?.recoverPendingOperation || !action.operation) {
-        updateTrackedAction(action.id, {
-          status: "failed",
-          error: "Status is unavailable right now.",
-        });
+        updateTrackedAction(action.id, unavailableStatusPatch());
         return;
       }
       const epoch = sessionEpochRef.current;

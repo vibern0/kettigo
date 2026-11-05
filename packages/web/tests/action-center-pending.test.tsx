@@ -48,4 +48,23 @@ describe("ActionCenter pending operation", () => {
     expect(prepareTransaction).not.toHaveBeenCalled();
     expect(signTypedData).not.toHaveBeenCalled();
   });
+
+  it("keeps retained activity visible when status recovery is unavailable", async () => {
+    const recovery = session.recoverPendingOperation;
+    delete (session as { recoverPendingOperation?: typeof recoverPendingOperation })
+      .recoverPendingOperation;
+    render(
+      <ActionCenterProvider>
+        <div>Page content</div>
+      </ActionCenterProvider>,
+    );
+
+    await screen.findByRole("button", { name: /activity/i });
+    fireEvent.click(screen.getByRole("button", { name: /activity/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check status" }));
+
+    expect(await screen.findByText(/Status is unavailable right now/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check status" })).toBeTruthy();
+    session.recoverPendingOperation = recovery;
+  });
 });

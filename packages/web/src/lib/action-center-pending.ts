@@ -6,8 +6,12 @@ import {
   type ActionPatch,
   type AsyncAction,
   type PendingActionOperation,
-} from "./action-center-model";
+} from "./action-center-model.ts";
 import type { PendingOperationRecoveryResult, PendingOperationRecord } from "./smart-session";
+import {
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "./passkey-operation.ts";
 
 const EXPECTED_ENTRY_POINT = getAddress(entryPoint07Address);
 const HASH_PATTERN = /^0x[\da-fA-F]{64}$/;
@@ -73,6 +77,10 @@ export function patchForRunnerError(
   pending?: PendingOperationRecord | null,
   error?: unknown,
 ): ActionPatch {
+  if (error instanceof SafeUserOperationRejectedError)
+    return { status: "rejected", error: "Approval was not completed." };
+  if (error instanceof SafeUserOperationNotSubmittedError)
+    return { status: "not-submitted", error: "This action was not sent. Review it again." };
   if (
     action.status === "submitted" ||
     action.status === "confirming" ||
@@ -94,6 +102,10 @@ export function patchForRunnerError(
   return { status: "failed", error: "This action could not be completed. Try again." };
 }
 
+export function unavailableStatusPatch(): ActionPatch {
+  return { status: "confirming", error: "Status is unavailable right now. Check status later." };
+}
+
 export function applyRunnerError(
   actions: AsyncAction[],
   id: string,
@@ -113,7 +125,8 @@ export function applyRunnerErrorFromPendingReader(
   try {
     return applyRunnerError(actions, id, readPending(), error);
   } catch {
-    return applyRunnerError(actions, id, undefined, error);
+    const action = actions.find((item) => item.id === id);
+    return action ? updateAction(actions, id, unavailableStatusPatch()) : actions;
   }
 }
 
