@@ -4,7 +4,9 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { URL } from "node:url";
 import { getAddress } from "ethers";
+import { Interface, concat, toBeHex } from "ethers";
 
 import { CandidateRunJournal, ORIGINAL_ENVELOPE } from "./journal.mjs";
 import {
@@ -13,6 +15,7 @@ import {
   deterministicUserOperationRecord,
   mergePinnedRelayEstimations,
 } from "./safe-budget-adapter.mjs";
+import { createFixedSafeCallPolicy } from "./safe-call-policy.mjs";
 
 const requireWeb = createRequire(new URL("../../../../web/package.json", import.meta.url));
 const { SafeOperationV07, getRelayKitVersion } = requireWeb("@safe-global/relay-kit");
@@ -22,6 +25,33 @@ const ENTRY_POINT = getAddress("0x0000000071727de22e5e9d8baf0edac6f37da032");
 const POOL = "0x2222222222222222222222222222222222222222";
 const SIGNATURE = "0x1234";
 const HASH = "0x" + "ab".repeat(32);
+const MODULE = "0x4444444444444444444444444444444444444444";
+const MULTISEND = "0x5555555555555555555555555555555555555555";
+const WRAPPER = "0x6666666666666666666666666666666666666666";
+const GRANT = "0x7777777777777777777777777777777777777777";
+const CALLBACK = "0x8888888888888888888888888888888888888888";
+const FACTORY = "0x9999999999999999999999999999999999999999";
+const EXECUTE = new Interface(["function executeUserOp(address to,uint256 value,bytes data,uint8 operation)"]);
+const MULTISEND_ABI = new Interface(["function multiSend(bytes transactions)"]);
+const WRAPPER_ABI = new Interface(["function transferAndCall(address recipient,uint256 amount,bytes callback)"]);
+const GRANT_ABI = new Interface(["function grant(address recipient)"]);
+
+function packedCall({ operation = 0, to, value = 0n, data }) {
+  return concat([toBeHex(operation, 1), to, toBeHex(value, 32), toBeHex((data.length - 2) / 2, 32), data]);
+}
+
+function fixedCallFixture() {
+  const callbackData = "0x1234";
+  const wrapperData = WRAPPER_ABI.encodeFunctionData("transferAndCall", [CALLBACK, 7n, callbackData]);
+  const grantData = GRANT_ABI.encodeFunctionData("grant", [CALLBACK]);
+  const calls = [
+    { to: WRAPPER, value: 0n, data: wrapperData },
+    { to: GRANT, value: 0n, data: grantData },
+  ];
+  const multiSendData = MULTISEND_ABI.encodeFunctionData("multiSend", [concat(calls.map(packedCall))]);
+  const callData = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, multiSendData, 1]);
+  return { callbackData, calls, callData, wrapperData, grantData };
+}
 
 function operation(overrides = {}) {
   return {
@@ -57,7 +87,7 @@ function adapter(journal, options = {}) {
   return new SafeBudgetAdapter({
     journal,
     expected: { chainId: 11155111, entryPoint: ENTRY_POINT, safe: SAFE, journalTarget: POOL },
-    verifyCallData: (callData) => callData === "0x1234",
+    callPolicy: { assert: ({ callData }) => { if (callData !== "0x1234") throw new Error("unapproved nested call target"); } },
     identity: () => ({ chainId: 11155111, entryPoint: ENTRY_POINT, sender: SAFE, userOperationHash: HASH }),
     now: () => 1000,
     ...options,
@@ -103,6 +133,32 @@ test("matches the pinned Relay Kit 6.1.1 sponsored merge, including its truthy z
   assert.throws(() => mergePinnedRelayEstimations(base, { chainId: 1 }), /unknown sponsor/);
 });
 
+test("fixed Safe policy binds counterfactual setup and nested MultiSend calls without ciphertext scanning", () => {
+  const fixture = fixedCallFixture();
+  const policy = createFixedSafeCallPolicy({
+    module: MODULE,
+    multiSend: MULTISEND,
+    factory: FACTORY,
+    factoryData: "0xaabb",
+    calls: fixture.calls,
+    wrapper: { target: WRAPPER, callbackRecipient: CALLBACK, callbackData: fixture.callbackData },
+    grants: [{ target: GRANT, recipient: CALLBACK }],
+  });
+  assert.doesNotThrow(() => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: fixture.callData }));
+  assert.throws(() => policy.assert({ factory: "0x", factoryData: "0x", callData: fixture.callData }), /factory/);
+  const forbidden = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, MULTISEND_ABI.encodeFunctionData("multiSend", [concat([
+    packedCall({ to: "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27", data: fixture.wrapperData }),
+    packedCall(fixture.calls[1]),
+  ])]), 1]);
+  assert.throws(() => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: forbidden }), /forbidden|expected/);
+  const alteredRecipient = WRAPPER_ABI.encodeFunctionData("transferAndCall", [GRANT, 7n, fixture.callbackData]);
+  const altered = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, MULTISEND_ABI.encodeFunctionData("multiSend", [concat([
+    packedCall({ to: WRAPPER, data: alteredRecipient }),
+    packedCall(fixture.calls[1]),
+  ])]), 1]);
+  assert.throws(() => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: altered }), /callback|expected/);
+});
+
 test("reserves the complete unsigned operation before any credential and binds signature persistence", async () => {
   const j = await journal();
   const events = [];
@@ -143,7 +199,7 @@ test("route fence accepts exactly one persisted SDK wire operation and records a
   const reservation = await fence.reserve({ intentId: "safe-3", operation: operation(), offeredAt: 1000 });
   const signed = operation({ signature: SIGNATURE });
   const persisted = await fence.saveSigned({ reservation, operation: signed });
-  const wire = deterministicUserOperationRecord(canonicalizeUserOperation(signed));
+  const wire = deterministicUserOperationRecord(signed);
   let sent = 0;
   await fence.route({ reservation: persisted, wire, entryPoint: ENTRY_POINT, send: async () => { sent += 1; return HASH; } });
   assert.equal(sent, 1);
