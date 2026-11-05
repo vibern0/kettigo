@@ -10,12 +10,17 @@ const fixture = vi.hoisted(() => ({
   readCalls: vi.fn(),
   pending: null as any,
   getterFails: false,
+  version: "legacy1",
+  decrypt: vi.fn(),
   session: undefined as any,
 }));
 vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
-    readContract: async () => 0n,
+    readContract: async ({ functionName }: { functionName: string }) =>
+      functionName === "pendingAdmissionOf"
+        ? [`0x${"a".repeat(64)}`, 7n, `0x${"a".repeat(64)}`, true]
+        : 0n,
     getBlockNumber: async () => 0n,
     request: async () => [],
     watchBlockNumber: () => () => {},
@@ -28,6 +33,10 @@ vi.mock("@/lib/contracts", async (original) => ({
     confidentialUsdc: "0x2222222222222222222222222222222222222222",
     confidentialPrizePool: "0x3333333333333333333333333333333333333333",
   },
+}));
+vi.mock("@/lib/runtime-config", () => ({
+  publicConfig: (name: string, fallback?: string) =>
+    name === "NEXT_PUBLIC_POOL_VERSION" ? fixture.version : (fallback ?? ""),
 }));
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
@@ -45,7 +54,8 @@ vi.mock("@/lib/smart-session", () => ({
 }));
 vi.mock("@/lib/zama", async () => ({
   asChecksumAddress: (await vi.importActual<typeof import("viem")>("viem")).getAddress,
-  createPublicZamaSDK: vi.fn(),
+  createPublicZamaSDK: () => ({ terminate: vi.fn() }),
+  decryptPublicBoolean: fixture.decrypt,
   decryptPublicUint64: vi.fn(),
   encryptUint64: vi.fn(),
   withSmartZamaSDK: vi.fn(),
@@ -66,6 +76,9 @@ beforeEach(() => {
   fixture.readCalls.mockResolvedValue([{ to: fixture.account, data: "0x" }]);
   fixture.pending = null;
   fixture.getterFails = false;
+  fixture.version = "legacy1";
+  fixture.decrypt.mockReset();
+  fixture.decrypt.mockResolvedValue({ clearValue: true, decryptionProof: "0x1234" });
   fixture.session = {
     address: fixture.account,
     prepareTransaction: fixture.prepare,
@@ -135,4 +148,78 @@ test("a pending getter failure retains the captured attempted identity as checka
   expect(await screen.findByRole("button", { name: "Check status" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   expect(document.body.textContent).not.toContain("stored secret");
+});
+
+test("attempted participation confirmation retains its captured identity when the pending getter throws", async () => {
+  fixture.version = "2";
+  fixture.send.mockImplementation(({ onOperationPrepared }) => {
+    const operation = {
+      chainId: 11155111 as const,
+      entryPoint: entryPoint07Address,
+      sender: fixture.account,
+      userOperationHash: `0x${"c".repeat(64)}` as const,
+    };
+    onOperationPrepared(operation);
+    fixture.getterFails = true;
+    throw new Error("participation gateway secret");
+  });
+  render(
+    <ToastProvider>
+      <ActionCenterProvider>
+        <SavingsPage />
+      </ActionCenterProvider>
+    </ToastProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(fixture.send).toHaveBeenCalledTimes(1));
+  fireEvent.click(await screen.findByRole("button", { name: /Activity/i }));
+  expect(await screen.findByRole("button", { name: "Check status" })).toBeTruthy();
+  expect(screen.queryByText("Failed")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(document.body.textContent).not.toContain("participation gateway secret");
+});
+
+test("participation Activity reloads the saved attempted identity for read-only recovery", async () => {
+  fixture.version = "2";
+  const operation = {
+    chainId: 11155111 as const,
+    entryPoint: entryPoint07Address,
+    sender: fixture.account,
+    userOperationHash: `0x${"d".repeat(64)}` as const,
+  };
+  fixture.send.mockImplementation(({ onOperationPrepared }) => {
+    onOperationPrepared(operation);
+    fixture.pending = { ...operation, createdAt: 1, phase: "attempted" as const };
+    fixture.getterFails = true;
+    throw new Error("participation gateway secret");
+  });
+  const view = render(
+    <ToastProvider>
+      <ActionCenterProvider>
+        <SavingsPage />
+      </ActionCenterProvider>
+    </ToastProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await screen.findByRole("button", { name: /Activity/i });
+  await waitFor(() =>
+    expect(localStorage.getItem("kettigo:actions")).toContain(operation.userOperationHash),
+  );
+  view.unmount();
+  fixture.getterFails = false;
+  render(
+    <ToastProvider>
+      <ActionCenterProvider>
+        <SavingsPage />
+      </ActionCenterProvider>
+    </ToastProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /Activity/i }));
+  fireEvent.click(await screen.findByRole("button", { name: "Check status" }));
+  expect(
+    await screen.findByText("Still processing. Check status to see the latest update."),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });

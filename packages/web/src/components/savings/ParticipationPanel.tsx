@@ -207,13 +207,21 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
         async ({ update }) => {
           update({ status: "waiting-wallet" });
           try {
-            const result = await prepared.confirm();
+            const result = await prepared.confirm({
+              onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+            });
             update({ status: "completed" });
             setMember(result.membershipIndex);
             setPending(result.pending);
             toast({ tone: "success", title: "Savings setup complete." });
           } catch (error) {
-            if (session.getPendingOperation?.()?.phase === "attempted") {
+            let attempted = false;
+            try {
+              attempted = session.getPendingOperation?.()?.phase === "attempted";
+            } catch {
+              // ActionCenter retains the captured public identity from preparation.
+            }
+            if (attempted) {
               update({
                 status: "confirming",
                 error: "Still processing. Check status to see the latest update.",

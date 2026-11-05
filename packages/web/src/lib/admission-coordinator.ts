@@ -1,7 +1,11 @@
 import { NotEntitledError, RpcRateLimitError } from "@zama-fhe/sdk";
 import { getAddress, isAddress, isHex, type Address, type Hex } from "viem";
 
-import type { PasskeySmartSession, PreparedSmartTransaction } from "./smart-session.ts";
+import type {
+  PasskeySmartSession,
+  PreparedSmartTransaction,
+  SmartTransactionOptions,
+} from "./smart-session.ts";
 
 export type PendingAdmission = Readonly<{
   balance: Hex;
@@ -183,7 +187,7 @@ function readyAdmission(
   return Object.freeze({
     cancel,
     // Do not make this async: prepared.send must begin within the Confirm gesture stack.
-    confirm: () => {
+    confirm: (options?: SmartTransactionOptions) => {
       if (confirmation) return confirmation;
       try {
         assertActive(signal);
@@ -195,7 +199,7 @@ function readyAdmission(
       active = false;
       removeAbort();
       try {
-        const sent = prepared.send();
+        const sent = prepared.send(options);
         confirmation = sent.then(async () => {
           try {
             return await reconcile(dependencies, review, signal);
