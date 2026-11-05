@@ -25,6 +25,73 @@ type DepositSheetProps = {
   onClose: () => void;
 };
 
+type DepositConfirmationProps = Pick<
+  DepositSheetProps,
+  | "parsedAmount"
+  | "walletAfter"
+  | "poolAfter"
+  | "confirming"
+  | "canConfirm"
+  | "onBack"
+  | "onConfirm"
+>;
+
+function DepositConfirmation(props: DepositConfirmationProps) {
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
+        <p className="label">Confirm</p>
+        <div className="mt-3 space-y-2 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted">Deposit</span>
+            <span className="font-semibold tabular-nums">
+              {formatUSDC(props.parsedAmount)} USDC
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted">Wallet after</span>
+            <span className="font-semibold tabular-nums">{formatUSDC(props.walletAfter)} USDC</span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted">Pool after</span>
+            <span className="font-semibold tabular-nums">{formatUSDC(props.poolAfter)} USDC</span>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          className="btn-secondary !px-3"
+          onClick={props.onBack}
+          disabled={props.confirming}
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          className="btn-primary !px-3"
+          disabled={!props.canConfirm}
+          onClick={props.onConfirm}
+        >
+          {props.confirming ? (
+            <>
+              <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              Confirming...
+            </>
+          ) : (
+            "Confirm"
+          )}
+        </button>
+      </div>
+      {props.confirming && (
+        <p role="status" className="text-sm text-muted">
+          Approve with your passkey when asked. Your deposit will then continue in Activity.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function DepositSheet(props: DepositSheetProps) {
   const {
     step,
@@ -113,57 +180,15 @@ export function DepositSheet(props: DepositSheetProps) {
             {preparing ? "Preparing deposit..." : "Review deposit"}
           </button>
         ) : (
-          <div className="space-y-4">
-            <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
-              <p className="label">Confirm</p>
-              <div className="mt-3 space-y-2 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted">Deposit</span>
-                  <span className="font-semibold tabular-nums">
-                    {formatUSDC(parsedAmount)} USDC
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted">Wallet after</span>
-                  <span className="font-semibold tabular-nums">{formatUSDC(walletAfter)} USDC</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted">Pool after</span>
-                  <span className="font-semibold tabular-nums">{formatUSDC(poolAfter)} USDC</span>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                className="btn-secondary !px-3"
-                onClick={onBack}
-                disabled={confirming}
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                className="btn-primary !px-3"
-                disabled={!canConfirm}
-                onClick={onConfirm}
-              >
-                {confirming ? (
-                  <>
-                    <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                    Confirming...
-                  </>
-                ) : (
-                  "Confirm"
-                )}
-              </button>
-            </div>
-            {confirming && (
-              <p role="status" className="text-sm text-muted">
-                Approve with your passkey when asked. Your deposit will then continue in Activity.
-              </p>
-            )}
-          </div>
+          <DepositConfirmation
+            parsedAmount={parsedAmount}
+            walletAfter={walletAfter}
+            poolAfter={poolAfter}
+            confirming={confirming}
+            canConfirm={canConfirm}
+            onBack={onBack}
+            onConfirm={onConfirm}
+          />
         )}
       </div>
     </SheetViewport>,
