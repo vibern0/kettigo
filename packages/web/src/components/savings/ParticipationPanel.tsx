@@ -56,6 +56,14 @@ function copyPending(
   };
 }
 
+function samePending(left: PendingAdmission, right: PendingAdmission) {
+  return (
+    left.nonce === right.nonce &&
+    left.marker.toLowerCase() === right.marker.toLowerCase() &&
+    left.requested === right.requested
+  );
+}
+
 export const ParticipationPanel = forwardRef<ParticipationPanelHandle, ParticipationPanelProps>(
   function ParticipationPanel({ account, pool, session, onReviewStart }, ref) {
     const toast = useToast();
@@ -66,6 +74,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     const [ready, setReady] = useState<AdmissionReady>();
     const [busy, setBusy] = useState(false);
     const [unresolved, setUnresolved] = useState(false);
+    const [finalizedPending, setFinalizedPending] = useState<PendingAdmission>();
     const abortRef = useRef<AbortController>();
     const epoch = useRef(0);
     const enabled = hydrated && poolVersion() && Boolean(account && pool && session);
@@ -87,6 +96,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
       },
       [account, pool, session],
     );
+    useEffect(() => setFinalizedPending(undefined), [account, pool, session]);
 
     const refresh = async () => {
       if (!account || !pool || !poolVersion()) return;
@@ -110,8 +120,16 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
           }),
         ]);
         if (request !== epoch.current) return;
+        const currentPending = copyPending(nextPending);
+        if (finalizedPending && samePending(finalizedPending, currentPending)) {
+          setMember(nextMember);
+          setPending(currentPending);
+          setUnresolved(true);
+          return;
+        }
         setMember(nextMember);
-        setPending(copyPending(nextPending));
+        setPending(currentPending);
+        setFinalizedPending(undefined);
       } catch {
         if (request === epoch.current) setUnresolved(true);
       }
@@ -230,6 +248,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
             }
             if (error instanceof AdmissionPostConfirmationReadError) {
               // The canonical send completed; only the follow-up display reads failed.
+              setFinalizedPending(prepared.reviewedPending);
               setUnresolved(true);
               update({ status: "updating", error: "Savings status needs a refresh." });
               return;

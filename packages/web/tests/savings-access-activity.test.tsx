@@ -12,15 +12,28 @@ const fixture = vi.hoisted(() => ({
   getterFails: false,
   version: "legacy1",
   decrypt: vi.fn(),
+  postReadFailure: undefined as "membership" | "pending" | undefined,
+  postReadFailureUsed: false,
+  sent: false,
   session: undefined as any,
 }));
 vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
-    readContract: async ({ functionName }: { functionName: string }) =>
-      functionName === "pendingAdmissionOf"
+    readContract: async ({ functionName }: { functionName: string }) => {
+      if (
+        fixture.sent &&
+        fixture.postReadFailure ===
+          (functionName === "membershipIndexOf" ? "membership" : "pending") &&
+        !fixture.postReadFailureUsed
+      ) {
+        fixture.postReadFailureUsed = true;
+        throw new Error(`${functionName} unavailable`);
+      }
+      return functionName === "pendingAdmissionOf"
         ? [`0x${"a".repeat(64)}`, 7n, `0x${"a".repeat(64)}`, true]
-        : 0n,
+        : 0n;
+    },
     getBlockNumber: async () => 0n,
     request: async () => [],
     watchBlockNumber: () => () => {},
@@ -77,6 +90,9 @@ beforeEach(() => {
   fixture.pending = null;
   fixture.getterFails = false;
   fixture.version = "legacy1";
+  fixture.postReadFailure = undefined;
+  fixture.postReadFailureUsed = false;
+  fixture.sent = false;
   fixture.decrypt.mockReset();
   fixture.decrypt.mockResolvedValue({ clearValue: true, decryptionProof: "0x1234" });
   fixture.session = {
@@ -223,3 +239,33 @@ test("participation Activity reloads the saved attempted identity for read-only 
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
+
+test.each(["membership", "pending"] as const)(
+  "a canonical participation send keeps %s-read failure refreshable without retrying",
+  async (postReadFailure) => {
+    fixture.version = "2";
+    fixture.postReadFailure = postReadFailure;
+    fixture.send.mockImplementation(async () => {
+      fixture.sent = true;
+      return "0xdead";
+    });
+    render(
+      <ToastProvider>
+        <ActionCenterProvider>
+          <SavingsPage />
+        </ActionCenterProvider>
+      </ToastProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("Your savings status needs a refresh.")).toBeTruthy();
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /Activity/i }));
+    expect(screen.queryByText("Failed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+    await screen.findByText("Your savings status needs a refresh.");
+    expect(screen.queryByRole("button", { name: "Review participation" })).toBeNull();
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+  },
+);

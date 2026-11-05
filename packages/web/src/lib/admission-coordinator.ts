@@ -186,6 +186,7 @@ function readyAdmission(
   signal?.addEventListener("abort", cancel, { once: true });
   return Object.freeze({
     cancel,
+    reviewedPending: copyPending(review.pending),
     // Do not make this async: prepared.send must begin within the Confirm gesture stack.
     confirm: (options?: SmartTransactionOptions) => {
       if (confirmation) return confirmation;
