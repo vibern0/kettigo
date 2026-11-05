@@ -7,6 +7,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
+import { entryPoint07Address } from "viem/account-abstraction";
 
 import { confidentialPrizePoolAbi } from "./contracts.ts";
 import type {
@@ -15,6 +16,10 @@ import type {
   PrizeProofResult,
 } from "./prize-proof-client.ts";
 import { createPrizeProofClient } from "./prize-proof-client.ts";
+import {
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "./passkey-operation.ts";
 import type {
   PasskeySmartSession,
   PreparedSmartTransaction,
@@ -63,6 +68,7 @@ export type PrizeCheckCoordinatorDependencies = Readonly<{
   session: ReceiptSession;
   readChecked(drawId: bigint, options?: PinnedRead): Promise<boolean>;
   readAward(drawId: bigint, options?: PinnedRead): Promise<Hex>;
+  readBlockHash(signal?: AbortSignal): Promise<Hex>;
   getProofClient(): ProofClient;
   prepareReadSessionCalls?(signal?: AbortSignal): Promise<readonly SmartAccountCall[]>;
   intentStore: PrizeCheckIntentStore;
@@ -76,6 +82,7 @@ export type PreparedPrizeCheck = Readonly<{
 
 const ACTION = "checkPrize" as const;
 const key = "kettigo.prize-check-intent.v1";
+const ENTRY_POINT = getAddress(entryPoint07Address);
 const aborted = (signal?: AbortSignal) => {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted.", "AbortError");
 };
@@ -105,11 +112,14 @@ function sameOperation(left: SafeUserOperationIdentity, right: SafeUserOperation
 }
 
 function validOperation(value: unknown, account: Address): value is SafeUserOperationIdentity {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (Object.keys(value).sort().join(",") !== "chainId,entryPoint,sender,userOperationHash")
+    return false;
   const operation = value as SafeUserOperationIdentity;
   return (
     operation.chainId === 11155111 &&
     isAddress(operation.entryPoint) &&
+    getAddress(operation.entryPoint) === ENTRY_POINT &&
     isAddress(operation.sender) &&
     getAddress(operation.sender) === account &&
     isHex(operation.userOperationHash) &&
@@ -130,9 +140,10 @@ function intent(
     drawId: scope.drawId,
     action: ACTION,
     operation: Object.freeze({
-      ...operation,
+      chainId: 11155111,
       entryPoint: getAddress(operation.entryPoint),
       sender: getAddress(operation.sender),
+      userOperationHash: operation.userOperationHash,
     }),
   });
 }
@@ -142,9 +153,12 @@ export function createPrizeCheckIntentStore(
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
 ): PrizeCheckIntentStore {
   const parse = (raw: string | null): PrizeCheckIntent | null => {
-    if (!raw || raw.length > 2048) return null;
+    if (raw === null) return null;
+    if (raw.length > 2048) throw new Error("Saved prize-check intent is corrupt.");
     try {
       const value = JSON.parse(raw) as Record<string, unknown>;
+      if (Object.keys(value).sort().join(",") !== "account,action,chainId,drawId,operation,pool")
+        throw new Error("invalid schema");
       if (
         value.action !== ACTION ||
         value.chainId !== 11155111 ||
@@ -155,22 +169,26 @@ export function createPrizeCheckIntentStore(
         !isAddress(value.pool) ||
         !isAddress(value.account)
       )
-        return null;
+        throw new Error("invalid schema");
       const drawId = BigInt(value.drawId);
+      assertDraw(drawId);
       const candidate = {
         pool: getAddress(value.pool as Address),
         account: getAddress(value.account as Address),
         drawId,
       };
-      if (!validOperation(value.operation, candidate.account)) return null;
+      if (!validOperation(value.operation, candidate.account)) throw new Error("invalid operation");
       return intent(candidate, value.operation);
-    } catch {
-      return null;
+    } catch (error) {
+      throw new Error("Saved prize-check intent is corrupt.", { cause: error });
     }
   };
   return Object.freeze({
     async save(value) {
       const normalized = intent(value, value.operation);
+      const existing = parse(storage.getItem(key));
+      if (existing && !sameIntent(existing, normalized))
+        throw new Error("Another prize check is already pending.");
       storage.setItem(
         key,
         JSON.stringify({
@@ -188,7 +206,10 @@ export function createPrizeCheckIntentStore(
     read: () => parse(storage.getItem(key)),
     async clear(value) {
       const current = parse(storage.getItem(key));
-      if (current && sameIntent(current, value)) storage.removeItem(key);
+      if (!current || !sameIntent(current, value)) return;
+      storage.removeItem(key);
+      if (storage.getItem(key) !== null)
+        throw new Error("Could not clear the pending prize check.");
     },
   });
 }
@@ -228,9 +249,11 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
   const review = async (drawId: bigint, signal?: AbortSignal): Promise<PrizeCheckState> => {
     assertDraw(drawId);
     aborted(signal);
-    const isChecked = await dependencies.readChecked(drawId, { signal });
+    const blockHash = await dependencies.readBlockHash(signal);
     aborted(signal);
-    if (isChecked) return readState({ ...scope, drawId }, dependencies, { signal });
+    const isChecked = await dependencies.readChecked(drawId, { blockHash, signal });
+    aborted(signal);
+    if (isChecked) return readState({ ...scope, drawId }, dependencies, { blockHash, signal });
     const outcome = await dependencies.getProofClient().getProof(drawId, { signal });
     aborted(signal);
     if (outcome.kind !== "proof")
@@ -255,13 +278,13 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
       proof.chainId !== 11155111n
     )
       throw new Error("The proof is outside this prize-check scope.");
-    const isChecked = await dependencies.readChecked(reviewed.drawId, { signal });
-    aborted(signal);
-    if (isChecked) throw new Error("This draw has already been checked.");
     const calls = dependencies.prepareReadSessionCalls
       ? await dependencies.prepareReadSessionCalls(signal)
       : [];
     aborted(signal);
+    const isChecked = await dependencies.readChecked(reviewed.drawId, { signal });
+    aborted(signal);
+    if (isChecked) throw new Error("This draw has already been checked.");
     const data = encodeFunctionData({
       abi: confidentialPrizePoolAbi,
       functionName: "checkPrize",
@@ -291,6 +314,8 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
     signal?: AbortSignal,
   ): Promise<PrizeCheckState | SafeUserOperationReceipt> => {
     aborted(signal);
+    if (!sameIntentForScope(saved, scope))
+      throw new Error("The saved prize check belongs to a different account or draw.");
     if (!dependencies.session.lookupUserOperation)
       throw new Error("Operation reconciliation is unavailable.");
     const result = await dependencies.session.lookupUserOperation(saved.operation);
@@ -310,8 +335,31 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
     review,
     prepare,
     reconcile,
-    pending: () => dependencies.intentStore.read(),
+    pending: () => {
+      const saved = dependencies.intentStore.read();
+      if (saved && !sameIntentForScope(saved, scope))
+        throw new Error("The saved prize check belongs to a different account or draw.");
+      return saved;
+    },
   });
+}
+
+function sameIntentForScope(
+  intentValue: PrizeCheckIntent,
+  scope: Readonly<{ pool: Address; account: Address }>,
+): boolean {
+  try {
+    assertDraw(intentValue.drawId);
+    return (
+      intentValue.chainId === 11155111 &&
+      intentValue.action === ACTION &&
+      same(intentValue.pool, scope.pool) &&
+      same(intentValue.account, scope.account) &&
+      validOperation(intentValue.operation, scope.account)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function ready(
@@ -323,6 +371,7 @@ function ready(
   let active = true,
     attempted = false,
     confirmation: Promise<PrizeCheckState> | undefined;
+  let observed: PrizeCheckIntent | undefined;
   const cancel = () => {
     if (!active || attempted) return;
     active = false;
@@ -348,23 +397,35 @@ function ready(
         // Deliberately no await before this call: credential mediation needs the Confirm stack.
         const sent = prepared.send({
           onOperationPrepared: async (operation) => {
-            await dependencies.intentStore.save(intent(scope, operation));
+            aborted(signal);
+            const captured = intent(scope, operation);
+            await dependencies.intentStore.save(captured);
+            aborted(signal);
+            observed = captured;
           },
         });
-        confirmation = sent.then(async () => {
-          const saved = dependencies.intentStore.read();
-          if (
-            !saved ||
-            !same(saved.pool, scope.pool) ||
-            !same(saved.account, scope.account) ||
-            saved.drawId !== scope.drawId
-          )
-            throw new Error("The pending prize check could not be recovered.");
-          const result = await createPrizeCheckCoordinator(dependencies).reconcile(saved, signal);
-          if ("state" in result && result.state === "checked") return result;
-          if (result.state === "failed") throw new Error("The prize check was rejected onchain.");
-          throw new Error("The prize check is still processing.");
-        });
+        confirmation = sent.then(
+          async () => {
+            if (!observed) throw new Error("The pending prize check could not be recovered.");
+            const result = await createPrizeCheckCoordinator(dependencies).reconcile(
+              observed,
+              signal,
+            );
+            if ("state" in result && result.state === "checked") return result;
+            if (result.state === "failed") throw new Error("The prize check was rejected onchain.");
+            throw new Error("The prize check is still processing.");
+          },
+          async (error) => {
+            if (
+              observed &&
+              (error instanceof SafeUserOperationNotSubmittedError ||
+                error instanceof SafeUserOperationRejectedError) &&
+              sameOperation(error.operation, observed.operation)
+            )
+              await dependencies.intentStore.clear(observed);
+            throw error;
+          },
+        );
       } catch (error) {
         confirmation = Promise.reject(error);
       }
@@ -395,6 +456,17 @@ export function createViemPrizeChainReader(client: ViemRequestClient, pool: Addr
     return result;
   };
   return Object.freeze({
+    async readBlockHash(options: ReaderOptions = {}): Promise<Hex> {
+      aborted(options.signal);
+      const block = await client.request({
+        method: "eth_getBlockByNumber",
+        params: ["latest", false],
+      });
+      aborted(options.signal);
+      if (!block || typeof block !== "object" || !isHex((block as { hash?: unknown }).hash))
+        throw new Error("Invalid block response.");
+      return (block as { hash: Hex }).hash;
+    },
     async getBlockHash(blockNumber: bigint, options: ReaderOptions = {}): Promise<Hex> {
       aborted(options.signal);
       const block = await client.request({

@@ -3,9 +3,15 @@ import test from "node:test";
 
 import {
   createPrizeCheckCoordinator,
+  createPrizeCheckIntentStore,
   createViemPrizeChainReader,
 } from "../src/lib/prize-check-coordinator.ts";
-import { encodeAbiParameters } from "viem";
+import { decodeFunctionData, encodeAbiParameters } from "viem";
+import { confidentialPrizePoolAbi } from "@kettigo/protocol";
+import {
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "../src/lib/passkey-operation.ts";
 
 const ACCOUNT = "0x1111111111111111111111111111111111111111";
 const POOL = "0x2222222222222222222222222222222222222222";
@@ -78,6 +84,7 @@ function fixture(overrides = {}) {
     },
     readChecked: async () => checked,
     readAward: async () => award,
+    readBlockHash: async () => HASH,
     getProofClient: () => ({
       getProof: async () => {
         proofs += 1;
@@ -109,6 +116,277 @@ function fixture(overrides = {}) {
     getSends: () => sends,
   };
 }
+
+function memoryStorage(initial = null) {
+  let value = initial;
+  return {
+    getItem: () => value,
+    setItem: (_key, next) => {
+      value = next;
+    },
+    removeItem: () => {
+      value = null;
+    },
+    raw: () => value,
+  };
+}
+
+test("rejects corrupt saved intent rather than overwriting it", async () => {
+  const storage = memoryStorage("{bad");
+  const store = createPrizeCheckIntentStore(storage);
+  assert.throws(() => store.read(), /corrupt/i);
+  await assert.rejects(
+    store.save({
+      chainId: 11155111,
+      pool: POOL,
+      account: ACCOUNT,
+      drawId: 4n,
+      action: "checkPrize",
+      operation: identity(),
+    }),
+    /corrupt/i,
+  );
+  assert.equal(storage.raw(), "{bad");
+});
+
+test("rejects unknown identity fields and a non-EntryPoint-0.7 saved identity", async () => {
+  const base = {
+    chainId: 11155111,
+    pool: POOL,
+    account: ACCOUNT,
+    drawId: "4",
+    action: "checkPrize",
+    operation: { ...identity() },
+  };
+  for (const operation of [
+    { ...base.operation, signature: "0x1234" },
+    { ...base.operation, entryPoint: POOL },
+  ]) {
+    const storage = memoryStorage(JSON.stringify({ ...base, operation }));
+    assert.throws(() => createPrizeCheckIntentStore(storage).read(), /corrupt/i);
+  }
+});
+
+test("fails closed when durable save or exact clear readback fails", async () => {
+  const noWrite = { getItem: () => null, setItem() {}, removeItem() {} };
+  const store = createPrizeCheckIntentStore(noWrite);
+  const saved = {
+    chainId: 11155111,
+    pool: POOL,
+    account: ACCOUNT,
+    drawId: 4n,
+    action: "checkPrize",
+    operation: identity(),
+  };
+  await assert.rejects(store.save(saved), /could not save/i);
+  const stuck = memoryStorage(JSON.stringify({ ...saved, drawId: "4" }));
+  stuck.removeItem = () => {};
+  await assert.rejects(createPrizeCheckIntentStore(stuck).clear(saved), /could not clear/i);
+});
+
+test("uses one canonical initial snapshot for checked history", async () => {
+  const calls = [];
+  const { coordinator, setChecked } = fixture({
+    readBlockHash: async () => HASH,
+    readChecked: async (_draw, options) => {
+      calls.push(["checked", options.blockHash]);
+      return true;
+    },
+    readAward: async (_draw, options) => {
+      calls.push(["award", options.blockHash]);
+      return HASH;
+    },
+  });
+  setChecked(true);
+  await coordinator.review(4n);
+  assert.deepEqual(calls, [
+    ["checked", HASH],
+    ["checked", HASH],
+    ["award", HASH],
+  ]);
+});
+
+test("does not prepare after another checker wins during read-session setup", async () => {
+  let reads = 0,
+    preparations = 0;
+  const { coordinator } = fixture({
+    readChecked: async () => ++reads > 1,
+    prepareReadSessionCalls: async () => [],
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => {
+        preparations += 1;
+        throw new Error("must not prepare");
+      },
+    },
+  });
+  const reviewed = await coordinator.review(4n);
+  await assert.rejects(coordinator.prepare(reviewed), /already been checked/i);
+  assert.equal(preparations, 0);
+});
+
+test("encodes the fixed beneficiary and all eight canonical check arguments", async () => {
+  let call;
+  const { coordinator } = fixture({
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async (calls) => {
+        call = calls.at(-1);
+        return { cancel() {}, send: async () => HASH };
+      },
+    },
+  });
+  const ready = await coordinator.prepare(await coordinator.review(4n));
+  assert.ok(ready);
+  const decoded = decodeFunctionData({ abi: confidentialPrizePoolAbi, data: call.data });
+  assert.equal(call.to, POOL);
+  assert.equal(decoded.functionName, "checkPrize");
+  assert.equal(decoded.args[0], 4n);
+  assert.equal(decoded.args[1], ACCOUNT);
+  assert.equal(decoded.args[5].length, 32);
+});
+
+test("keeps pending intent for a pending exact identity and rejects foreign scopes before lookup", async () => {
+  let lookedUp = 0;
+  const pending = {
+    chainId: 11155111,
+    pool: POOL,
+    account: ACCOUNT,
+    drawId: 4n,
+    action: "checkPrize",
+    operation: identity(),
+  };
+  const { coordinator } = fixture({
+    intentStore: { read: () => pending, save: async () => {}, clear: async () => {} },
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => {
+        throw new Error("unused");
+      },
+      lookupUserOperation: async () => {
+        lookedUp += 1;
+        return { state: "pending", operation: identity() };
+      },
+    },
+  });
+  assert.equal((await coordinator.reconcile(pending)).state, "pending");
+  await assert.rejects(
+    coordinator.reconcile({ ...pending, pool: "0x3333333333333333333333333333333333333333" }),
+    /different account or draw/i,
+  );
+  assert.equal(lookedUp, 1);
+});
+
+test("clears exactly observed metadata on known non-submission and rejection", async () => {
+  for (const failure of [
+    new SafeUserOperationNotSubmittedError(identity()),
+    new SafeUserOperationRejectedError(identity(), 4001),
+  ]) {
+    let saved = null,
+      clears = 0;
+    const { coordinator } = fixture({
+      intentStore: {
+        save: async (value) => {
+          saved = value;
+        },
+        read: () => saved,
+        clear: async (value) => {
+          assert.equal(value.operation.userOperationHash, OP_HASH);
+          clears += 1;
+          saved = null;
+        },
+      },
+      session: {
+        address: ACCOUNT,
+        prepareTransaction: async () => ({
+          cancel() {},
+          send: async (options) => {
+            await options.onOperationPrepared(identity());
+            throw failure;
+          },
+        }),
+      },
+    });
+    const ready = await coordinator.prepare(await coordinator.review(4n));
+    await assert.rejects(ready.confirm(), failure);
+    assert.equal(clears, 1);
+  }
+});
+
+test("aborting a ready review cancels it without invoking send", async () => {
+  let cancelled = 0,
+    sent = 0;
+  const { coordinator } = fixture({
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => ({
+        cancel: () => {
+          cancelled += 1;
+        },
+        send: async () => {
+          sent += 1;
+          return HASH;
+        },
+      }),
+    },
+  });
+  const controller = new AbortController();
+  const ready = await coordinator.prepare(
+    await coordinator.review(4n, controller.signal),
+    controller.signal,
+  );
+  controller.abort(new Error("account switched"));
+  await assert.rejects(ready.confirm(), /account switched/);
+  assert.equal(cancelled, 1);
+  assert.equal(sent, 0);
+});
+
+test("cancels a late prepared transaction when its scope aborts", async () => {
+  let resolve,
+    cancelled = 0,
+    started;
+  const delayed = new Promise((next) => {
+    resolve = next;
+  });
+  const began = new Promise((next) => {
+    started = next;
+  });
+  const { coordinator } = fixture({
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => {
+        started();
+        return delayed;
+      },
+    },
+  });
+  const controller = new AbortController();
+  const preparing = coordinator.prepare(
+    await coordinator.review(4n, controller.signal),
+    controller.signal,
+  );
+  await began;
+  controller.abort(new Error("scope changed"));
+  resolve({
+    cancel: () => {
+      cancelled += 1;
+    },
+    send: async () => HASH,
+  });
+  await assert.rejects(preparing, /scope changed/);
+  assert.equal(cancelled, 1);
+});
+
+test("retains checked immutable award when unrelated global winnings are consumed", async () => {
+  const { coordinator, setChecked, setAward } = fixture({
+    getProofClient: () => {
+      throw new Error("archive unavailable");
+    },
+  });
+  setChecked(true);
+  setAward(HASH);
+  assert.deepEqual(await coordinator.review(4n), { state: "checked", drawId: 4n, award: HASH });
+});
 
 test("already checked reads immutable historical award without a proof client or a send", async () => {
   const { coordinator, setChecked, getProofs, getSends } = fixture({
