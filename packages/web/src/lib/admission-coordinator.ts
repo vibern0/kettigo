@@ -149,7 +149,9 @@ function readyAdmission(
 
 export type ConfirmedVisibilityReadOptions<T> = Readonly<{
   read: () => Promise<T>;
-  observeConfirmedVisibility: (signal?: AbortSignal) => Promise<boolean>;
+  observeConfirmedVisibility: (
+    signal?: AbortSignal,
+  ) => Promise<Readonly<{ blockNumber: bigint; visible: boolean }>>;
   signal?: AbortSignal;
   isRateLimitError?: (error: unknown) => boolean;
 }>;
@@ -170,9 +172,9 @@ export async function readWithConfirmedVisibility<T>(
     const isRateLimit =
       options.isRateLimitError ?? ((error: unknown) => error instanceof RpcRateLimitError);
     if (!isRateLimit(firstError)) throw firstError;
-    const visible = await options.observeConfirmedVisibility(options.signal);
+    const visibility = await options.observeConfirmedVisibility(options.signal);
     assertActive(options.signal);
-    if (!visible) throw firstError;
+    if (!visibility.visible) throw firstError;
     try {
       return await options.read();
     } catch {

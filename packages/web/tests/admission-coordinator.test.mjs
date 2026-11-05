@@ -145,7 +145,7 @@ test("does not retry a terminal permission denial", async () => {
         reads += 1;
         throw denial;
       },
-      observeConfirmedVisibility: async () => true,
+      observeConfirmedVisibility: async () => ({ blockNumber: 123n, visible: true }),
     }),
     (error) => error === denial,
   );
@@ -160,7 +160,7 @@ test("retries one typed rate-limit read only after confirmed visibility", async 
     read: async () => (++reads === 1 ? Promise.reject(rateLimit) : "visible"),
     observeConfirmedVisibility: async () => {
       observations += 1;
-      return true;
+      return { blockNumber: 123n, visible: true };
     },
     isRateLimitError: (error) => error === rateLimit,
   });
@@ -179,7 +179,7 @@ test("preserves the first rate-limit error when confirmed visibility is unavaila
         reads += 1;
         throw rateLimit;
       },
-      observeConfirmedVisibility: async () => false,
+      observeConfirmedVisibility: async () => ({ blockNumber: 123n, visible: false }),
       isRateLimitError: (error) => error === rateLimit,
     }),
     (error) => error === rateLimit,
@@ -193,7 +193,7 @@ test("preserves the first rate-limit error when confirmed visibility is unavaila
       read: async () => {
         throw rateLimit;
       },
-      observeConfirmedVisibility: async () => true,
+      observeConfirmedVisibility: async () => ({ blockNumber: 123n, visible: true }),
       isRateLimitError: (error) => error === rateLimit,
       signal: controller.signal,
     }),
