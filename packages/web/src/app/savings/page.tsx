@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal, flushSync } from "react-dom";
+import { flushSync } from "react-dom";
 import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
 import { sepolia } from "viem/chains";
 import {
@@ -25,10 +25,9 @@ import {
 import { reportClientToast } from "@/lib/client-errors";
 import { afterNextPaint } from "@/lib/paint";
 import { useToast } from "@/components/Toast";
-import { SheetViewport } from "@/components/SheetViewport";
-import { AmountInput } from "@/components/AmountInput";
 import { LoadingAmount } from "@/components/LoadingAmount";
 import { DepositSheet } from "@/components/savings/DepositSheet";
+import { WithdrawalSheet } from "@/components/savings/WithdrawalSheet";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
 import type { ActionPatch } from "@/lib/action-center-model";
@@ -1245,223 +1244,57 @@ export default function SavingsPage() {
         />
       )}
 
-      {withdrawSheetStep && createPortal(
-        <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 backdrop-blur-sm sm:px-4 sm:pb-4">
-          <button
-            type="button"
-            aria-label="Close withdrawal sheet"
-            className="absolute inset-0 h-full w-full cursor-default"
-            onClick={closeSheets}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="withdraw-sheet-title"
-            className="glass-surface relative max-h-[min(86dvh,100%)] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
-          >
-            <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="label">Withdraw</p>
-                <h2 id="withdraw-sheet-title" className="font-display text-xl font-bold">
-                  Move savings to USDC
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label="Close withdrawal sheet"
-                onClick={closeSheets}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/40 text-muted transition-colors hover:bg-white/60 hover:text-text"
-              >
-                <svg
-                  aria-hidden="true"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {hasWithdrawablePrincipal && (
-              <AmountInput
-                label="Amount"
-                maxLabel={`${formatUSDC(principal)} USDC`}
-                value={withdrawAmount}
-                onChange={setWithdrawAmount}
-                onMax={() => setWithdrawAmount(principal !== undefined ? formatUSDC(principal, 6) : "0")}
-                disabled={withdrawSheetStep === "confirm"}
-              />
-            )}
-
-            {hasWithdrawablePrincipal && withdrawSheetStep === "entry" && (
-              <button
-                onClick={reviewWithdraw}
-                disabled={!session || !poolReady || status === "working" || preparingWithdrawal}
-                className="btn-secondary w-full"
-              >
-                {preparingWithdrawal ? "Preparing..." : "Review withdrawal"}
-              </button>
-            )}
-
-            {hasWithdrawablePrincipal && withdrawSheetStep === "confirm" && (
-              <div className="space-y-4">
-                <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
-                  <p className="label">Confirm</p>
-                  <div className="mt-3 space-y-2 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Withdraw</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(parsedWithdrawAmount)} USDC</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Savings after</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(withdrawPoolAfter)} USDC</span>
-                    </div>
-                  </div>
-                  <p className="mt-3 rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
-                    Your chances of winning update after this request.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary !px-3"
-                    onClick={() => setWithdrawSheetStep("entry")}
-                    disabled={Boolean(confirmingAction)}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary !px-3"
-                    disabled={!session || !poolReady || confirmingAction === "withdraw"}
-                    onClick={() =>
-                      void runTrackedTransaction(
-                        `Withdraw ${formatUSDC(parsedWithdrawAmount)} USDC`,
-                        "withdraw",
-                        (update, onSigned) => withdrawConfidential(parsedWithdrawAmount, update, onSigned),
-                        "Withdrawal requested.",
-                      )
-                    }
-                  >
-                    {confirmingAction === "withdraw" ? (
-                      <>
-                        <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                        Confirming...
-                      </>
-                    ) : (
-                      "Confirm"
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {(pendingWithdrawals.length > 0 || standalonePendingUnwraps.length > 0) && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted text-sm">Pending withdrawals</span>
-                  <button
-                    className="btn-ghost !py-1 !px-3 !text-xs bg-surface2"
-                    disabled={!session || !wrapperReady || status === "working"}
-                    onClick={() =>
-                      void run(
-                        async () => {
-                          await refreshPendingWithdrawals();
-                          await refreshPendingUnwraps();
-                        },
-                        "Pending withdrawals refreshed.",
-                        "pending",
-                      )
-                    }
-                  >
-                    {workingAction === "pending" ? "Refreshing..." : "Refresh"}
-                  </button>
-                </div>
-                {pendingWithdrawals.map((request) => (
-                  <div key={`${request.batchId.toString()}:${request.txHash}`} className="space-y-2 rounded-2xl bg-white/35 p-3">
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="font-semibold">{withdrawalStageCopy[request.stage]}</span>
-                      {request.amount !== undefined && (
-                        <span className="font-semibold tabular-nums">{formatUSDC(request.amount)} USDC</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted">{pendingWithdrawalBatchLabel(request)}</p>
-                    {request.stage === "requested" && request.closesAt !== undefined && (
-                      <p className="text-xs text-muted">
-                        Batch closes {new Intl.DateTimeFormat("en-US", { timeStyle: "short" }).format(new Date(Number(request.closesAt) * 1000))}.
-                      </p>
-                    )}
-                    {!automaticWithdrawals && request.stage === "claimable" && (
-                      <button
-                        className="btn-secondary w-full"
-                        disabled={status === "working"}
-                        onClick={() =>
-                          void run(
-                            () => claimWithdrawal(request.batchId),
-                            "Withdrawal ready to finalize.",
-                            "pending",
-                          )
-                        }
-                      >
-                        {workingAction === "pending" ? "Receiving..." : "Receive USDC"}
-                      </button>
-                    )}
-                    {!automaticWithdrawals && request.stage === "finalizing" && request.unwrapRequestId && (
-                      <button
-                        className="btn-secondary w-full"
-                        disabled={status === "working"}
-                        onClick={() =>
-                          void run(
-                            () => finalizeUnwrap(request.unwrapRequestId!),
-                            "Your USDC withdrawal is finalized.",
-                            "pending",
-                          )
-                        }
-                      >
-                        {workingAction === "pending" ? "Finalizing..." : "Finalize withdrawal"}
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {standalonePendingUnwraps.map((request) => (
-                  <div key={request.requestId} className="space-y-2">
-                    <button
-                      type="button"
-                      className="font-mono text-xs text-muted underline-offset-2 transition-colors hover:text-text hover:underline"
-                      title="Copy withdrawal ID"
-                      onClick={() => void copyPendingHash(request.requestId)}
-                    >
-                      {formatShortHash(request.requestId)}
-                    </button>
-                    <button
-                      className="btn-secondary w-full"
-                      disabled={status === "working"}
-                      onClick={() =>
-                        void run(
-                          () => finalizeUnwrap(request.requestId),
-                          "Your USDC withdrawal is finalized.",
-                          "pending",
-                        )
-                      }
-                    >
-                      {workingAction === "pending" ? "Finalizing..." : "Finalize withdrawal"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {!showWithdraw && <p className="text-sm text-muted">No deposited funds or pending withdrawals yet.</p>}
-          </div>
-        </SheetViewport>,
-        document.body,
+      {withdrawSheetStep && (
+        <WithdrawalSheet
+          step={withdrawSheetStep}
+          amount={withdrawAmount}
+          parsedAmount={parsedWithdrawAmount}
+          principal={principal}
+          poolAfter={withdrawPoolAfter}
+          canEnterAmount={hasWithdrawablePrincipal}
+          showWithdraw={showWithdraw}
+          pendingWithdrawals={pendingWithdrawals}
+          pendingUnwraps={standalonePendingUnwraps}
+          automaticWithdrawals={automaticWithdrawals}
+          preparing={preparingWithdrawal}
+          confirming={confirmingAction === "withdraw"}
+          working={status === "working"}
+          pendingWorking={workingAction === "pending"}
+          canReview={Boolean(session && poolReady && status !== "working")}
+          canRefresh={Boolean(session && wrapperReady && status !== "working")}
+          canConfirm={Boolean(session && poolReady && confirmingAction !== "withdraw")}
+          onAmountChange={setWithdrawAmount}
+          onMax={() => setWithdrawAmount(principal !== undefined ? formatUSDC(principal, 6) : "0")}
+          onReview={reviewWithdraw}
+          onBack={() => setWithdrawSheetStep("entry")}
+          onConfirm={() =>
+            void runTrackedTransaction(
+              `Withdraw ${formatUSDC(parsedWithdrawAmount)} USDC`,
+              "withdraw",
+              (update, onSigned) => withdrawConfidential(parsedWithdrawAmount, update, onSigned),
+              "Withdrawal requested.",
+            )
+          }
+          onClose={closeSheets}
+          onRefresh={() =>
+            void run(
+              async () => {
+                await refreshPendingWithdrawals();
+                await refreshPendingUnwraps();
+              },
+              "Pending withdrawals refreshed.",
+              "pending",
+            )
+          }
+          onClaim={(batchId) =>
+            void run(() => claimWithdrawal(batchId), "Withdrawal ready to finalize.", "pending")
+          }
+          onFinalize={(requestId) =>
+            void run(() => finalizeUnwrap(requestId), "Your USDC withdrawal is finalized.", "pending")
+          }
+          onCopy={(requestId) => void copyPendingHash(requestId)}
+          formatShortHash={formatShortHash}
+        />
       )}
 
     </div>
