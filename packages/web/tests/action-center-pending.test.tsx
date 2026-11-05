@@ -21,9 +21,32 @@ const session = {
   signTypedData,
 };
 
-vi.mock("@/lib/wallet-context", () => ({ useWallet: () => ({ session }) }));
+const wallet: { session: any } = { session };
+vi.mock("@/lib/wallet-context", () => ({ useWallet: () => wallet }));
 
-import { ActionCenterProvider } from "@/components/ActionCenter";
+import { ActionCenterProvider, useActionCenter } from "@/components/ActionCenter";
+
+function ActionProbe() {
+  const { actions, retryTrackedAction, runAction } = useActionCenter();
+  return (
+    <>
+      <output data-testid="actions">{JSON.stringify(actions)}</output>
+      <button
+        type="button"
+        onClick={() =>
+          runAction({ label: "Saved action", type: "pending" }, async () => {
+            throw new Error("server secret should never be shown");
+          })
+        }
+      >
+        Run action
+      </button>
+      <button type="button" onClick={() => actions[0] && retryTrackedAction(actions[0].id)}>
+        Retry first
+      </button>
+    </>
+  );
+}
 
 describe("ActionCenter pending operation", () => {
   it("checks the exact pending operation without sending another action", async () => {
@@ -66,5 +89,94 @@ describe("ActionCenter pending operation", () => {
     expect(await screen.findByText(/Status is unavailable right now/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Check status" })).toBeTruthy();
     session.recoverPendingOperation = recovery;
+  });
+
+  it("drops a late recovery result after the account changes", async () => {
+    let resolve!: (value: unknown) => void;
+    recoverPendingOperation.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const view = render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+    await screen.findByRole("button", { name: /activity/i });
+    fireEvent.click(screen.getByRole("button", { name: /activity/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    wallet.session = {
+      ...session,
+      address: "0x2234567890123456789012345678901234567890",
+      getPendingOperation: () => null,
+    };
+    view.rerender(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+    resolve({
+      state: "confirmed",
+      operation: session.getPendingOperation(),
+      transactionHash: `0x${"cd".repeat(32)}`,
+      blockHash: `0x${"ef".repeat(32)}`,
+      blockNumber: 1n,
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("actions").textContent).not.toContain("completed"),
+    );
+    wallet.session = session;
+  });
+
+  it("keeps runner error copy controlled", async () => {
+    wallet.session = {
+      ...session,
+      getPendingOperation: () => {
+        throw new Error("storage secret");
+      },
+    };
+    render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run action" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("actions").textContent).toContain("Status is unavailable"),
+    );
+    expect(screen.getByTestId("actions").textContent).not.toContain("secret");
+    fireEvent.click(screen.getByRole("button", { name: "Retry first" }));
+    expect(screen.getByTestId("actions").textContent).toContain("confirming");
+    wallet.session = session;
+  });
+
+  it("keeps legacy activity history readable after hydration", async () => {
+    wallet.session = null;
+    window.localStorage.setItem(
+      "kettigo:actions",
+      JSON.stringify([
+        {
+          id: "legacy",
+          label: "Earlier action",
+          type: "deposit",
+          status: "completed",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ]),
+    );
+    render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("actions").textContent).toContain("Earlier action"),
+    );
+    expect(screen.getByTestId("actions").textContent).not.toContain("operation");
+    window.localStorage.removeItem("kettigo:actions");
+    wallet.session = session;
   });
 });

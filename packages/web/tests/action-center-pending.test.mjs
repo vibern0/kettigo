@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   actionForPendingOperation,
   applyRunnerErrorFromPendingReader,
+  matchesPendingOperation,
   patchForPendingRecovery,
   patchForRunnerError,
 } from "../src/lib/action-center-pending.ts";
@@ -11,6 +12,7 @@ import {
   SafeUserOperationNotSubmittedError,
   SafeUserOperationRejectedError,
 } from "../src/lib/passkey-operation.ts";
+import { SafeUserOperationIntegrityError } from "../src/lib/canonical-user-operation-receipt.ts";
 
 const operation = {
   chainId: 11155111,
@@ -88,4 +90,30 @@ test("reader failure keeps an action non-final and unavailable", () => {
 
   assert.equal(updated.status, "confirming");
   assert.equal(updated.error, "Status is unavailable right now. Check status later.");
+});
+
+test("distinguishes integrity failure before staging from an attempted operation", () => {
+  const before = actionForPendingOperation({ ...operation, phase: "prepared" }, 2_000);
+  const after = actionForPendingOperation(operation, 2_000);
+  const integrity = new SafeUserOperationIntegrityError(
+    operation,
+    "server details must not render",
+  );
+
+  assert.equal(
+    patchForRunnerError(before, { ...operation, phase: "prepared" }, integrity).status,
+    "failed",
+  );
+  assert.equal(patchForRunnerError(after, operation, integrity).status, "confirming");
+});
+
+test("matches only the exact pending operation identity", () => {
+  const exact = actionForPendingOperation(operation, 2_000);
+  const unrelated = actionForPendingOperation(
+    { ...operation, userOperationHash: `0x${"cd".repeat(32)}` },
+    2_000,
+  );
+
+  assert.equal(matchesPendingOperation(exact, operation), true);
+  assert.equal(matchesPendingOperation(unrelated, operation), false);
 });
