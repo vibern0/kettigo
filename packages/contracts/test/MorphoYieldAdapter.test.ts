@@ -336,22 +336,80 @@ describe("MorphoYieldAdapter", function () {
     );
   });
 
-  it("keeps restoration accounting intact when Morpho attempts nested pool and adapter calls", async function () {
-    const { usdc, pool, morpho, adapter } = await deployFixture();
+  it("contains every reachable callback action during principal restoration", async function () {
+    const { owner, usdc, confidentialUsdc, pool, morpho, adapter } = await deployFixture();
+    const confidentialUsdcAddress = await confidentialUsdc.getAddress();
+    const poolAddress = await pool.getAddress();
+    await usdc.approve(confidentialUsdcAddress, USDC(1));
+    await confidentialUsdc.wrap(owner.address, USDC(1));
+    await encryptedDeposit(confidentialUsdc, confidentialUsdcAddress, poolAddress, owner, USDC(1));
+    await finalizeAdmission(pool, owner.address);
     await usdc.transfer(await adapter.getAddress(), USDC(100));
     await pool.supplyFinalizedMorphoPrincipal(USDC(100));
 
     const Callback = await ethers.getContractFactory("RestoreCallbackAttacker");
     const callback = await Callback.deploy(await pool.getAddress(), await adapter.getAddress());
+    const withdrawalInput = await fhevm
+      .createEncryptedInput(await pool.getAddress(), await callback.getAddress())
+      .add64(USDC(1))
+      .encrypt();
+    await callback.configureWithdrawal(withdrawalInput.handles[0], withdrawalInput.inputProof);
     await morpho.configureWithdrawCallback(await callback.getAddress(), USDC(1));
+
+    const ownerPrincipalBefore = await pool.encryptedPrincipalOf(owner.address);
+    const totalBefore = await pool.encryptedTotalPrincipal();
+    const callbackBatchId = await pool.currentWithdrawalBatchId();
+    const pendingDepositCountBefore = await pool.morphoPendingDepositCount();
+    await ethers.provider.send("evm_increaseTime", [Number(DRAW_INTERVAL)]);
+    await ethers.provider.send("evm_mine", []);
 
     await pool.restoreMorphoPrincipal(USDC(25));
 
     expect(await callback.poolRestoreSucceeded()).to.equal(false);
     expect(await callback.adapterRestoreSucceeded()).to.equal(false);
+    expect(await callback.adapterHarvestSucceeded()).to.equal(false);
+    expect(await callback.closeDrawSucceeded()).to.equal(false);
+    expect(await callback.settleWithdrawalSucceeded()).to.equal(false);
+    expect(await callback.requestWithdrawalSucceeded()).to.equal(true);
+    expect(await callback.poolRestoreRevertData()).to.equal(
+      pool.interface.getError("OnlyOwner")!.selector,
+    );
+    expect(await callback.adapterRestoreRevertData()).to.equal(
+      adapter.interface.getError("OnlyPrizePool")!.selector,
+    );
+    expect(await callback.adapterHarvestRevertData()).to.equal(
+      adapter.interface.getError("OnlyPrizePool")!.selector,
+    );
+    expect(await callback.closeDrawRevertData()).to.equal(
+      adapter.interface.getError("ReentrancyGuardReentrantCall")!.selector,
+    );
+    expect(await callback.settleWithdrawalRevertData()).to.equal(
+      pool.interface.encodeErrorResult("WithdrawalBatchNotClosed", [0n]),
+    );
     expect(await adapter.suppliedPrincipal()).to.equal(USDC(75));
     expect(await adapter.suppliedAssets()).to.equal(USDC(75));
-    expect(await pool.morphoPendingDepositCount()).to.equal(1n);
+    expect(await pool.morphoPendingDepositCount()).to.equal(pendingDepositCountBefore + 1n);
+    expect(await pool.participantCount()).to.equal(1n);
+    const callbackRequestBatchId = callbackBatchId + 1n;
+    expect(await pool.currentWithdrawalBatchId()).to.equal(callbackRequestBatchId);
+    expect(await pool.withdrawalAccounts(callbackRequestBatchId)).to.deep.equal([
+      await callback.getAddress(),
+    ]);
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, ownerPrincipalBefore)).to.equal(
+      await fhevm.debugger.decryptEuint(
+        FhevmType.euint64,
+        await pool.encryptedPrincipalOf(owner.address),
+      ),
+    );
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, totalBefore)).to.equal(
+      await fhevm.debugger.decryptEuint(FhevmType.euint64, await pool.encryptedTotalPrincipal()),
+    );
+    expect(
+      await fhevm.debugger.decryptEuint(
+        FhevmType.euint64,
+        await pool.encryptedWithdrawalBatchTotal(callbackRequestBatchId),
+      ),
+    ).to.equal(0n);
   });
 
   it("does not expose a standalone Morpho yield harvest", async function () {
