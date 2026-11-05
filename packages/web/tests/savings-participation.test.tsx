@@ -6,6 +6,7 @@ const fixture = vi.hoisted(() => ({
   pool: "0x3333333333333333333333333333333333333333" as const,
   version: "legacy1",
   reads: vi.fn(),
+  archive: vi.fn(),
   prepare: vi.fn(),
   send: vi.fn(),
   decrypt: vi.fn(),
@@ -24,9 +25,9 @@ vi.mock("viem", async (original) => ({
   createPublicClient: () => ({
     readContract: fixture.reads,
     getBlockNumber: async () => 0n,
-    request: async () => [],
+    request: fixture.archive,
     watchBlockNumber: () => () => {},
-    waitForTransactionReceipt: async () => ({ status: "success" }),
+    waitForTransactionReceipt: async () => ({ status: "success", logs: [] }),
   }),
 }));
 vi.mock("@/lib/runtime-config", () => ({
@@ -105,6 +106,7 @@ beforeEach(() => {
   fixture.principal = undefined;
   fixture.accessState = "ready";
   fixture.reads.mockReset();
+  fixture.archive.mockReset();
   fixture.prepare.mockReset();
   fixture.send.mockReset();
   fixture.decrypt.mockReset();
@@ -117,6 +119,7 @@ beforeEach(() => {
     if (functionName === "balanceOf") return fixture.walletBalance;
     return 0n;
   });
+  fixture.archive.mockResolvedValue([]);
   fixture.prepare.mockResolvedValue({ cancel: vi.fn(), send: fixture.send });
   fixture.send.mockImplementation(async () => {
     fixture.membershipIndex = 1n;
@@ -518,4 +521,46 @@ test("a stale initial no-pending status result cannot replace a newer deposit re
 
   expect(screen.getByRole("button", { name: "Review participation" })).toBeTruthy();
   expect(fixture.send).toHaveBeenCalledTimes(1);
+});
+
+test("a pending mode-2 account can withdraw with no displayed balance while archive reads fail", async () => {
+  fixture.version = "2";
+  fixture.principal = undefined;
+  fixture.archive.mockRejectedValue(new Error("archive unavailable"));
+  fixture.smartReads.mockResolvedValue([{ to: fixture.account, data: "0x" }]);
+  fixture.send.mockImplementation(async ({ onSigned }: { onSigned?: () => void } = {}) => {
+    onSigned?.();
+    return "0xdead";
+  });
+
+  mount();
+  await screen.findByRole("button", { name: "Review participation" });
+  await waitFor(() => expect(fixture.archive).toHaveBeenCalled());
+  expect(screen.getByText("— USDC")).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Withdraw" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
+  expect(fixture.decrypt).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review withdrawal" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  expect(fixture.prepare).toHaveBeenCalledTimes(1);
+  expect(fixture.send).not.toHaveBeenCalled();
+  const statusReadsBeforeSend = fixture.reads.mock.calls.filter(([call]) =>
+    ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
+  ).length;
+
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(fixture.send).toHaveBeenCalledTimes(1);
+  await waitFor(() =>
+    expect(
+      fixture.reads.mock.calls.filter(([call]) =>
+        ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
+      ),
+    ).toHaveLength(statusReadsBeforeSend + 2),
+  );
+  expect(fixture.prepare).toHaveBeenCalledTimes(1);
+  expect(fixture.decrypt).not.toHaveBeenCalled();
 });
