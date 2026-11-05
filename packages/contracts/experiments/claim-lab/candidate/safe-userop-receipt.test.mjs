@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateSafeUserOperationReceipt } from "./safe-userop-receipt.mjs";
+import {
+  serializeSafeUserOperationReceipt,
+  validateSafeUserOperationReceipt,
+  validateStoredSafeUserOperationReceipt,
+} from "./safe-userop-receipt.mjs";
 
 const hash = (digit) => `0x${digit.repeat(64)}`;
 const identity = {
@@ -39,5 +43,23 @@ test("strict UserOperation receipt binds own operation and separately retains ou
         identity,
       ),
     /outer/,
+  );
+});
+
+test("rejects missing, unknown, malformed, and noncanonical Safe terminal evidence", () => {
+  const cases = [
+    { ...receipt(), feeWei: -1n },
+    { ...receipt(), operation: [] },
+    { ...receipt(), outer: { ...receipt().outer, blockNumber: "09" } },
+    { ...receipt(), operation: { ...identity, nonce: "01" } },
+    { ...receipt(), status: "pending" },
+    { ...receipt(), operation: { ...identity, extra: true } },
+    { ...receipt(), outer: { transactionHash: hash("b"), blockHash: hash("c") } },
+  ];
+  for (const value of cases) assert.throws(() => validateSafeUserOperationReceipt(value, identity));
+  const stored = serializeSafeUserOperationReceipt(receipt());
+  assert.doesNotThrow(() => validateStoredSafeUserOperationReceipt(stored, identity));
+  assert.throws(() =>
+    validateStoredSafeUserOperationReceipt({ ...stored, feeWei: "01" }, identity),
   );
 });

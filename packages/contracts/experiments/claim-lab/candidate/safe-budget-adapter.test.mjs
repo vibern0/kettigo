@@ -396,6 +396,124 @@ test("original policy rejects the known high fee before a credential boundary", 
   await j.close();
 });
 
+test("rejects keyed or unsafe UserOperation nonces before reserving", async () => {
+  const j = await journal();
+  const fence = adapter(j);
+  for (const nonce of [9007199254740992n, 1n << 64n]) {
+    await assert.rejects(
+      fence.reserve({
+        intentId: `unsafe-${nonce}`,
+        operation: operation({ nonce }),
+        offeredAt: 1000,
+      }),
+      /nonce/,
+    );
+  }
+  assert.equal(j.snapshot().intents.length, 0);
+  await j.close();
+});
+
+test("reconciles a persisted Safe operation using only its own canonical event cost", async () => {
+  const j = await journal();
+  const fence = adapter(j);
+  const reservation = await fence.reserve({
+    intentId: "safe-reconcile",
+    operation: operation(),
+    offeredAt: 1000,
+  });
+  await fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
+  await j.recordAttempt("safe-reconcile");
+  const result = await fence.reconcile("safe-reconcile", {
+    lookup: async (identity) => ({
+      state: "failed",
+      operation: identity,
+      transactionHash: `0x${"22".repeat(32)}`,
+      blockNumber: 42n,
+      blockHash: `0x${"33".repeat(32)}`,
+      nonce: 0n,
+      actualGasCost: 7n,
+    }),
+  });
+  assert.deepEqual(result, { state: "reverted" });
+  assert.equal(j.intent("safe-reconcile").terminal.feeWei, "7");
+  await j.close();
+});
+
+test("reconciles a restarted Safe journal without signing or sending again", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "kettigo-safe-restart-"));
+  const j = await CandidateRunJournal.open({
+    directory: dir,
+    envelope: ORIGINAL_ENVELOPE,
+    now: () => 1000,
+  });
+  const first = adapter(j);
+  const reservation = await first.reserve({
+    intentId: "safe-restart",
+    operation: operation(),
+    offeredAt: 1000,
+  });
+  await first.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
+  await j.recordAttempt("safe-restart");
+  await j.close();
+  const restarted = await CandidateRunJournal.open({
+    directory: dir,
+    envelope: ORIGINAL_ENVELOPE,
+    now: () => 1000,
+  });
+  let lookups = 0;
+  const result = await adapter(restarted).reconcile("safe-restart", {
+    lookup: async (identity) => {
+      lookups += 1;
+      return {
+        state: "confirmed",
+        operation: identity,
+        transactionHash: `0x${"22".repeat(32)}`,
+        blockNumber: 42n,
+        blockHash: `0x${"33".repeat(32)}`,
+        nonce: 0n,
+        actualGasCost: 8n,
+      };
+    },
+  });
+  assert.deepEqual(result, { state: "success" });
+  assert.equal(lookups, 1);
+  assert.equal(restarted.actualSendCount("safe-restart"), 1);
+  assert.equal(restarted.snapshot().budget.feeActualWei, "8");
+  await restarted.close();
+});
+
+test("leaves pending evidence unresolved and rejects altered canonical identity", async () => {
+  const j = await journal();
+  const fence = adapter(j);
+  const reservation = await fence.reserve({
+    intentId: "safe-pending",
+    operation: operation(),
+    offeredAt: 1000,
+  });
+  await fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
+  await j.recordAttempt("safe-pending");
+  assert.deepEqual(
+    await fence.reconcile("safe-pending", { lookup: async () => ({ state: "pending" }) }),
+    { state: "unresolved" },
+  );
+  await assert.rejects(
+    fence.reconcile("safe-pending", {
+      lookup: async (identity) => ({
+        state: "confirmed",
+        operation: { ...identity, sender: POOL },
+        transactionHash: `0x${"22".repeat(32)}`,
+        blockNumber: 42n,
+        blockHash: `0x${"33".repeat(32)}`,
+        nonce: 0n,
+        actualGasCost: 7n,
+      }),
+    }),
+    /evidence mismatch/,
+  );
+  assert.equal(j.intent("safe-pending").terminal, null);
+  await j.close();
+});
+
 test("signed persistence failure and an expired reservation prevent route continuation", async () => {
   const j = await journal();
   const fence = adapter(j);

@@ -1,3 +1,9 @@
+import {
+  serializeSafeUserOperationReceipt,
+  validateSafeUserOperationReceipt,
+  validateStoredSafeUserOperationReceipt,
+} from "./safe-userop-receipt.mjs";
+
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const UINT = /^(0|[1-9][0-9]*)$/;
 const fail = (message) => {
@@ -10,6 +16,10 @@ export function findIntent(state, intentId) {
   return intent;
 }
 export function validateReceipt(receipt, intent) {
+  if (intent.kind === "user-operation") {
+    validateSafeUserOperationReceipt(receipt, intent.userOperation);
+    return;
+  }
   if (
     !receipt ||
     !validHash(receipt.hash) ||
@@ -25,13 +35,21 @@ export function validateReceipt(receipt, intent) {
   )
     fail("invalid canonical receipt");
 }
-export const serializeReceipt = (receipt) => ({ ...receipt, feeWei: receipt.feeWei.toString() });
+export const serializeReceipt = (receipt) =>
+  receipt.kind === "user-operation"
+    ? serializeSafeUserOperationReceipt(receipt)
+    : { ...receipt, feeWei: receipt.feeWei.toString() };
 export const occupiedFee = (state) =>
   state.intents.reduce(
     (total, intent) => total + BigInt(intent.terminal ? intent.terminal.feeWei : intent.maxFeeWei),
     0n,
   );
 export function validateStoredReceipt(receipt, intent) {
+  if (intent.kind === "user-operation") {
+    validateStoredSafeUserOperationReceipt(receipt, intent.userOperation);
+    if (BigInt(receipt.feeWei) > BigInt(intent.maxFeeWei)) fail("invalid persisted receipt");
+    return;
+  }
   if (
     !receipt ||
     !validHash(receipt.hash) ||

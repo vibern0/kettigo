@@ -145,10 +145,19 @@ function validatePersistedIntent(intent) {
       !validHash(intent.signed.hash))
   )
     fail("invalid persisted signature");
+  if (
+    intent.kind === "user-operation" &&
+    intent.signed &&
+    (intent.signed.hash !== intent.userOperation.userOperationHash ||
+      !intent.userOperation.wireDigest ||
+      createHash("sha256").update(intent.signed.raw).digest("hex") !==
+        intent.userOperation.wireDigest.slice(2))
+  )
+    fail("invalid persisted UserOperation signature");
   validatePersistedTransition(intent);
 }
 function validPersistedIntentFields(intent) {
-  return (
+  const shared =
     Boolean(intent) &&
     [
       typeof intent.intentId === "string" &&
@@ -162,7 +171,23 @@ function validPersistedIntentFields(intent) {
       validIntentBudget(intent),
       Array.isArray(intent.attempts),
       intent.observations === undefined || Array.isArray(intent.observations),
-    ].every(Boolean)
+    ].every(Boolean);
+  if (!shared) return false;
+  if (intent.kind === undefined) return true;
+  if (intent.kind !== "user-operation" || !intent.userOperation) return false;
+  const metadata = intent.userOperation;
+  return (
+    Object.keys(metadata).length === 6 &&
+    ["chainId", "entryPoint", "sender", "userOperationHash", "nonce", "wireDigest"].every((key) =>
+      Object.hasOwn(metadata, key),
+    ) &&
+    metadata.chainId === 11155111 &&
+    validAddress(metadata.entryPoint) &&
+    metadata.sender === intent.sender &&
+    validHash(metadata.userOperationHash) &&
+    UINT.test(metadata.nonce) &&
+    BigInt(metadata.nonce) === BigInt(intent.nonce) &&
+    (metadata.wireDigest === null || validHash(metadata.wireDigest))
   );
 }
 function validTarget(to, input) {
@@ -306,6 +331,8 @@ export class CandidateRunJournal {
         fail("signature replacement refused");
       }
       intent.signed = { raw, hash };
+      if (intent.kind === "user-operation")
+        intent.userOperation.wireDigest = `0x${createHash("sha256").update(raw).digest("hex")}`;
       intent.state = "signed";
       await this.#commit(proposed);
       return this.intent(intentId);
@@ -458,6 +485,24 @@ function validateRequest(request) {
     typeof request.maxGasPriceWei !== "bigint"
   )
     fail("invalid intent");
+  if (request.kind !== undefined) {
+    const meta = request.userOperation;
+    if (
+      request.kind !== "user-operation" ||
+      !meta ||
+      Object.keys(meta).length !== 5 ||
+      !["chainId", "entryPoint", "sender", "userOperationHash", "nonce"].every((key) =>
+        Object.hasOwn(meta, key),
+      ) ||
+      meta.chainId !== 11155111 ||
+      !validAddress(meta.entryPoint) ||
+      meta.sender !== request.sender ||
+      !validHash(meta.userOperationHash) ||
+      !UINT.test(meta.nonce) ||
+      BigInt(meta.nonce) !== BigInt(request.nonce)
+    )
+      fail("invalid UserOperation intent");
+  }
 }
 function sameRequest(intent, request) {
   return (
@@ -509,5 +554,7 @@ function savedIntent(request, fee, gasPrice, funding, usdc) {
     terminal: null,
   };
   delete intent.usdcCommitment;
+  if (intent.kind === "user-operation")
+    intent.userOperation = { ...intent.userOperation, wireDigest: null };
   return intent;
 }

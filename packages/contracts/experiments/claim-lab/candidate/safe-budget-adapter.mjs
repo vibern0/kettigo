@@ -137,6 +137,19 @@ function unsignedEqual(left, right) {
 function encodedRecord(record) {
   return `0x${Buffer.from(JSON.stringify(record), "utf8").toString("hex")}`;
 }
+function decodedRecord(raw) {
+  if (typeof raw !== "string" || !validBytes(raw)) fail("invalid persisted UserOperation wire");
+  let value;
+  try {
+    value = JSON.parse(Buffer.from(raw.slice(2), "hex").toString("utf8"));
+  } catch {
+    fail("invalid persisted UserOperation wire");
+  }
+  const canonical = canonicalizeUserOperation(value);
+  const record = fixedRecord(canonical);
+  if (encodedRecord(record) !== raw) fail("noncanonical persisted UserOperation wire");
+  return record;
+}
 function digest(record) {
   return `0x${createHash("sha256").update(JSON.stringify(record)).digest("hex")}`;
 }
@@ -242,11 +255,10 @@ export class SafeBudgetAdapter {
   async reserve({ intentId, operation, offeredAt }) {
     this.marker("sponsored-created");
     const canonical = this.#validate(operation, false);
-    if (
-      !Number.isSafeInteger(Number(BigInt(canonical.nonce))) ||
-      BigInt(canonical.nonce) > BigInt(Number.MAX_SAFE_INTEGER)
-    )
+    const fullNonce = BigInt(canonical.nonce);
+    if (fullNonce >> 64n !== 0n || fullNonce > BigInt(Number.MAX_SAFE_INTEGER))
       fail("Safe nonce is not safely representable");
+    const identity = this.#identity(operation);
     const unsigned = fixedRecord(canonical);
     const unsignedDigest = digest(unsigned);
     const reserved = await this.journal.reserve({
@@ -261,12 +273,21 @@ export class SafeBudgetAdapter {
       maxGasPriceWei: BigInt(canonical.maxFeePerGas),
       fundingWei: 0n,
       usdcCommitment: "0",
+      kind: "user-operation",
+      userOperation: {
+        chainId: identity.chainId,
+        entryPoint: identity.entryPoint,
+        sender: identity.sender,
+        userOperationHash: identity.userOperationHash,
+        nonce: canonical.nonce,
+      },
     });
     const reservation = Object.freeze({
       intentId,
       unsigned,
       unsignedDigest,
       canonical,
+      identity,
       journal: reserved.intent,
     });
     this.marker("reserved");
@@ -276,6 +297,9 @@ export class SafeBudgetAdapter {
   async saveSigned({ reservation, operation }) {
     if (!reservation?.intentId || !reservation.unsigned) fail("reservation required");
     const canonical = this.#validate(operation, true);
+    const identity = this.#identity(operation);
+    if (JSON.stringify(identity) !== JSON.stringify(reservation.identity))
+      fail("signed operation identity differs from reservation");
     const signed = fixedRecord(canonical);
     if (!unsignedEqual(signed, reservation.unsigned))
       fail("signed operation differs from reserved unsigned operation");
@@ -284,7 +308,7 @@ export class SafeBudgetAdapter {
     const saved = await this.journal.saveSigned(
       reservation.intentId,
       raw,
-      reservation.unsignedDigest,
+      reservation.identity.userOperationHash,
     );
     this.marker("signed-persisted");
     return Object.freeze({ ...reservation, signed, raw, saved });
@@ -307,12 +331,71 @@ export class SafeBudgetAdapter {
     });
   }
 
+  async reconcile(intentId, { lookup } = {}) {
+    if (typeof lookup !== "function") fail("canonical receipt lookup required");
+    const intent = this.journal.intent(intentId);
+    if (!intent?.signed || intent.kind !== "user-operation" || !intent.userOperation)
+      fail("unknown signed UserOperation intent");
+    const metadata = intent.userOperation;
+    if (
+      intent.signed.hash !== metadata.userOperationHash ||
+      !metadata.wireDigest ||
+      `0x${createHash("sha256").update(intent.signed.raw).digest("hex")}` !== metadata.wireDigest
+    )
+      fail("persisted UserOperation wire mismatch");
+    const signed = decodedRecord(intent.signed.raw);
+    if (signed.sender !== metadata.sender || signed.nonce !== metadata.nonce)
+      fail("persisted UserOperation payload mismatch");
+    const evidence = await lookup({
+      chainId: metadata.chainId,
+      entryPoint: metadata.entryPoint,
+      sender: metadata.sender,
+      userOperationHash: metadata.userOperationHash,
+    });
+    if (!evidence || evidence.state === "pending") return { state: "unresolved" };
+    if (
+      evidence.operation?.chainId !== metadata.chainId ||
+      evidence.operation.entryPoint !== metadata.entryPoint ||
+      evidence.operation.sender !== metadata.sender ||
+      evidence.operation.userOperationHash !== metadata.userOperationHash ||
+      typeof evidence.nonce !== "bigint" ||
+      evidence.nonce.toString() !== metadata.nonce ||
+      typeof evidence.actualGasCost !== "bigint" ||
+      evidence.actualGasCost < 0n
+    )
+      fail("canonical UserOperation evidence mismatch");
+    const receipt = {
+      kind: "user-operation",
+      status: evidence.state === "confirmed" ? "success" : "reverted",
+      feeWei: evidence.actualGasCost,
+      operation: {
+        chainId: metadata.chainId,
+        entryPoint: metadata.entryPoint,
+        sender: metadata.sender,
+        userOperationHash: metadata.userOperationHash,
+        nonce: metadata.nonce,
+      },
+      outer: {
+        transactionHash: evidence.transactionHash,
+        blockNumber: evidence.blockNumber.toString(),
+        blockHash: evidence.blockHash,
+      },
+    };
+    await this.journal.recordTerminal(intentId, receipt);
+    return { state: receipt.status };
+  }
+
   #validate(operation, signed) {
     const canonical = canonicalizeUserOperation(operation);
     if (canonical.sender !== this.expected.safe) fail("wrong Safe sender");
     this.callPolicy.assert(canonical);
     if (signed ? canonical.signature === "0x" : canonical.signature !== "0x")
       fail("unexpected signature state");
+    this.#identity(operation);
+    return canonical;
+  }
+
+  #identity(operation) {
     const operationIdentity = this.identity(operation);
     if (
       !operationIdentity ||
@@ -324,6 +407,11 @@ export class SafeBudgetAdapter {
       !HASH.test(operationIdentity.userOperationHash)
     )
       fail("invalid UserOperation identity");
-    return canonical;
+    return Object.freeze({
+      chainId: operationIdentity.chainId,
+      entryPoint: expectedAddress(operationIdentity.entryPoint, "identity entry point"),
+      sender: expectedAddress(operationIdentity.sender, "identity sender"),
+      userOperationHash: operationIdentity.userOperationHash,
+    });
   }
 }
