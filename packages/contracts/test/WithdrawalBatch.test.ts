@@ -7,6 +7,22 @@ const DRAW_INTERVAL = 15n * 60n;
 const MORPHO_UNWRAP_INTERVAL = 5n * 60n;
 const WITHDRAWAL_BATCH_INTERVAL = 5n * 60n;
 
+function readDecryptedUint64(
+  clearValues: Readonly<Record<`0x${string}`, unknown>>,
+  handle: string,
+): bigint {
+  if (!handle.startsWith("0x")) {
+    throw new Error("Decryption handle must be hexadecimal");
+  }
+
+  const value = clearValues[handle as `0x${string}`];
+  if (typeof value !== "bigint") {
+    throw new Error("Decryption result must be a bigint");
+  }
+
+  return value;
+}
+
 describe("Withdrawal batches", function () {
   beforeEach(async function () {
     if (!fhevm.isMock) {
@@ -125,7 +141,7 @@ describe("Withdrawal batches", function () {
     const decrypted = await fhevm.publicDecrypt([unwrapRequestId]);
     await confidentialUsdc.finalizeUnwrap(
       unwrapRequestId,
-      decrypted.clearValues[unwrapRequestId],
+      readDecryptedUint64(decrypted.clearValues, unwrapRequestId),
       decrypted.decryptionProof,
     );
     await pool.supplyAvailableMorphoPrincipal();
@@ -147,7 +163,7 @@ describe("Withdrawal batches", function () {
     const decrypted = await fhevm.publicDecrypt([unwrapRequestId]);
     await confidentialUsdc.finalizeUnwrap(
       unwrapRequestId,
-      decrypted.clearValues[unwrapRequestId],
+      readDecryptedUint64(decrypted.clearValues, unwrapRequestId),
       decrypted.decryptionProof,
     );
   }
@@ -161,8 +177,8 @@ describe("Withdrawal batches", function () {
     const decrypted = await fhevm.publicDecrypt([total, restore]);
     await pool.settleWithdrawalBatch(
       batchId,
-      decrypted.clearValues[total],
-      decrypted.clearValues[restore],
+      readDecryptedUint64(decrypted.clearValues, total),
+      readDecryptedUint64(decrypted.clearValues, restore),
       decrypted.decryptionProof,
     );
     return { total, restore, decrypted };
@@ -281,7 +297,7 @@ describe("Withdrawal batches", function () {
     const unwrapped = await fhevm.publicDecrypt([unwrapRequestId]);
     await confidentialUsdc.finalizeUnwrap(
       unwrapRequestId,
-      unwrapped.clearValues[unwrapRequestId],
+      readDecryptedUint64(unwrapped.clearValues, unwrapRequestId),
       unwrapped.decryptionProof,
     );
 
@@ -308,7 +324,7 @@ describe("Withdrawal batches", function () {
     const decrypted = await fhevm.publicDecrypt([requestId]);
     await confidentialUsdc.finalizeUnwrap(
       requestId,
-      decrypted.clearValues[requestId],
+      readDecryptedUint64(decrypted.clearValues, requestId),
       decrypted.decryptionProof,
     );
     expect(await usdc.balanceOf(alice.address)).to.equal(USDC(2));
@@ -361,8 +377,8 @@ describe("Withdrawal batches", function () {
     const decrypted = await fhevm.publicDecrypt([total, restore]);
     await pool.settleWithdrawalBatch(
       batchId,
-      decrypted.clearValues[total],
-      decrypted.clearValues[restore],
+      readDecryptedUint64(decrypted.clearValues, total),
+      readDecryptedUint64(decrypted.clearValues, restore),
       decrypted.decryptionProof,
     );
     await expect(pool.connect(owner).restoreMorphoPrincipal(USDC(1))).to.not.be.reverted;
@@ -385,13 +401,13 @@ describe("Withdrawal batches", function () {
     const total = await pool.encryptedWithdrawalBatchTotal(1n);
     const restore = await pool.encryptedWithdrawalBatchMorphoRestore(1n);
     const decrypted = await fhevm.publicDecrypt([total, restore]);
-    expect(decrypted.clearValues[total]).to.equal(USDC(2));
+    expect(readDecryptedUint64(decrypted.clearValues, total)).to.equal(USDC(2));
 
     await expect(
       pool.settleWithdrawalBatch(
         1n,
         USDC(1),
-        decrypted.clearValues[restore],
+        readDecryptedUint64(decrypted.clearValues, restore),
         decrypted.decryptionProof,
       ),
     ).to.be.reverted;
@@ -421,13 +437,21 @@ describe("Withdrawal batches", function () {
     const decrypted = await fhevm.publicDecrypt([requestId]);
     await confidentialUsdc
       .connect(bob)
-      .finalizeUnwrap(requestId, decrypted.clearValues[requestId], decrypted.decryptionProof);
+      .finalizeUnwrap(
+        requestId,
+        readDecryptedUint64(decrypted.clearValues, requestId),
+        decrypted.decryptionProof,
+      );
     expect(await usdc.balanceOf(alice.address)).to.equal(USDC(2));
     expect(await usdc.balanceOf(bob.address)).to.equal(0n);
     await expect(
       confidentialUsdc
         .connect(bob)
-        .finalizeUnwrap(requestId, decrypted.clearValues[requestId], decrypted.decryptionProof),
+        .finalizeUnwrap(
+          requestId,
+          readDecryptedUint64(decrypted.clearValues, requestId),
+          decrypted.decryptionProof,
+        ),
     ).to.be.revertedWithCustomError(confidentialUsdc, "InvalidUnwrapRequest");
   });
 });

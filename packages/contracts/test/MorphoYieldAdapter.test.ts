@@ -433,7 +433,9 @@ describe("MorphoYieldAdapter", function () {
   it("does not expose a standalone Morpho yield harvest", async function () {
     const { pool } = await deployFixture();
 
-    expect(pool.interface.getFunction("harvestMorphoYield")).to.equal(null);
+    expect(
+      new ethers.Interface(pool.interface.fragments).getFunction("harvestMorphoYield"),
+    ).to.equal(null);
   });
 
   for (const firstDrawIsLazy of [true, false]) {

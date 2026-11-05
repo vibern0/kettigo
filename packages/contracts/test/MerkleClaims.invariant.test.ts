@@ -2,26 +2,47 @@ import { expect } from "chai";
 import { ethers, fhevm } from "hardhat";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { captureMembershipProof, checkCapturedPrize } from "./proofHelper";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import type { ConfidentialUSDC } from "../typechain-types/contracts/ConfidentialUSDC";
+import type { ConfidentialPrizePool } from "../typechain-types/contracts/ConfidentialPrizePool.sol/ConfidentialPrizePool";
+import type { ConfidentialPrizePoolHarness } from "../typechain-types/contracts/test/ConfidentialPrizePoolHarness";
+import type { MockUSDC } from "../typechain-types/contracts/MockUSDC";
 
 const DRAW_INTERVAL = 15n * 60n;
 const WITHDRAWAL_BATCH_INTERVAL = 5n * 60n;
+
+type Fixture<TPool extends ConfidentialPrizePool | ConfidentialPrizePoolHarness> = {
+  owner: HardhatEthersSigner;
+  alice: HardhatEthersSigner;
+  bob: HardhatEthersSigner;
+  carol: HardhatEthersSigner;
+  usdc: MockUSDC;
+  token: ConfidentialUSDC;
+  pool: TPool;
+};
 
 describe("ConfidentialPrizePool historical-draw invariants", function () {
   beforeEach(async function () {
     if (!fhevm.isMock) this.skip();
   });
 
-  async function fixture(harness = false) {
+  async function fixture(): Promise<Fixture<ConfidentialPrizePool>>;
+  async function fixture(harness: true): Promise<Fixture<ConfidentialPrizePoolHarness>>;
+  async function fixture(
+    harness = false,
+  ): Promise<Fixture<ConfidentialPrizePool | ConfidentialPrizePoolHarness>> {
     const [owner, alice, bob, carol] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
     const token = await (
       await ethers.getContractFactory("ConfidentialUSDC")
     ).deploy(await usdc.getAddress());
-    const pool = await (
-      await ethers.getContractFactory(
-        harness ? "ConfidentialPrizePoolHarness" : "ConfidentialPrizePool",
-      )
-    ).deploy(await token.getAddress(), DRAW_INTERVAL, WITHDRAWAL_BATCH_INTERVAL);
+    const pool = harness
+      ? await (
+          await ethers.getContractFactory("ConfidentialPrizePoolHarness")
+        ).deploy(await token.getAddress(), DRAW_INTERVAL, WITHDRAWAL_BATCH_INTERVAL)
+      : await (
+          await ethers.getContractFactory("ConfidentialPrizePool")
+        ).deploy(await token.getAddress(), DRAW_INTERVAL, WITHDRAWAL_BATCH_INTERVAL);
     for (const user of [owner, alice, bob, carol]) {
       await usdc.faucet(user.address, 100n);
       await usdc.connect(user).approve(await token.getAddress(), 100n);
