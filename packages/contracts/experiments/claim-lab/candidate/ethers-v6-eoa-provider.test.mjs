@@ -88,3 +88,43 @@ test("keeps null receipt unresolved and rejects mismatched transaction or canoni
     ).getTransactionReceipt(HASH),
   );
 });
+test("rejects each independently corrupted ethers receipt tuple", async () => {
+  const other = `0x${"ef".repeat(32)}`;
+  const cases = [
+    ["receipt hash", "receipt", "hash", other],
+    ["transaction hash", "transaction", "hash", other],
+    ["receipt sender", "receipt", "from", TO],
+    ["transaction sender", "transaction", "from", TO],
+    ["receipt target", "receipt", "to", FROM],
+    ["transaction target", "transaction", "to", FROM],
+    ["receipt creation", "receipt", "to", null],
+    ["transaction chain", "transaction", "chainId", 1n],
+    ["transaction nonce", "transaction", "nonce", 1.5],
+    ["receipt block hash", "receipt", "blockHash", other],
+    ["transaction block hash", "transaction", "blockHash", other],
+    ["receipt block number", "receipt", "blockNumber", 2],
+    ["transaction block number", "transaction", "blockNumber", 2],
+  ];
+  for (const [label, kind, field, value] of cases) {
+    const inward = provider();
+    const method = kind === "receipt" ? "getTransactionReceipt" : "getTransaction";
+    const original = inward[method];
+    inward[method] = async (...args) => ({ ...(await original(...args)), [field]: value });
+    await assert.rejects(
+      new EthersV6EoaProviderAdapter(inward).getTransactionReceipt(HASH),
+      new RegExp("mismatch|sender|pending"),
+      label,
+    );
+  }
+});
+test("rejects another requested hash and accepts a genuine creation tuple", async () => {
+  await assert.rejects(
+    new EthersV6EoaProviderAdapter(provider()).getTransactionReceipt(`0x${"ef".repeat(32)}`),
+  );
+  const inward = provider();
+  const tx = inward.getTransaction;
+  const receipt = inward.getTransactionReceipt;
+  inward.getTransaction = async (...args) => ({ ...(await tx(...args)), to: null });
+  inward.getTransactionReceipt = async (...args) => ({ ...(await receipt(...args)), to: null });
+  assert.equal((await new EthersV6EoaProviderAdapter(inward).getTransactionReceipt(HASH)).to, null);
+});
