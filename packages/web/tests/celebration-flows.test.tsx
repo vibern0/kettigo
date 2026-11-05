@@ -61,6 +61,7 @@ vi.mock("@/lib/zama", async () => {
     createPublicZamaSDK: vi.fn(),
     decryptUint64: fixture.decrypt,
     decryptSmartUint64: fixture.decrypt,
+    decryptExistingSmartUint64: fixture.decrypt,
     decryptPublicUint64: vi.fn(),
     encryptUint64: async () => ({ handle: fixture.handle, inputProof: "0x" }),
     withSmartZamaSDK: async (_session: unknown, action: (sdk: unknown) => Promise<unknown>) => action({ terminate() {} }),
