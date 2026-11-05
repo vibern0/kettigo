@@ -33,6 +33,13 @@ test("scopeHref carries unrelated current query values to a normal page link", (
   );
 });
 
+test("scopeHref carries repeated unrelated query values without dropping them", () => {
+  assert.equal(
+    scopeHref("/draw", "legacy-9c", "https://kettigo.example/savings?tag=one&tag=two"),
+    "/draw?tag=one&tag=two&savings=legacy-9c",
+  );
+});
+
 test("switchDocumentScope delegates the selected URL to document navigation", () => {
   const assigned = [];
   const location = {

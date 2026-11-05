@@ -13,8 +13,9 @@ export function scopeHref(input: string | URL, scopeId: PoolScopeId, currentHref
   const url = new URL(input, BASE_ORIGIN);
   if (currentHref) {
     const current = new URL(currentHref, BASE_ORIGIN);
+    const destinationNames = new Set(url.searchParams.keys());
     for (const [name, value] of current.searchParams) {
-      if (name !== "savings" && !url.searchParams.has(name)) url.searchParams.append(name, value);
+      if (name !== "savings" && !destinationNames.has(name)) url.searchParams.append(name, value);
     }
   }
   url.searchParams.set("savings", scopeId);
