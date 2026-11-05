@@ -19,6 +19,8 @@ import { createFixedSafeCallPolicy } from "./safe-call-policy.mjs";
 
 const requireWeb = createRequire(new URL("../../../../web/package.json", import.meta.url));
 const { SafeOperationV07, getRelayKitVersion } = requireWeb("@safe-global/relay-kit");
+const { delegateForUserDecryptionContract } = requireWeb("@zama-fhe/sdk");
+const { encodeFunctionData } = requireWeb("viem");
 
 const SAFE = "0x1111111111111111111111111111111111111111";
 const ENTRY_POINT = getAddress("0x0000000071727de22e5e9d8baf0edac6f37da032");
@@ -28,29 +30,100 @@ const HASH = "0x" + "ab".repeat(32);
 const MODULE = "0x4444444444444444444444444444444444444444";
 const MULTISEND = "0x5555555555555555555555555555555555555555";
 const WRAPPER = "0x6666666666666666666666666666666666666666";
-const GRANT = "0x7777777777777777777777777777777777777777";
-const CALLBACK = "0x8888888888888888888888888888888888888888";
+const USDC = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ACL = "0x7777777777777777777777777777777777777777";
+const DELEGATE = "0x8888888888888888888888888888888888888888";
 const FACTORY = "0x9999999999999999999999999999999999999999";
-const EXECUTE = new Interface(["function executeUserOp(address to,uint256 value,bytes data,uint8 operation)"]);
+const EXECUTE = new Interface([
+  "function executeUserOp(address to,uint256 value,bytes data,uint8 operation)",
+]);
 const MULTISEND_ABI = new Interface(["function multiSend(bytes transactions)"]);
-const WRAPPER_ABI = new Interface(["function transferAndCall(address recipient,uint256 amount,bytes callback)"]);
-const GRANT_ABI = new Interface(["function grant(address recipient)"]);
+const WRAPPER_ABI = new Interface([
+  "function wrap(address to,uint256 amount)",
+  "function confidentialTransferAndCall(address to,bytes32 encryptedAmount,bytes inputProof,bytes data)",
+  "function multicall(bytes[] data)",
+]);
+const ERC20_ABI = new Interface(["function approve(address spender,uint256 amount)"]);
 
 function packedCall({ operation = 0, to, value = 0n, data }) {
-  return concat([toBeHex(operation, 1), to, toBeHex(value, 32), toBeHex((data.length - 2) / 2, 32), data]);
+  return concat([
+    toBeHex(operation, 1),
+    to,
+    toBeHex(value, 32),
+    toBeHex((data.length - 2) / 2, 32),
+    data,
+  ]);
 }
 
 function fixedCallFixture() {
-  const callbackData = "0x1234";
-  const wrapperData = WRAPPER_ABI.encodeFunctionData("transferAndCall", [CALLBACK, 7n, callbackData]);
-  const grantData = GRANT_ABI.encodeFunctionData("grant", [CALLBACK]);
+  const handle = "0x" + "11".repeat(32);
+  const proof = "0x1234";
+  const wrapData = WRAPPER_ABI.encodeFunctionData("wrap", [SAFE, 7n]);
+  const transferData = WRAPPER_ABI.encodeFunctionData("confidentialTransferAndCall", [
+    POOL,
+    handle,
+    proof,
+    "0x",
+  ]);
+  const wrapperData = WRAPPER_ABI.encodeFunctionData("multicall", [[wrapData, transferData]]);
+  const aclData = encodeFunctionData(
+    delegateForUserDecryptionContract(ACL, DELEGATE, WRAPPER, 123n),
+  );
+  const approveData = ERC20_ABI.encodeFunctionData("approve", [WRAPPER, 7n]);
   const calls = [
+    { to: USDC, value: 0n, data: approveData },
+    { to: ACL, value: 0n, data: aclData },
     { to: WRAPPER, value: 0n, data: wrapperData },
-    { to: GRANT, value: 0n, data: grantData },
   ];
-  const multiSendData = MULTISEND_ABI.encodeFunctionData("multiSend", [concat(calls.map(packedCall))]);
+  const multiSendData = MULTISEND_ABI.encodeFunctionData("multiSend", [
+    concat(calls.map(packedCall)),
+  ]);
   const callData = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, multiSendData, 1]);
-  return { callbackData, calls, callData, wrapperData, grantData };
+  const directCallData = EXECUTE.encodeFunctionData("executeUserOp", [WRAPPER, 0n, wrapperData, 0]);
+  return { handle, proof, calls, callData, directCallData, wrapperData, aclData };
+}
+
+function policyFor(fixture) {
+  return createFixedSafeCallPolicy({
+    module: MODULE,
+    multiSend: MULTISEND,
+    deployedCalls: [fixture.calls[2]],
+    counterfactual: { factory: FACTORY, factoryData: "0xaabb", calls: fixture.calls },
+    roles: {
+      deposit: {
+        token: WRAPPER,
+        user: SAFE,
+        pool: POOL,
+        amount: 7n,
+        handle: fixture.handle,
+        proof: fixture.proof,
+      },
+      delegations: [{ acl: ACL, delegate: DELEGATE, contract: WRAPPER, expiration: 123n }],
+    },
+  });
+}
+
+function executeBatch(calls) {
+  return EXECUTE.encodeFunctionData("executeUserOp", [
+    MULTISEND,
+    0n,
+    MULTISEND_ABI.encodeFunctionData("multiSend", [concat(calls.map(packedCall))]),
+    1,
+  ]);
+}
+
+function wrongWrapperDeposit(fixture) {
+  return WRAPPER_ABI.encodeFunctionData("multicall", [
+    [
+      WRAPPER_ABI.encodeFunctionData("wrap", [POOL, 7n]),
+      WRAPPER_ABI.encodeFunctionData("confidentialTransferAndCall", [
+        POOL,
+        fixture.handle,
+        fixture.proof,
+        "0x",
+      ]),
+    ],
+  ]);
 }
 
 function operation(overrides = {}) {
@@ -87,8 +160,17 @@ function adapter(journal, options = {}) {
   return new SafeBudgetAdapter({
     journal,
     expected: { chainId: 11155111, entryPoint: ENTRY_POINT, safe: SAFE, journalTarget: POOL },
-    callPolicy: { assert: ({ callData }) => { if (callData !== "0x1234") throw new Error("unapproved nested call target"); } },
-    identity: () => ({ chainId: 11155111, entryPoint: ENTRY_POINT, sender: SAFE, userOperationHash: HASH }),
+    callPolicy: {
+      assert: ({ callData }) => {
+        if (callData !== "0x1234") throw new Error("unapproved nested call target");
+      },
+    },
+    identity: () => ({
+      chainId: 11155111,
+      entryPoint: ENTRY_POINT,
+      sender: SAFE,
+      userOperationHash: HASH,
+    }),
     now: () => 1000,
     ...options,
   });
@@ -129,41 +211,50 @@ test("matches the pinned Relay Kit 6.1.1 sponsored merge, including its truthy z
   assert.deepEqual(mergePinnedRelayEstimations(base, estimations), sdk.userOperation);
   sdk.addEstimations({ maxFeePerGas: 0n, paymasterData: "" });
   assert.equal(sdk.userOperation.maxFeePerGas, 9n);
-  assert.equal(mergePinnedRelayEstimations(sdk.userOperation, { maxFeePerGas: 0n }).maxFeePerGas, 9n);
+  assert.equal(
+    mergePinnedRelayEstimations(sdk.userOperation, { maxFeePerGas: 0n }).maxFeePerGas,
+    9n,
+  );
   assert.throws(() => mergePinnedRelayEstimations(base, { chainId: 1 }), /unknown sponsor/);
 });
 
-test("fixed Safe policy binds counterfactual setup and nested MultiSend calls without ciphertext scanning", () => {
+test("fixed Safe policy binds real wrapper/ACL roles for direct, batch, deployed, and counterfactual operations", () => {
   const fixture = fixedCallFixture();
-  const policy = createFixedSafeCallPolicy({
-    module: MODULE,
-    multiSend: MULTISEND,
-    factory: FACTORY,
-    factoryData: "0xaabb",
-    calls: fixture.calls,
-    wrapper: { target: WRAPPER, callbackRecipient: CALLBACK, callbackData: fixture.callbackData },
-    grants: [{ target: GRANT, recipient: CALLBACK }],
-  });
-  assert.doesNotThrow(() => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: fixture.callData }));
-  assert.throws(() => policy.assert({ factory: "0x", factoryData: "0x", callData: fixture.callData }), /factory/);
-  const forbidden = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, MULTISEND_ABI.encodeFunctionData("multiSend", [concat([
-    packedCall({ to: "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27", data: fixture.wrapperData }),
-    packedCall(fixture.calls[1]),
-  ])]), 1]);
-  assert.throws(() => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: forbidden }), /forbidden|expected/);
-  const alteredRecipient = WRAPPER_ABI.encodeFunctionData("transferAndCall", [GRANT, 7n, fixture.callbackData]);
-  const altered = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, MULTISEND_ABI.encodeFunctionData("multiSend", [concat([
-    packedCall({ to: WRAPPER, data: alteredRecipient }),
-    packedCall(fixture.calls[1]),
-  ])]), 1]);
-  assert.throws(() => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: altered }), /callback|expected/);
+  const policy = policyFor(fixture);
+  assert.doesNotThrow(() =>
+    policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: fixture.callData }),
+  );
+  assert.doesNotThrow(() =>
+    policy.assert({ factory: "0x", factoryData: "0x", callData: fixture.directCallData }),
+  );
+  const forbidden = executeBatch([
+    { to: "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27", data: fixture.aclData },
+    fixture.calls[2],
+  ]);
+  assert.throws(
+    () => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: forbidden }),
+    /forbidden|expected/,
+  );
+  const altered = executeBatch([
+    fixture.calls[0],
+    fixture.calls[1],
+    { to: WRAPPER, data: wrongWrapperDeposit(fixture) },
+  ]);
+  assert.throws(
+    () => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: altered }),
+    /roles|expected/,
+  );
 });
 
 test("reserves the complete unsigned operation before any credential and binds signature persistence", async () => {
   const j = await journal();
   const events = [];
   const fence = adapter(j, { marker: (stage) => events.push(stage) });
-  const reservation = await fence.reserve({ intentId: "safe-1", operation: operation(), offeredAt: 1000 });
+  const reservation = await fence.reserve({
+    intentId: "safe-1",
+    operation: operation(),
+    offeredAt: 1000,
+  });
   assert.equal(j.intent("safe-1").state, "reserved");
   const signed = operation({ signature: SIGNATURE });
   await fence.saveSigned({ reservation, operation: signed });
@@ -175,7 +266,11 @@ test("reserves the complete unsigned operation before any credential and binds s
 test("rejects every unsigned mutation after reservation and never replaces a signature", async () => {
   const j = await journal();
   const fence = adapter(j);
-  const reservation = await fence.reserve({ intentId: "safe-2", operation: operation(), offeredAt: 1000 });
+  const reservation = await fence.reserve({
+    intentId: "safe-2",
+    operation: operation(),
+    offeredAt: 1000,
+  });
   for (const [field, value] of Object.entries({
     sender: "0x3333333333333333333333333333333333333333",
     nonce: 1n,
@@ -186,25 +281,48 @@ test("rejects every unsigned mutation after reservation and never replaces a sig
     maxFeePerGas: 9n,
     maxPriorityFeePerGas: 2n,
   })) {
-    await assert.rejects(fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE, [field]: value }) }));
+    await assert.rejects(
+      fence.saveSigned({
+        reservation,
+        operation: operation({ signature: SIGNATURE, [field]: value }),
+      }),
+    );
   }
   await fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
-  await assert.rejects(fence.saveSigned({ reservation, operation: operation({ signature: "0x5678" }) }), /signature/);
+  await assert.rejects(
+    fence.saveSigned({ reservation, operation: operation({ signature: "0x5678" }) }),
+    /signature/,
+  );
   await j.close();
 });
 
 test("route fence accepts exactly one persisted SDK wire operation and records attempt before continuation", async () => {
   const j = await journal();
   const fence = adapter(j);
-  const reservation = await fence.reserve({ intentId: "safe-3", operation: operation(), offeredAt: 1000 });
+  const reservation = await fence.reserve({
+    intentId: "safe-3",
+    operation: operation(),
+    offeredAt: 1000,
+  });
   const signed = operation({ signature: SIGNATURE });
   const persisted = await fence.saveSigned({ reservation, operation: signed });
   const wire = deterministicUserOperationRecord(signed);
   let sent = 0;
-  await fence.route({ reservation: persisted, wire, entryPoint: ENTRY_POINT, send: async () => { sent += 1; return HASH; } });
+  await fence.route({
+    reservation: persisted,
+    wire,
+    entryPoint: ENTRY_POINT,
+    send: async () => {
+      sent += 1;
+      return HASH;
+    },
+  });
   assert.equal(sent, 1);
   assert.equal(j.actualSendCount("safe-3"), 1);
-  await assert.rejects(fence.route({ reservation: persisted, wire, entryPoint: ENTRY_POINT, send: async () => HASH }), /duplicate/);
+  await assert.rejects(
+    fence.route({ reservation: persisted, wire, entryPoint: ENTRY_POINT, send: async () => HASH }),
+    /duplicate/,
+  );
   await j.close();
 });
 
@@ -212,7 +330,11 @@ test("original policy rejects the known high fee before a credential boundary", 
   const j = await journal();
   const fence = adapter(j);
   await assert.rejects(
-    fence.reserve({ intentId: "safe-expensive", operation: operation({ callGasLimit: 3_993_284n, maxFeePerGas: 1_210_000_003n }), offeredAt: 1000 }),
+    fence.reserve({
+      intentId: "safe-expensive",
+      operation: operation({ callGasLimit: 3_993_284n, maxFeePerGas: 1_210_000_003n }),
+      offeredAt: 1000,
+    }),
     /gas price|fee budget/,
   );
   assert.equal(j.snapshot().intents.length, 0);
@@ -222,16 +344,33 @@ test("original policy rejects the known high fee before a credential boundary", 
 test("signed persistence failure and an expired reservation prevent route continuation", async () => {
   const j = await journal();
   const fence = adapter(j);
-  const reservation = await fence.reserve({ intentId: "safe-failure", operation: operation(), offeredAt: 1000 });
+  const reservation = await fence.reserve({
+    intentId: "safe-failure",
+    operation: operation(),
+    offeredAt: 1000,
+  });
   j.failPublish = true;
-  await assert.rejects(fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) }), /persist/);
+  await assert.rejects(
+    fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) }),
+    /persist/,
+  );
   assert.equal(j.actualSendCount("safe-failure"), 0);
   await j.close();
   let time = 1000;
   const expiredJournal = await journal({ now: () => time });
   const expiredFence = adapter(expiredJournal);
-  const expiredReservation = await expiredFence.reserve({ intentId: "safe-expired", operation: operation(), offeredAt: 1000 });
+  const expiredReservation = await expiredFence.reserve({
+    intentId: "safe-expired",
+    operation: operation(),
+    offeredAt: 1000,
+  });
   time += ORIGINAL_ENVELOPE.durationMs;
-  await assert.rejects(expiredFence.saveSigned({ reservation: expiredReservation, operation: operation({ signature: SIGNATURE }) }), /deadline/);
+  await assert.rejects(
+    expiredFence.saveSigned({
+      reservation: expiredReservation,
+      operation: operation({ signature: SIGNATURE }),
+    }),
+    /deadline/,
+  );
   await expiredJournal.close();
 });
