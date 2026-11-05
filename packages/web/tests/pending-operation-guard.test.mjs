@@ -74,6 +74,34 @@ test("only one same-origin review lease can stage and release permits a retry", 
   await retry.release();
 });
 
+test("one Safe keeps its v1 record and global review lock across app scopes", async () => {
+  const storage = new SharedStorage();
+  const lockNames = [];
+  const locks = new SharedLocks();
+  const request = locks.request.bind(locks);
+  locks.request = (name, options, callback) => {
+    lockNames.push(name);
+    return request(name, options, callback);
+  };
+  const e65 = manager(storage, locks);
+  const candidate = manager(storage, locks);
+  const expectedKey = `kettigo:pending-user-operation:v1:11155111:${ENTRY_POINT.toLowerCase()}:${SENDER.toLowerCase()}`;
+  const expectedLock = `kettigo:pending-user-operation:11155111:${ENTRY_POINT.toLowerCase()}:${SENDER.toLowerCase()}`;
+
+  assert.equal(e65.storageKey, expectedKey);
+  assert.equal(candidate.storageKey, expectedKey);
+  const first = await e65.acquireReview();
+  await assert.rejects(candidate.acquireReview(), PendingOperationBusyError);
+  assert.deepEqual(lockNames, [expectedLock, expectedLock]);
+  first.stagePrepared(identity());
+  assert.ok(storage.value(expectedKey));
+  await first.release();
+  const recovery = await candidate.acquireRecovery();
+  assert.equal(recovery.clearMatching(identity()), true);
+  await recovery.release();
+  assert.equal(storage.value(expectedKey), null);
+});
+
 test("stages a frozen durable public record and preserves its original creation time", async () => {
   const storage = new SharedStorage();
   const subject = manager(storage);

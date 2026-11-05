@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => {
     pool,
     award,
     version: "legacy1",
+    onboardingEnabled: false,
     proofUrl: "https://proof.example",
     listDraws: vi.fn(),
     proofFactory: vi.fn(),
@@ -46,8 +47,15 @@ vi.mock("@/lib/runtime-config", () => ({
   get SELECTED_SCOPE() {
     return {
       id: fixture.version === "legacy1" ? "legacy-e65" : "candidate-v2",
+      chainId: 11155111,
+      usdc: fixture.account,
+      wrapper: "0x2222222222222222222222222222222222222222",
+      pool: fixture.pool,
+      rpcUrl: "https://rpc.example",
       mode: fixture.version === "legacy1" ? "legacy1" : "v2",
-      proofServiceUrl: fixture.proofUrl,
+      proofServiceUrl: fixture.version === "legacy1" ? "" : fixture.proofUrl,
+      proofNamespace: fixture.version === "legacy1" ? "" : "candidate",
+      onboardingEnabled: fixture.onboardingEnabled,
     };
   },
   publicConfig: (name: string, fallback?: string) =>
@@ -100,6 +108,7 @@ function mount() {
 
 beforeEach(() => {
   fixture.version = "legacy1";
+  fixture.onboardingEnabled = false;
   fixture.proofUrl = "https://proof.example";
   fixture.listDraws.mockReset();
   fixture.proofFactory.mockReset();
@@ -156,6 +165,7 @@ test("keeps the legacy draw page free of history reads", async () => {
 
 test("lists one bounded descending page of past results", async () => {
   fixture.version = "2";
+  fixture.onboardingEnabled = false;
   mount();
   expect(await screen.findByRole("button", { name: "Round #4" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Round #3" })).toBeTruthy();

@@ -18,6 +18,7 @@ const fixture = vi.hoisted(() => {
     decrypt: vi.fn(),
     listDraws: vi.fn(),
     mode: "legacy1",
+    onboardingEnabled: false,
     proofUrl: "https://proof.example",
     prepareTransaction: vi.fn(),
     recoverPendingOperation: vi.fn(),
@@ -49,8 +50,16 @@ vi.mock("@/lib/contracts", async (original) => ({
 vi.mock("@/lib/runtime-config", () => ({
   get SELECTED_SCOPE() {
     return {
+      id: fixture.mode === "legacy1" ? "legacy-e65" : "candidate-v2",
+      chainId: 11155111,
+      usdc: fixture.account,
+      wrapper: "0x2222222222222222222222222222222222222222",
+      pool: fixture.pool,
+      rpcUrl: "https://rpc.example",
       mode: fixture.mode === "legacy1" ? "legacy1" : "v2",
-      proofServiceUrl: fixture.proofUrl,
+      proofServiceUrl: fixture.mode === "legacy1" ? "" : fixture.proofUrl,
+      proofNamespace: fixture.mode === "legacy1" ? "" : "candidate",
+      onboardingEnabled: fixture.onboardingEnabled,
     };
   },
   publicConfig: (name: string, fallback?: string) =>
@@ -126,6 +135,7 @@ function actionRecords() {
 beforeEach(() => {
   localStorage.clear();
   fixture.mode = "legacy1";
+  fixture.onboardingEnabled = false;
   fixture.proofUrl = "https://proof.example";
   fixture.decrypt.mockReset();
   fixture.listDraws.mockReset();
@@ -152,6 +162,7 @@ test.each([
   "%s %s reviews the existing credit before one prepared %s confirmation",
   async (mode, label, method) => {
     fixture.mode = mode;
+    fixture.onboardingEnabled = false;
     const observed = operation(method === "claimPrize" ? "c" : "d");
     const send = vi.fn(async ({ onOperationPrepared }) => {
       onOperationPrepared(observed);

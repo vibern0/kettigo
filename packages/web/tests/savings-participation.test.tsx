@@ -46,7 +46,14 @@ vi.mock("@/lib/runtime-config", () => ({
   get SELECTED_SCOPE() {
     return {
       id: fixture.scopeId,
+      chainId: 11155111,
+      usdc: fixture.account,
+      wrapper: "0x2222222222222222222222222222222222222222",
+      pool: fixture.pool,
+      rpcUrl: "https://rpc.example",
       mode: fixture.version === "2" ? "v2" : "legacy1",
+      proofServiceUrl: fixture.version === "2" ? "https://proof.example" : "",
+      proofNamespace: fixture.version === "2" ? "candidate" : "",
       onboardingEnabled: fixture.onboardingEnabled,
     };
   },
@@ -160,6 +167,8 @@ test("a retained old-scope status refresh cannot replace settled participation",
 
 test("a positive pending balance is reviewed before one synchronous participation confirm", async () => {
   fixture.version = "2";
+  fixture.scopeId = "candidate-v2";
+  fixture.onboardingEnabled = false;
   mount();
   await screen.findByRole("button", { name: "Review participation" });
   fireEvent.click(screen.getByRole("button", { name: "Review participation" }));

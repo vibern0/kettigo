@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
   pending: null as any,
   getterFails: false,
   version: "legacy1",
+  onboardingEnabled: false,
   decrypt: vi.fn(),
   postReadFailure: undefined as "membership" | "pending" | undefined,
   postReadFailureUsed: false,
@@ -73,9 +74,15 @@ vi.mock("@/lib/runtime-config", () => ({
   get SELECTED_SCOPE() {
     return {
       id: fixture.version === "legacy1" ? "legacy-e65" : "candidate-v2",
+      chainId: 11155111,
+      usdc: fixture.account,
+      wrapper: "0x2222222222222222222222222222222222222222",
+      pool: fixture.pool,
+      rpcUrl: "https://rpc.example",
       mode: fixture.version === "legacy1" ? "legacy1" : "v2",
-      onboardingEnabled: fixture.version !== "legacy1",
-      proofServiceUrl: "",
+      onboardingEnabled: fixture.onboardingEnabled,
+      proofServiceUrl: fixture.version === "legacy1" ? "" : "https://proof.example",
+      proofNamespace: fixture.version === "legacy1" ? "" : "candidate",
     };
   },
   publicConfig: (name: string, fallback?: string) =>
@@ -145,6 +152,7 @@ beforeEach(() => {
   fixture.pending = null;
   fixture.getterFails = false;
   fixture.version = "legacy1";
+  fixture.onboardingEnabled = false;
   fixture.postReadFailure = undefined;
   fixture.postReadFailureUsed = false;
   fixture.sent = false;
@@ -256,6 +264,7 @@ test("attempted participation confirmation retains its captured identity when th
 
 test("participation Activity reloads the saved attempted identity for read-only recovery", async () => {
   fixture.version = "2";
+  fixture.onboardingEnabled = false;
   const operation = {
     chainId: 11155111 as const,
     entryPoint: entryPoint07Address,
