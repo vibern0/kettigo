@@ -37,26 +37,30 @@ function fail(message) {
   throw new Error(`safe budget adapter: ${message}`);
 }
 function bytes(value, label) {
-  if (typeof value !== "string" || value.length > 524_288 || !validBytes(value)) fail(`invalid ${label}`);
+  if (typeof value !== "string" || value.length > 524_288 || !validBytes(value))
+    fail(`invalid ${label}`);
   return value.toLowerCase();
 }
 function validBytes(value) {
   if (!value.startsWith("0x") || value.length % 2) return false;
   for (let index = 2; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if (!((code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102))) return false;
+    if (!((code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102)))
+      return false;
   }
   return true;
 }
 function addressOrEmpty(value, label) {
   if (value === "0x") return "0x";
-  if (typeof value !== "string" || !ADDRESS.test(value) || !isAddress(value)) fail(`invalid ${label}`);
+  if (typeof value !== "string" || !ADDRESS.test(value) || !isAddress(value))
+    fail(`invalid ${label}`);
   return getAddress(value);
 }
 function quantity(value, label) {
   let result;
   try {
-    if (typeof value === "string" && !/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value)) throw new Error();
+    if (typeof value === "string" && !/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value))
+      throw new Error();
     result = BigInt(value);
   } catch {
     fail(`invalid ${label}`);
@@ -68,9 +72,16 @@ function normalQuantity(value, label) {
   return quantity(value, label).toString();
 }
 function normalizedFields(operation) {
-  if (!operation || typeof operation !== "object" || Array.isArray(operation) || Object.getPrototypeOf(operation) !== Object.prototype) fail("operation required");
+  if (
+    !operation ||
+    typeof operation !== "object" ||
+    Array.isArray(operation) ||
+    Object.getPrototypeOf(operation) !== Object.prototype
+  )
+    fail("operation required");
   const keys = Object.keys(operation);
-  if (keys.length !== FIELDS.length || keys.some((key) => !FIELDS.includes(key))) fail("unknown or missing UserOperation field");
+  if (keys.length !== FIELDS.length || keys.some((key) => !FIELDS.includes(key)))
+    fail("unknown or missing UserOperation field");
   const result = {
     sender: addressOrEmpty(operation.sender, "sender"),
     nonce: normalQuantity(operation.nonce, "nonce"),
@@ -83,14 +94,22 @@ function normalizedFields(operation) {
     maxFeePerGas: normalQuantity(operation.maxFeePerGas, "max fee per gas"),
     maxPriorityFeePerGas: normalQuantity(operation.maxPriorityFeePerGas, "priority fee"),
     paymaster: addressOrEmpty(operation.paymaster, "paymaster"),
-    paymasterVerificationGasLimit: normalQuantity(operation.paymasterVerificationGasLimit, "paymaster verification gas"),
-    paymasterPostOpGasLimit: normalQuantity(operation.paymasterPostOpGasLimit, "paymaster post-operation gas"),
+    paymasterVerificationGasLimit: normalQuantity(
+      operation.paymasterVerificationGasLimit,
+      "paymaster verification gas",
+    ),
+    paymasterPostOpGasLimit: normalQuantity(
+      operation.paymasterPostOpGasLimit,
+      "paymaster post-operation gas",
+    ),
     paymasterData: bytes(operation.paymasterData, "paymaster data"),
     signature: bytes(operation.signature, "signature"),
   };
-  if ((result.factory === "0x") !== (result.factoryData === "0x")) fail("incoherent factory fields");
+  if ((result.factory === "0x") !== (result.factoryData === "0x"))
+    fail("incoherent factory fields");
   const paymasterEmpty = result.paymaster === "0x";
-  const paymasterGas = BigInt(result.paymasterVerificationGasLimit) + BigInt(result.paymasterPostOpGasLimit);
+  const paymasterGas =
+    BigInt(result.paymasterVerificationGasLimit) + BigInt(result.paymasterPostOpGasLimit);
   if (paymasterEmpty && (result.paymasterData !== "0x" || paymasterGas !== 0n))
     fail("incoherent paymaster fields");
   if (!paymasterEmpty && (result.paymasterData === "0x" || paymasterGas === 0n))
@@ -149,20 +168,35 @@ export function deterministicUserOperationRecord(operation) {
 }
 function fixedRecord(canonical) {
   return Object.freeze({
-    sender: canonical.sender, nonce: canonical.nonce, factory: canonical.factory, factoryData: canonical.factoryData,
-    callData: canonical.callData, callGasLimit: canonical.callGasLimit, verificationGasLimit: canonical.verificationGasLimit,
-    preVerificationGas: canonical.preVerificationGas, maxFeePerGas: canonical.maxFeePerGas,
-    maxPriorityFeePerGas: canonical.maxPriorityFeePerGas, paymaster: canonical.paymaster,
+    sender: canonical.sender,
+    nonce: canonical.nonce,
+    factory: canonical.factory,
+    factoryData: canonical.factoryData,
+    callData: canonical.callData,
+    callGasLimit: canonical.callGasLimit,
+    verificationGasLimit: canonical.verificationGasLimit,
+    preVerificationGas: canonical.preVerificationGas,
+    maxFeePerGas: canonical.maxFeePerGas,
+    maxPriorityFeePerGas: canonical.maxPriorityFeePerGas,
+    paymaster: canonical.paymaster,
     paymasterVerificationGasLimit: canonical.paymasterVerificationGasLimit,
-    paymasterPostOpGasLimit: canonical.paymasterPostOpGasLimit, paymasterData: canonical.paymasterData,
+    paymasterPostOpGasLimit: canonical.paymasterPostOpGasLimit,
+    paymasterData: canonical.paymasterData,
     signature: canonical.signature,
   });
 }
 
 /** Mirrors Relay Kit 6.1.1's intentionally truthy sponsored-estimation merge. */
 export function mergePinnedRelayEstimations(userOperation, estimations) {
-  if (!estimations || typeof estimations !== "object" || Array.isArray(estimations) || Object.getPrototypeOf(estimations) !== Object.prototype) fail("estimations required");
-  if (Object.keys(estimations).some((key) => !SPONSOR_FIELDS.includes(key))) fail("unknown sponsor field");
+  if (
+    !estimations ||
+    typeof estimations !== "object" ||
+    Array.isArray(estimations) ||
+    Object.getPrototypeOf(estimations) !== Object.prototype
+  )
+    fail("estimations required");
+  if (Object.keys(estimations).some((key) => !SPONSOR_FIELDS.includes(key)))
+    fail("unknown sponsor field");
   return {
     ...userOperation,
     maxFeePerGas: estimations.maxFeePerGas || userOperation.maxFeePerGas,
@@ -170,8 +204,10 @@ export function mergePinnedRelayEstimations(userOperation, estimations) {
     verificationGasLimit: estimations.verificationGasLimit || userOperation.verificationGasLimit,
     preVerificationGas: estimations.preVerificationGas || userOperation.preVerificationGas,
     callGasLimit: estimations.callGasLimit || userOperation.callGasLimit,
-    paymasterPostOpGasLimit: estimations.paymasterPostOpGasLimit || userOperation.paymasterPostOpGasLimit,
-    paymasterVerificationGasLimit: estimations.paymasterVerificationGasLimit || userOperation.paymasterVerificationGasLimit,
+    paymasterPostOpGasLimit:
+      estimations.paymasterPostOpGasLimit || userOperation.paymasterPostOpGasLimit,
+    paymasterVerificationGasLimit:
+      estimations.paymasterVerificationGasLimit || userOperation.paymasterVerificationGasLimit,
     paymaster: estimations.paymaster || userOperation.paymaster,
     paymasterData: estimations.paymasterData || userOperation.paymasterData,
   };
@@ -179,8 +215,15 @@ export function mergePinnedRelayEstimations(userOperation, estimations) {
 
 export class SafeBudgetAdapter {
   constructor({ journal, expected, callPolicy, identity, now = Date.now, marker = () => {} } = {}) {
-    if (!journal || typeof journal.reserve !== "function" || typeof journal.saveSigned !== "function" || typeof journal.attemptWithPermit !== "function") fail("journal dependency required");
-    if (!callPolicy || typeof callPolicy.assert !== "function" || typeof identity !== "function") fail("validation dependencies required");
+    if (
+      !journal ||
+      typeof journal.reserve !== "function" ||
+      typeof journal.saveSigned !== "function" ||
+      typeof journal.attemptWithPermit !== "function"
+    )
+      fail("journal dependency required");
+    if (!callPolicy || typeof callPolicy.assert !== "function" || typeof identity !== "function")
+      fail("validation dependencies required");
     this.journal = journal;
     this.expected = {
       chainId: expected?.chainId,
@@ -199,7 +242,10 @@ export class SafeBudgetAdapter {
   async reserve({ intentId, operation, offeredAt }) {
     this.marker("sponsored-created");
     const canonical = this.#validate(operation, false);
-    if (!Number.isSafeInteger(Number(BigInt(canonical.nonce))) || BigInt(canonical.nonce) > BigInt(Number.MAX_SAFE_INTEGER))
+    if (
+      !Number.isSafeInteger(Number(BigInt(canonical.nonce))) ||
+      BigInt(canonical.nonce) > BigInt(Number.MAX_SAFE_INTEGER)
+    )
       fail("Safe nonce is not safely representable");
     const unsigned = fixedRecord(canonical);
     const unsignedDigest = digest(unsigned);
@@ -216,7 +262,13 @@ export class SafeBudgetAdapter {
       fundingWei: 0n,
       usdcCommitment: "0",
     });
-    const reservation = Object.freeze({ intentId, unsigned, unsignedDigest, canonical, journal: reserved.intent });
+    const reservation = Object.freeze({
+      intentId,
+      unsigned,
+      unsignedDigest,
+      canonical,
+      journal: reserved.intent,
+    });
     this.marker("reserved");
     return reservation;
   }
@@ -225,21 +277,29 @@ export class SafeBudgetAdapter {
     if (!reservation?.intentId || !reservation.unsigned) fail("reservation required");
     const canonical = this.#validate(operation, true);
     const signed = fixedRecord(canonical);
-    if (!unsignedEqual(signed, reservation.unsigned)) fail("signed operation differs from reserved unsigned operation");
+    if (!unsignedEqual(signed, reservation.unsigned))
+      fail("signed operation differs from reserved unsigned operation");
     if (signed.signature === "0x") fail("nonempty signature required");
     const raw = encodedRecord(signed);
-    const saved = await this.journal.saveSigned(reservation.intentId, raw, reservation.unsignedDigest);
+    const saved = await this.journal.saveSigned(
+      reservation.intentId,
+      raw,
+      reservation.unsignedDigest,
+    );
     this.marker("signed-persisted");
     return Object.freeze({ ...reservation, signed, raw, saved });
   }
 
   async route({ reservation, wire, entryPoint, send }) {
-    if (!reservation?.signed || typeof send !== "function") fail("persisted signed reservation required");
+    if (!reservation?.signed || typeof send !== "function")
+      fail("persisted signed reservation required");
     if (this.routed.has(reservation.intentId)) fail("duplicate route attempt");
-    if (expectedAddress(entryPoint, "route entry point") !== this.expected.entryPoint) fail("wrong route entry point");
+    if (expectedAddress(entryPoint, "route entry point") !== this.expected.entryPoint)
+      fail("wrong route entry point");
     const canonical = this.#validate(wire, true);
     const received = fixedRecord(canonical);
-    if (JSON.stringify(received) !== JSON.stringify(reservation.signed)) fail("route payload differs from persisted signed operation");
+    if (JSON.stringify(received) !== JSON.stringify(reservation.signed))
+      fail("route payload differs from persisted signed operation");
     this.routed.add(reservation.intentId);
     return this.journal.attemptWithPermit(reservation.intentId, async () => {
       this.marker("actual-send");
@@ -251,12 +311,14 @@ export class SafeBudgetAdapter {
     const canonical = canonicalizeUserOperation(operation);
     if (canonical.sender !== this.expected.safe) fail("wrong Safe sender");
     this.callPolicy.assert(canonical);
-    if (signed ? canonical.signature === "0x" : canonical.signature !== "0x") fail("unexpected signature state");
+    if (signed ? canonical.signature === "0x" : canonical.signature !== "0x")
+      fail("unexpected signature state");
     const operationIdentity = this.identity(operation);
     if (
       !operationIdentity ||
       operationIdentity.chainId !== this.expected.chainId ||
-      expectedAddress(operationIdentity.entryPoint, "identity entry point") !== this.expected.entryPoint ||
+      expectedAddress(operationIdentity.entryPoint, "identity entry point") !==
+        this.expected.entryPoint ||
       expectedAddress(operationIdentity.sender, "identity sender") !== this.expected.safe ||
       typeof operationIdentity.userOperationHash !== "string" ||
       !HASH.test(operationIdentity.userOperationHash)
