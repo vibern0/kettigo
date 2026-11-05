@@ -107,6 +107,8 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
 
     const refresh = async () => {
       if (!account || !pool || !poolVersion()) return;
+      const requestScope = scopeKey;
+      if (requestScope !== renderedScope.current) return;
       const selectedAccount = getAddress(account);
       const selectedPool = getAddress(pool);
       const request = ++statusEpoch.current;
@@ -126,7 +128,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
             args: [selectedAccount],
           }),
         ]);
-        if (request !== statusEpoch.current) return;
+        if (request !== statusEpoch.current || requestScope !== renderedScope.current) return;
         const currentPending = copyPending(nextPending);
         if (finalizedPending && samePending(finalizedPending, currentPending)) {
           setMember(nextMember);
@@ -138,7 +140,8 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
         setPending(currentPending);
         setFinalizedPending(undefined);
       } catch {
-        if (request === statusEpoch.current) setUnresolved(true);
+        if (request === statusEpoch.current && requestScope === renderedScope.current)
+          setUnresolved(true);
       }
     };
 

@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createRef } from "react";
 import {
   participationMarker as marker,
   participationMetadataReadCount,
@@ -7,6 +8,7 @@ import {
   pendingAdmission as pending,
   renderSavingsParticipation,
   resetParticipationFixture,
+  startRetainedParticipationScope,
 } from "./helpers/savings-participation-fixture";
 
 const fixture = vi.hoisted(() => ({
@@ -88,6 +90,7 @@ vi.mock("canvas-confetti", () => ({
 
 import SavingsPage from "@/app/savings/page";
 import { ToastProvider } from "@/components/Toast";
+import type { ParticipationPanelHandle } from "@/components/savings/ParticipationPanel";
 
 const mount = () => renderSavingsParticipation(SavingsPage, ToastProvider);
 
@@ -101,6 +104,27 @@ test("legacy Savings makes zero membership and admission reads", async () => {
   mount();
   await new Promise((done) => setTimeout(done, 0));
   expect(participationMetadataReadCount(fixture.reads)).toBe(0);
+});
+
+test("a retained old-scope status refresh cannot replace settled participation", async () => {
+  const alternateAccount = "0x4444444444444444444444444444444444444444" as const;
+  const ref = createRef<ParticipationPanelHandle>();
+  const { refreshOldScope, readsBeforeOldRefresh } = await startRetainedParticipationScope(
+    fixture,
+    ref,
+    alternateAccount,
+  );
+
+  refreshOldScope();
+  await Promise.resolve();
+
+  expect(screen.getByRole("button", { name: "Review participation" })).toBeTruthy();
+  expect(
+    screen.queryByText(
+      "Your savings are participating. Eligibility is determined at the end of each draw.",
+    ),
+  ).toBeNull();
+  expect(participationMetadataReadCount(fixture.reads)).toBe(readsBeforeOldRefresh);
 });
 
 test("a positive pending balance is reviewed before one synchronous participation confirm", async () => {
