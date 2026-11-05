@@ -43,11 +43,12 @@ export async function createJournal(options = {}) {
   });
 }
 
-export async function reopenJournal(directory) {
+export async function reopenJournal(directory, options = {}) {
   return CandidateRunJournal.open({
     directory,
     envelope: ORIGINAL_ENVELOPE,
     now: () => 1000,
+    ...options,
   });
 }
 

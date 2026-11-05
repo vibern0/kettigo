@@ -32,6 +32,7 @@ import { loadState } from "./state-storage.mjs";
 import { assertOpen, assertSigningAllowed } from "./journal-guards.mjs";
 import { validPersistedIntentFields as validFields, validRequest } from "./intent-validation.mjs";
 import { canonical, clone, decimalMicro, envelopeIdentity } from "./journal-values.mjs";
+import { persistedSafePolicy, validPersistedSafePolicy } from "./safe-approved-policy.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -115,7 +116,8 @@ function validateStateStructure(state, envelope) {
     !Array.isArray(state.intents) ||
     !state.budget ||
     !validClock(state, envelope) ||
-    !validBudget(state.budget)
+    !validBudget(state.budget) ||
+    !(state.safePolicy == null || validPersistedSafePolicy(state.safePolicy))
   )
     fail("invalid journal structure");
 }
@@ -173,6 +175,7 @@ function newState(envelope, identity) {
     chainId: 11155111,
     envelopeId: envelope.id,
     envelopeIdentity: identity,
+    safePolicy: null,
     startedAt: null,
     deadlineAt: null,
     budget: budgetZero(),
@@ -181,7 +184,13 @@ function newState(envelope, identity) {
 }
 
 export class CandidateRunJournal {
-  static async open({ directory, envelope, now = Date.now, failPublish = false } = {}) {
+  static async open({
+    directory,
+    envelope,
+    safePolicy = null,
+    now = Date.now,
+    failPublish = false,
+  } = {}) {
     validateEnvelope(envelope);
     if (typeof directory !== "string" || !directory) fail("state directory required");
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -199,6 +208,14 @@ export class CandidateRunJournal {
         create: () => newState(envelope, identity),
       });
       validateState(state, envelope, identity);
+      if (state.safePolicy) {
+        const supplied = persistedSafePolicy(safePolicy);
+        if (canonical(supplied) !== canonical(state.safePolicy))
+          fail("Safe policy identity required");
+      } else if (safePolicy !== null) {
+        const supplied = persistedSafePolicy(safePolicy);
+        if (supplied.baseEnvelopeIdentity !== identity) fail("Safe policy does not bind envelope");
+      }
       if (created) await persist(statePath, state, failPublish);
       return new CandidateRunJournal({
         directory,
@@ -277,6 +294,27 @@ export class CandidateRunJournal {
         fail("sender has unresolved intent");
       await this.#commit(proposed);
       return { replay: false, intent: this.intent(request.intentId) };
+    });
+  }
+
+  async bindSafePolicy(capability) {
+    return this.#mutate(async () => {
+      const policy = persistedSafePolicy(capability);
+      if (
+        policy.runId !== this.state.runId ||
+        policy.baseEnvelopeIdentity !== this.identity ||
+        policy.durationMs !== this.envelope.durationMs
+      )
+        fail("Safe policy does not bind this run");
+      if (this.state.safePolicy) {
+        if (canonical(this.state.safePolicy) !== canonical(policy))
+          fail("Safe policy replacement refused");
+        return clone(this.state.safePolicy);
+      }
+      const proposed = clone(this.state);
+      proposed.safePolicy = policy;
+      await this.#commit(proposed);
+      return clone(policy);
     });
   }
 
@@ -467,7 +505,13 @@ function addReservation(state, request, envelope, now, assertBudget) {
   const gasPrice = unsigned(request.maxGasPriceWei, "gas price");
   const funding = unsigned(request.fundingWei, "funding reservation");
   const usdc = decimalMicro(request.usdcCommitment, fail);
-  if (gasPrice > BigInt(envelope.maxGasPriceWei)) fail("gas price exceeds approved cap");
+  const gasCap =
+    state.safePolicy &&
+    request.kind === "user-operation" &&
+    request.sender === state.safePolicy.safe
+      ? state.safePolicy.caps.maxSafeFeePerGas
+      : envelope.maxGasPriceWei;
+  if (gasPrice > BigInt(gasCap)) fail("gas price exceeds approved cap");
   assertBudget(state.budget, fee, funding, usdc);
   state.startedAt = startedAt;
   state.deadlineAt = deadlineAt;

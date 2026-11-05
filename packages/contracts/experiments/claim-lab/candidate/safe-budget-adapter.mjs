@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { getAddress, isAddress } from "ethers";
 
+import { persistedSafePolicy } from "./safe-approved-policy.mjs";
+
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const FIELDS = Object.freeze([
@@ -227,7 +229,15 @@ export function mergePinnedRelayEstimations(userOperation, estimations) {
 }
 
 export class SafeBudgetAdapter {
-  constructor({ journal, expected, callPolicy, identity, now = Date.now, marker = () => {} } = {}) {
+  constructor({
+    journal,
+    expected,
+    callPolicy,
+    identity,
+    policy = null,
+    now = Date.now,
+    marker = () => {},
+  } = {}) {
     if (
       !journal ||
       typeof journal.reserve !== "function" ||
@@ -249,12 +259,24 @@ export class SafeBudgetAdapter {
     this.identity = identity;
     this.now = now;
     this.marker = marker;
+    this.policy = policy;
+    if (policy !== null && typeof journal.bindSafePolicy !== "function")
+      fail("policy journal binding required");
     this.routed = new Set();
   }
 
   async reserve({ intentId, operation, offeredAt }) {
     this.marker("sponsored-created");
     const canonical = this.#validate(operation, false);
+    if (this.policy) {
+      const policy = this.#assertPolicy(canonical, false);
+      if (
+        this.journal.snapshot().intents.filter((intent) => intent.kind === "user-operation")
+          .length >= policy.caps.maxSafeIntents
+      )
+        fail("Safe policy intent cap reached");
+      await this.journal.bindSafePolicy(this.policy);
+    }
     const fullNonce = BigInt(canonical.nonce);
     if (fullNonce >> 64n !== 0n || fullNonce > BigInt(Number.MAX_SAFE_INTEGER))
       fail("Safe nonce is not safely representable");
@@ -297,6 +319,7 @@ export class SafeBudgetAdapter {
   async saveSigned({ reservation, operation }) {
     if (!reservation?.intentId || !reservation.unsigned) fail("reservation required");
     const canonical = this.#validate(operation, true);
+    this.#assertPolicy(canonical);
     const identity = this.#identity(operation);
     if (JSON.stringify(identity) !== JSON.stringify(reservation.identity))
       fail("signed operation identity differs from reservation");
@@ -321,6 +344,7 @@ export class SafeBudgetAdapter {
     if (expectedAddress(entryPoint, "route entry point") !== this.expected.entryPoint)
       fail("wrong route entry point");
     const canonical = this.#validate(wire, true);
+    this.#assertPolicy(canonical);
     const received = fixedRecord(canonical);
     if (JSON.stringify(received) !== JSON.stringify(reservation.signed))
       fail("route payload differs from persisted signed operation");
@@ -433,5 +457,23 @@ export class SafeBudgetAdapter {
       sender: expectedAddress(operationIdentity.sender, "identity sender"),
       userOperationHash: operationIdentity.userOperationHash,
     });
+  }
+
+  #assertPolicy(canonical, requireSaved = true) {
+    if (!this.policy) return null;
+    const policy = persistedSafePolicy(this.policy);
+    const saved = this.journal.snapshot().safePolicy;
+    if (
+      this.now() >= policy.expiresAt ||
+      policy.safe !== this.expected.safe ||
+      policy.entryPoint !== this.expected.entryPoint ||
+      policy.chainId !== this.expected.chainId ||
+      policy.runId !== this.journal.snapshot().runId ||
+      policy.baseEnvelopeIdentity !== this.journal.snapshot().envelopeIdentity ||
+      (requireSaved && JSON.stringify(saved) !== JSON.stringify(policy)) ||
+      BigInt(canonical.maxFeePerGas) > BigInt(policy.caps.maxSafeFeePerGas)
+    )
+      fail("Safe policy rejects operation");
+    return policy;
   }
 }

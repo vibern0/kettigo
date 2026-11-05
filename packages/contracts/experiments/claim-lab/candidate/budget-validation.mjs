@@ -20,8 +20,9 @@ export function validIntentBudget(intent) {
 }
 
 export function assertBudget({ state, budget, envelope, fee, funding, usdc }) {
+  const feeCap = state.safePolicy?.caps.maxAggregateFeeWei ?? envelope.maxFeeWei;
   if (budget.signedCount + 1 > envelope.maxSignedTransactions) fail("signature budget exceeded");
-  if (occupiedFee(state) + fee > BigInt(envelope.maxFeeWei)) fail("fee budget exceeded");
+  if (occupiedFee(state) + fee > BigInt(feeCap)) fail("fee budget exceeded");
   if (BigInt(budget.fundingCommittedWei) + funding > BigInt(envelope.maxFundingWei))
     fail("funding budget exceeded");
   if (BigInt(budget.usdcCommittedMicro) + usdc > BigInt(envelope.maxUsdcMicro))
@@ -50,12 +51,19 @@ export function validateRecomputedBudget(state) {
 }
 
 export function validatePersistedCaps(state, envelope) {
+  const feeCap = state.safePolicy?.caps.maxAggregateFeeWei ?? envelope.maxFeeWei;
+  const safeCount = state.intents.filter((intent) => intent.kind === "user-operation").length;
   if (
     state.budget.signedCount > envelope.maxSignedTransactions ||
-    occupiedFee(state) > BigInt(envelope.maxFeeWei) ||
+    occupiedFee(state) > BigInt(feeCap) ||
     BigInt(state.budget.fundingCommittedWei) > BigInt(envelope.maxFundingWei) ||
     BigInt(state.budget.usdcCommittedMicro) > BigInt(envelope.maxUsdcMicro) ||
-    state.intents.some((intent) => BigInt(intent.maxGasPriceWei) > BigInt(envelope.maxGasPriceWei))
+    state.intents.some((intent) =>
+      intent.kind === "user-operation" && state.safePolicy
+        ? BigInt(intent.maxGasPriceWei) > BigInt(state.safePolicy.caps.maxSafeFeePerGas)
+        : BigInt(intent.maxGasPriceWei) > BigInt(envelope.maxGasPriceWei),
+    ) ||
+    (state.safePolicy && safeCount > state.safePolicy.caps.maxSafeIntents)
   )
     fail("persisted state exceeds approved cap");
 }
