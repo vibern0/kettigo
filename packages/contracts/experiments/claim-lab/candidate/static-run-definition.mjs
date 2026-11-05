@@ -87,7 +87,13 @@ function contracts(value) {
   if (new Set(Object.values(result)).size !== keys.length) fail("contract cross-role conflict");
   return Object.freeze(result);
 }
-function validate(value) {
+/**
+ * Validates the on-disk version-one descriptor and returns the only shape that
+ * downstream workload compilation is allowed to consume.  Keeping this pure
+ * makes the file loader's race-resistant descriptor handling reusable without
+ * making compilation trust caller-supplied registries.
+ */
+export function validateStaticRunDefinition(value) {
   const keys = [
     "version",
     "chainId",
@@ -127,10 +133,11 @@ function validateWorkload(value) {
   });
   for (const target of allowedEoaTargets)
     if (!Object.values(contractRegistry).includes(target)) fail("unknown write target");
-  const creationInputDigests = hashes(value.creationInputDigests, "creation input digests");
+  const creationInputDigests = hashes(value.creationInputDigests, "creation input digests", 3);
   const deploymentCreationHashes = hashes(
     value.deploymentCreationHashes,
     "deployment creation hashes",
+    3,
   );
   const workloadIds = ids(value.workloadIds, "workload IDs");
   const initialFundingWorkloadIds = ids(
@@ -150,8 +157,8 @@ function validateWorkload(value) {
     initialFundingWorkloadIds,
   };
 }
-function hashes(value, label) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 32) fail(`invalid ${label}`);
+function hashes(value, label, count) {
+  if (!Array.isArray(value) || value.length !== count) fail(`invalid ${label}`);
   const result = value.map((entry) => hash(entry, label));
   if (new Set(result).size !== result.length) fail(`duplicate ${label}`);
   return Object.freeze(result);
@@ -177,7 +184,7 @@ export async function loadStaticRunDefinition(path) {
       bytesRead += result.bytesRead;
     }
     if (bytesRead > MAX_BYTES) throw new Error();
-    return validate(JSON.parse(buffer.toString("utf8", 0, bytesRead)));
+    return validateStaticRunDefinition(JSON.parse(buffer.toString("utf8", 0, bytesRead)));
   } catch (error) {
     if (error?.message?.startsWith("candidate definition:")) throw error;
     fail("definition unavailable or permissions invalid");

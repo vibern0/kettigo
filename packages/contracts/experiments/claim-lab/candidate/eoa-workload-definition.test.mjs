@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { compileCandidateWorkload, workloadFingerprint } from "./eoa-workload-definition.mjs";
+import { envelopeIdentity } from "./journal-values.mjs";
+import { ORIGINAL_ENVELOPE } from "./journal.mjs";
 
 const hex = (value) => `0x${value.toString(16).padStart(40, "0")}`;
 const hash = (value) => `0x${value.toString(16).padStart(64, "0")}`;
 function definition() {
   return {
+    version: 1,
+    chainId: 11155111,
+    envelopeIdentity: envelopeIdentity(ORIGINAL_ENVELOPE),
     actors: {
       eoaParticipants: Array.from({ length: 32 }, (_, index) => hex(index + 1)),
       safeParticipant: hex(40),
@@ -27,20 +32,57 @@ function definition() {
     allowedEoaTargets: [hex(50), hex(51), hex(52), hex(53)],
     creationInputDigests: [hash(1), hash(2), hash(3)],
     deploymentCreationHashes: [hash(4), hash(5), hash(6)],
-    workloadIds: ["bootstrap", "deploy", "deposit", "draw", "exit", "final"],
+    workloadIds: ["bootstrap-eth", "bootstrap-usdc", "deploy"],
     initialFundingWorkloadIds: ["bootstrap-eth", "bootstrap-usdc"],
   };
 }
 function manifest() {
   return {
     chainId: 11155111,
+    compiler: { version: "0.8.28", optimizerRuns: 200, viaIR: true, evmVersion: "cancun" },
     creations: ["wrapper", "pool", "adapter"].map((role, index) => ({
       role,
-      sourceId: `contracts/${role}.sol:${role}`,
+      sourceId: [
+        "contracts/ConfidentialUSDC.sol:ConfidentialUSDC",
+        "contracts/ConfidentialPrizePool.sol:ConfidentialPrizePool",
+        "contracts/MorphoYieldAdapter.sol:MorphoYieldAdapter",
+      ][index],
+      artifactProvenance: {
+        sourceId: [
+          "contracts/ConfidentialUSDC.sol:ConfidentialUSDC",
+          "contracts/ConfidentialPrizePool.sol:ConfidentialPrizePool",
+          "contracts/MorphoYieldAdapter.sol:MorphoYieldAdapter",
+        ][index],
+        contractName: ["ConfidentialUSDC", "ConfidentialPrizePool", "MorphoYieldAdapter"][index],
+      },
       compilerBuildHash: hash(index + 10),
-      creationBytecodeHash: hash(index + 20),
+      creationBytecodeHash: hash(index + 4),
       inputDigest: hash(index + 1),
-      constructor: { signature: `${role}(address)`, args: [hex(53)] },
+      constructor: {
+        signature: [
+          "wrapper(address)",
+          "pool(address,uint256,uint256)",
+          "adapter(address,address,address,address,(address,address,address,address,uint256))",
+        ][index],
+        args:
+          index === 0
+            ? [hex(53)]
+            : index === 1
+              ? [hex(51), "1", "2"]
+              : [
+                  hex(53),
+                  hex(51),
+                  hex(50),
+                  hex(60),
+                  {
+                    loanToken: hex(53),
+                    collateralToken: hex(61),
+                    oracle: hex(62),
+                    irm: hex(63),
+                    lltv: "860000000000000000",
+                  },
+                ],
+      },
     })),
   };
 }
@@ -87,4 +129,42 @@ test("rejects missing or mismatched creation manifest records", () => {
   const wrong = manifest();
   wrong.creations[0].inputDigest = hash(99);
   assert.throws(() => compileCandidateWorkload(definition(), wrong), /manifest/i);
+});
+
+test("rejects unknown manifest fields, provenance mismatches, and malformed typed constructors", () => {
+  const cases = [
+    (value) => (value.extra = true),
+    (value) => (value.compiler.viaIR = false),
+    (value) => (value.creations[0].unknown = true),
+    (value) => (value.creations[1].role = "wrapper"),
+    (value) => (value.creations[2].sourceId = "contracts/pool.sol:pool"),
+    (value) => (value.creations[0].artifactProvenance.contractName = "pool"),
+    (value) => (value.creations[0].constructor.signature = "anything(address)"),
+    (value) => value.creations[0].constructor.args.push(hex(99)),
+    (value) => (value.creations[0].constructor.args[0] = hex(99)),
+    (value) => (value.creations[1].constructor.args[1] = "-1"),
+    (value) => (value.creations[2].constructor.args[2] = hex(99)),
+    (value) => (value.creations[2].constructor.args[4].loanToken = hex(99)),
+    (value) => (value.creations[2].constructor.args[4].extra = true),
+  ];
+  for (const mutate of cases) {
+    const value = manifest();
+    mutate(value);
+    assert.throws(
+      () => compileCandidateWorkload(definition(), value),
+      /manifest|constructor|wrong|invalid/i,
+    );
+  }
+});
+
+test("canonicalizes complete creation input without retaining mutable aliases", () => {
+  const input = manifest();
+  const workload = compileCandidateWorkload(definition(), input);
+  input.creations[2].constructor.args[4].lltv = "1";
+  assert.equal(
+    workload.definition.manifest.creations[2].constructor.args[4].lltv,
+    "860000000000000000",
+  );
+  assert.ok(Object.isFrozen(workload.definition.manifest.creations[2].constructor.args[4]));
+  assert.equal(workloadFingerprint(workload), workload.fingerprint);
 });

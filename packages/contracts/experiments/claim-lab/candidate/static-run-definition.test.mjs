@@ -6,7 +6,11 @@ import test from "node:test";
 
 import { envelopeIdentity } from "./journal-values.mjs";
 import { ORIGINAL_ENVELOPE } from "./journal.mjs";
-import { candidateActorRole, loadStaticRunDefinition } from "./static-run-definition.mjs";
+import {
+  candidateActorRole,
+  loadStaticRunDefinition,
+  validateStaticRunDefinition,
+} from "./static-run-definition.mjs";
 
 const hex = (value) => `0x${value.toString(16).padStart(40, "0")}`;
 const digest = (value) => `0x${value.toString(16).padStart(64, "0")}`;
@@ -34,8 +38,8 @@ function definition() {
       setup: hex(58),
     },
     allowedEoaTargets: [hex(50), hex(53)],
-    creationInputDigests: [digest(1)],
-    deploymentCreationHashes: [digest(2)],
+    creationInputDigests: [digest(1), digest(2), digest(3)],
+    deploymentCreationHashes: [digest(4), digest(5), digest(6)],
     workloadIds: ["bootstrap-eth", "bootstrap-usdc", "deploy"],
     initialFundingWorkloadIds: ["bootstrap-eth", "bootstrap-usdc"],
   };
@@ -70,6 +74,37 @@ test("rejects actor reuse as a contract identity", async () => {
   const value = definition();
   value.contracts.adapter = value.actors.sponsor;
   await assert.rejects(loadStaticRunDefinition(await file(value)), /cross-role/);
+});
+test("accepts only the closed StaticA schema and exact creation hash cardinality", () => {
+  const loaded = validateStaticRunDefinition(definition());
+  assert.deepEqual(Object.keys(loaded), [
+    "chainId",
+    "envelopeIdentity",
+    "policy",
+    "actors",
+    "contracts",
+    "allowedEoaTargets",
+    "creationInputDigests",
+    "deploymentCreationHashes",
+    "workloadIds",
+    "initialFundingWorkloadIds",
+  ]);
+  for (const mutate of [
+    (value) => (value.extra = true),
+    (value) => delete value.chainId,
+    (value) => (value.chainId = 1),
+    (value) => (value.actors.unexpected = hex(99)),
+    (value) => (value.contracts.unexpected = hex(99)),
+    (value) => (value.initialFundingWorkloadIds = ["bootstrap-eth", "missing"]),
+    (value) => (value.initialFundingWorkloadIds = ["bootstrap-eth", "bootstrap-eth"]),
+    (value) => (value.creationInputDigests = [digest(1), digest(2)]),
+    (value) => (value.deploymentCreationHashes = [digest(1), digest(2), digest(3), digest(4)]),
+    (value) => (value.creationInputDigests = ["not-a-hash", digest(2), digest(3)]),
+  ]) {
+    const value = definition();
+    mutate(value);
+    assert.throws(() => validateStaticRunDefinition(value));
+  }
 });
 test("redacts private definition permission and parser failures", async () => {
   const path = await file(definition(), 0o644);
