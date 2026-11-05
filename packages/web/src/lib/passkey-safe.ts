@@ -52,7 +52,7 @@ import { buildPasskeySigner } from "./passkey-signer.ts";
 
 import { writePasskeyMetadata, type PasskeyMetadata } from "./passkey-metadata.ts";
 import { createKettigoCredential, getKettigoCredential } from "./passkey-webauthn.ts";
-import { publicConfig } from "./runtime-config.ts";
+import { PIMLICO_API_KEY, PIMLICO_URL, RPC_URL } from "./contracts.ts";
 import {
   createPasskeyVerifierGasProbe,
   withPasskeyStage,
@@ -82,12 +82,6 @@ const SAFE_MODULES_VERSION = "0.3.0";
 const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
-const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
-const PIMLICO_API_KEY = publicConfig(
-  "NEXT_PUBLIC_PIMLICO_API_KEY",
-  process.env.NEXT_PUBLIC_PIMLICO_API_KEY,
-);
-const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
 const SHARED_SIGNER_ADDRESS = sharedSignerAddress();
 
 type PasskeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;

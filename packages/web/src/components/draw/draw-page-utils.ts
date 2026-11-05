@@ -1,5 +1,5 @@
 import { type Address } from "viem";
-import { publicConfig } from "@/lib/runtime-config";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
 import { asChecksumAddress } from "@/lib/zama";
 
 export const asDrawAddress = (value: unknown, label: string): Address =>
@@ -32,15 +32,8 @@ export function drawOperationKey(operation: {
 
 export function drawRuntimeConfig() {
   return {
-    mode2:
-      publicConfig(
-        "NEXT_PUBLIC_POOL_VERSION",
-        process.env.NEXT_PUBLIC_POOL_VERSION || "legacy1",
-      ) === "2",
-    proofUrl: publicConfig(
-      "NEXT_PUBLIC_PROOF_SERVICE_URL",
-      process.env.NEXT_PUBLIC_PROOF_SERVICE_URL,
-    ),
+    mode2: SELECTED_SCOPE?.mode === "v2",
+    proofUrl: SELECTED_SCOPE?.proofServiceUrl ?? "",
   };
 }
 

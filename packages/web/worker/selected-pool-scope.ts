@@ -24,6 +24,8 @@ export type ScopeSelection =
       code: "invalid_savings_scope" | "unavailable_savings_scope";
     }>;
 
+type ScopeInput = Readonly<Record<string, unknown>>;
+
 type ScopeEnv = Pick<
   KettigoPublicRuntimeEnv,
   | "NEXT_PUBLIC_RPC_URL"
@@ -118,7 +120,8 @@ function buildScope(value: {
   const wrapper = checksumAddress(value.wrapper);
   const pool = checksumAddress(value.pool);
   const rpcUrl = trustedUrl(value.rpcUrl);
-  if (!usdc || !wrapper || !pool || !rpcUrl) return undefined;
+  if (!usdc || !wrapper || !pool || !rpcUrl || !hasDistinctRoles(usdc, wrapper, pool))
+    return undefined;
   if (value.mode === "v2") {
     const proofServiceUrl = trustedUrl(value.proofServiceUrl);
     const proofNamespace = nonEmpty(value.proofNamespace);
@@ -148,6 +151,68 @@ function buildScope(value: {
     proofNamespace: "",
     onboardingEnabled: false,
   });
+}
+
+/**
+ * Validates a complete tuple emitted by the Worker before a browser uses it.
+ * This deliberately accepts no partial configuration: a document has one
+ * immutable scope or no available financial surface at all.
+ */
+export function validateSelectedPoolScope(value: unknown): SelectedPoolScope | undefined {
+  if (!isScopeInput(value)) return undefined;
+  const id = stringValue(value.id);
+  if (value.chainId !== 11155111 || !id || !isPoolScopeId(id) || !isPoolMode(value.mode)) {
+    return undefined;
+  }
+  if (typeof value.onboardingEnabled !== "boolean") return undefined;
+  const scope = buildScope({
+    id,
+    usdc: stringValue(value.usdc),
+    wrapper: stringValue(value.wrapper),
+    pool: stringValue(value.pool),
+    rpcUrl: stringValue(value.rpcUrl),
+    mode: value.mode,
+    proofServiceUrl: stringValue(value.proofServiceUrl),
+    proofNamespace: stringValue(value.proofNamespace),
+    onboardingEnabled: value.onboardingEnabled,
+  });
+  return scope && hasExpectedScopeRoles(scope) ? scope : undefined;
+}
+
+function hasExpectedScopeRoles(scope: SelectedPoolScope): boolean {
+  if (scope.id === "candidate-v2") {
+    return (
+      scope.mode === "v2" &&
+      !Object.values(LEGACY_SCOPES).some(
+        (legacy) => scope.wrapper === legacy.wrapper && scope.pool === legacy.pool,
+      )
+    );
+  }
+  const expected = LEGACY_SCOPES[scope.id];
+  return (
+    scope.mode === "legacy1" &&
+    scope.wrapper === expected.wrapper &&
+    scope.pool === expected.pool &&
+    scope.proofServiceUrl === "" &&
+    scope.proofNamespace === "" &&
+    !scope.onboardingEnabled
+  );
+}
+
+function hasDistinctRoles(...addresses: Address[]): boolean {
+  const zero = "0x0000000000000000000000000000000000000000";
+  return (
+    addresses.every((address) => address.toLowerCase() !== zero) &&
+    new Set(addresses.map((address) => address.toLowerCase())).size === addresses.length
+  );
+}
+
+function isScopeInput(value: unknown): value is ScopeInput {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function checksumAddress(value: string | undefined): Address | undefined {
@@ -181,4 +246,8 @@ function parseBoolean(value: string | undefined): boolean | undefined {
 
 function isPoolScopeId(value: string): value is PoolScopeId {
   return value === "legacy-e65" || value === "legacy-9c" || value === "candidate-v2";
+}
+
+function isPoolMode(value: unknown): value is PoolMode {
+  return value === "legacy1" || value === "v2";
 }

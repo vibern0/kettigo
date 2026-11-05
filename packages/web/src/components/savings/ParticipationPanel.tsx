@@ -19,7 +19,7 @@ import {
 } from "@/lib/admission-coordinator";
 import type { PasskeySmartSession } from "@/lib/smart-session";
 import { decryptPublicBoolean, createPublicZamaSDK } from "@/lib/zama";
-import { publicConfig } from "@/lib/runtime-config";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
 import { useActionCenter } from "@/components/ActionCenter";
 import { useToast } from "@/components/Toast";
 
@@ -37,10 +37,7 @@ type AdmissionReady = Awaited<ReturnType<ReturnType<typeof createAdmissionCoordi
 type TimedAdmissionReady = Readonly<{ admission: AdmissionReady; preparedAt: number }>;
 
 function poolVersion() {
-  return (
-    publicConfig("NEXT_PUBLIC_POOL_VERSION", process.env.NEXT_PUBLIC_POOL_VERSION || "legacy1") ===
-    "2"
-  );
+  return SELECTED_SCOPE?.mode === "v2";
 }
 
 function copyPending(

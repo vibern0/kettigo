@@ -8,6 +8,7 @@ import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/Toast";
 import { ActionCenterProvider } from "@/components/ActionCenter";
 import { LazyMotion, MotionConfig, domMax } from "motion/react";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
 
 const CHUNK_RELOAD_KEY = "kettigo:last-chunk-reload";
 const CHUNK_RELOAD_WINDOW_MS = 10_000;
@@ -34,7 +35,8 @@ function reloadForFreshChunks(error: unknown) {
 function ChunkLoadRecovery() {
   useEffect(() => {
     const onError = (event: ErrorEvent) => reloadForFreshChunks(event.error ?? event.message);
-    const onUnhandledRejection = (event: PromiseRejectionEvent) => reloadForFreshChunks(event.reason);
+    const onUnhandledRejection = (event: PromiseRejectionEvent) =>
+      reloadForFreshChunks(event.reason);
 
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
@@ -50,17 +52,34 @@ function ChunkLoadRecovery() {
 
 // Shared client providers for contracts, cached queries, wallet state, and toasts.
 export function Providers({ children }: { children: ReactNode }) {
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => setHydrated(true), []);
+  if (!hydrated || !SELECTED_SCOPE) return <UnavailableSavings />;
+  return <ActiveProviders>{children}</ActiveProviders>;
+}
+
+function UnavailableSavings() {
+  return (
+    <main className="px-5 py-12">Savings are unavailable right now. Please try again later.</main>
+  );
+}
+
+function ActiveProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
         defaultOptions: {
           queries: { staleTime: 30_000, retry: 1 },
         },
-      })
+      }),
   );
 
   return (
-    <MotionConfig reducedMotion="user" transition={{ type: "spring", stiffness: 380, damping: 26, mass: 0.8 }}>
+    <MotionConfig
+      reducedMotion="user"
+      transition={{ type: "spring", stiffness: 380, damping: 26, mass: 0.8 }}
+    >
       <LazyMotion features={domMax}>
         <WagmiProvider config={wagmiConfig}>
           <QueryClientProvider client={queryClient}>
