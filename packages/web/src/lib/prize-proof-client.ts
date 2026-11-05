@@ -46,6 +46,9 @@ export type PrizeProofClientOptions = {
   fetch?: typeof fetch;
   timeoutMs?: number;
 };
+type TransportResult =
+  | { type: "payload"; body: Record<string, unknown> }
+  | { type: "outcome"; outcome: PrizeProofResult };
 
 const DEPTH = 32,
   MAX_BODY_BYTES = 128_000,
@@ -199,16 +202,53 @@ function outcome(status: number, body: Record<string, unknown>): PrizeProofResul
   return null;
 }
 
+async function withDeadline<T>(
+  timeoutMs: number,
+  callerSignal: AbortSignal | undefined,
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T | PrizeProofResult> {
+  live(callerSignal);
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error("archive timeout"));
+    }, timeoutMs);
+  });
+  const callerAbort = new Promise<never>((_, reject) =>
+    callerSignal?.addEventListener(
+      "abort",
+      () => {
+        abortFromCaller();
+        reject(abort());
+      },
+      { once: true },
+    ),
+  );
+  try {
+    return await Promise.race([work(controller.signal), deadline, callerAbort]);
+  } catch (error) {
+    live(callerSignal);
+    return unavailable(
+      timedOut ? "archive timeout" : error instanceof Error ? error.message : "archive unavailable",
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
 export function createPrizeProofClient(options: PrizeProofClientOptions) {
   const chainId = BigInt(options.chainId);
   if (chainId !== 11155111n) throw new Error("unsupported chain");
   const pool = addr(options.pool, "pool"),
     account = addr(options.account, "account"),
     base = new URL(options.baseUrl);
-  const request = async (
-    url: string,
-    signal?: AbortSignal,
-  ): Promise<Record<string, unknown> | PrizeProofResult> => {
+  const request = async (url: string, signal?: AbortSignal): Promise<TransportResult> => {
     live(signal);
     const controller = new AbortController();
     let timedOut = false;
@@ -225,15 +265,22 @@ export function createPrizeProofClient(options: PrizeProofClientOptions) {
         }),
         body = await readJson(response, signal);
       live(signal);
-      return (
-        outcome(response.status, body) ??
-        (response.ok ? body : unavailable(`archive HTTP ${response.status}`))
-      );
+      if ("kind" in body)
+        return { type: "outcome", outcome: unavailable("invalid archive response") };
+      const status = outcome(response.status, body);
+      return status
+        ? { type: "outcome", outcome: status }
+        : response.ok
+          ? { type: "payload", body }
+          : { type: "outcome", outcome: unavailable(`archive HTTP ${response.status}`) };
     } catch (e) {
       live(signal);
-      return unavailable(
-        timedOut ? "archive timeout" : e instanceof Error ? e.message : "archive unavailable",
-      );
+      return {
+        type: "outcome",
+        outcome: unavailable(
+          timedOut ? "archive timeout" : e instanceof Error ? e.message : "archive unavailable",
+        ),
+      };
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", cancel);
@@ -276,21 +323,25 @@ export function createPrizeProofClient(options: PrizeProofClientOptions) {
     }
   };
   return {
-    async getProof(drawId: bigint, requestOptions: PrizeReadOptions = {}) {
+    async getProof(
+      drawId: bigint,
+      requestOptions: PrizeReadOptions = {},
+    ): Promise<PrizeProofResult> {
       if (drawId <= 0n || drawId > UINT256_MAX) throw new Error("invalid draw id");
-      const result = await request(
-        `v1/${chainId}/${pool}/draws/${drawId}/proof/${account}`,
-        requestOptions.signal,
-      );
-      return "kind" in result
-        ? result
-        : "proof" in result
-          ? validate(result.proof, drawId, requestOptions.signal)
+      return withDeadline(options.timeoutMs ?? 10_000, requestOptions.signal, async (signal) => {
+        const result = await request(
+          `v1/${chainId}/${pool}/draws/${drawId}/proof/${account}`,
+          signal,
+        );
+        if (result.type === "outcome") return result.outcome;
+        return "proof" in result.body
+          ? validate(result.body.proof, drawId, signal)
           : unavailable("invalid proof response");
+      });
     },
     async listDraws(
       requestOptions: { cursor?: bigint; limit?: number; signal?: AbortSignal } = {},
-    ) {
+    ): Promise<{ kind: "draws"; draws: PrizeArchiveDraw[] } | PrizeProofResult> {
       const limit = requestOptions.limit ?? 25;
       if (
         !Number.isSafeInteger(limit) ||
@@ -302,8 +353,14 @@ export function createPrizeProofClient(options: PrizeProofClientOptions) {
         throw new Error("invalid pagination");
       const q = new URLSearchParams({ limit: String(limit) });
       if (requestOptions.cursor !== undefined) q.set("cursor", requestOptions.cursor.toString());
-      const result = await request(`v1/${chainId}/${pool}/draws?${q}`, requestOptions.signal);
-      if ("kind" in result) return result;
+      const wrapped = await withDeadline(
+        options.timeoutMs ?? 10_000,
+        requestOptions.signal,
+        (signal) => request(`v1/${chainId}/${pool}/draws?${q}`, signal),
+      );
+      if ("kind" in wrapped) return wrapped;
+      if (wrapped.type === "outcome") return wrapped.outcome;
+      const result = wrapped.body;
       if (!Array.isArray(result.draws) || result.draws.length > limit)
         return unavailable("invalid draw response");
       try {
@@ -314,6 +371,7 @@ export function createPrizeProofClient(options: PrizeProofClientOptions) {
             !draw.drawId ||
             draw.chainId !== chainId ||
             !same(draw.pool, pool) ||
+            (requestOptions.cursor !== undefined && draw.drawId >= requestOptions.cursor) ||
             (previous !== undefined && draw.drawId >= previous)
           )
             throw new Error("invalid draw ordering or scope");

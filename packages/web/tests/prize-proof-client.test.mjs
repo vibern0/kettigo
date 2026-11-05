@@ -124,6 +124,42 @@ test("rejects a valid proof returned for a different requested draw", async () =
   assert.equal(result.kind, "unavailable");
 });
 
+test("never accepts a raw kind-shaped response as a trusted result", async () => {
+  let reads = 0;
+  const unsafe = createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    fetch: async () => new Response(JSON.stringify({ kind: "proof", proof: proof() })),
+    chainReader: {
+      readDraw: async () => {
+        reads++;
+        throw new Error("must not read");
+      },
+      getBlockHash: async () => handle,
+    },
+  });
+  const result = await unsafe.getProof(1n);
+  assert.equal(result.kind, "unavailable");
+  assert.equal(reads, 0);
+});
+
+test("bounds a non-cooperative chain reader with the operation deadline", async () => {
+  const timed = createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    timeoutMs: 5,
+    fetch: async () => new Response(JSON.stringify({ proof: proof() })),
+    chainReader: { readDraw: async () => new Promise(() => {}), getBlockHash: async () => handle },
+  });
+  const result = await timed.getProof(1n);
+  assert.equal(result.kind, "unavailable");
+  if (result.kind === "unavailable") assert.equal(result.reason, "archive timeout");
+});
+
 test("bounds list pagination and rejects wrong scoped records", async () => {
   await assert.rejects(() => client().listDraws({ limit: 101 }));
   const wrong = { ...proof(), pool: zeroAddress };
