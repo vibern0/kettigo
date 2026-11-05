@@ -5,6 +5,9 @@ const recoverPendingOperation = vi.fn();
 const sendTransaction = vi.fn();
 const prepareTransaction = vi.fn();
 const signTypedData = vi.fn();
+const savedRunner = vi.fn(async () => {
+  throw new Error("server secret should never be shown");
+});
 const session = {
   address: "0x1234567890123456789012345678901234567890",
   getPendingOperation: () => ({
@@ -33,11 +36,7 @@ function ActionProbe() {
       <output data-testid="actions">{JSON.stringify(actions)}</output>
       <button
         type="button"
-        onClick={() =>
-          runAction({ label: "Saved action", type: "pending" }, async () => {
-            throw new Error("server secret should never be shown");
-          })
-        }
+        onClick={() => runAction({ label: "Saved action", type: "pending" }, savedRunner)}
       >
         Run action
       </button>
@@ -131,6 +130,7 @@ describe("ActionCenter pending operation", () => {
   });
 
   it("keeps runner error copy controlled", async () => {
+    savedRunner.mockClear();
     wallet.session = {
       ...session,
       getPendingOperation: () => {
@@ -149,6 +149,41 @@ describe("ActionCenter pending operation", () => {
     expect(screen.getByTestId("actions").textContent).not.toContain("secret");
     fireEvent.click(screen.getByRole("button", { name: "Retry first" }));
     expect(screen.getByTestId("actions").textContent).toContain("confirming");
+    wallet.session = session;
+  });
+
+  it("retains unavailable activity after reload without replaying its runner", async () => {
+    savedRunner.mockClear();
+    wallet.session = {
+      ...session,
+      getPendingOperation: () => {
+        throw new Error("storage secret");
+      },
+    };
+    const first = render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run action" }));
+    await waitFor(() =>
+      expect(window.localStorage.getItem("kettigo:actions")).toContain("Status is unavailable"),
+    );
+    first.unmount();
+
+    render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("actions").textContent).toContain("confirming"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry first" }));
+
+    expect(savedRunner).toHaveBeenCalledTimes(1);
+    expect(prepareTransaction).not.toHaveBeenCalled();
+    expect(sendTransaction).not.toHaveBeenCalled();
+    expect(signTypedData).not.toHaveBeenCalled();
+    expect(screen.getByTestId("actions").textContent).not.toContain("secret");
     wallet.session = session;
   });
 
