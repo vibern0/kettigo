@@ -15,6 +15,8 @@ const fixture = vi.hoisted(() => ({
   account: "0x1111111111111111111111111111111111111111" as const,
   pool: "0x3333333333333333333333333333333333333333" as const,
   version: "legacy1",
+  scopeId: "legacy-e65" as "legacy-e65" | "candidate-v2",
+  onboardingEnabled: false,
   reads: vi.fn(),
   archive: vi.fn(),
   prepare: vi.fn(),
@@ -42,7 +44,11 @@ vi.mock("viem", async (original) => ({
 }));
 vi.mock("@/lib/runtime-config", () => ({
   get SELECTED_SCOPE() {
-    return { mode: fixture.version === "2" ? "v2" : "legacy1" };
+    return {
+      id: fixture.scopeId,
+      mode: fixture.version === "2" ? "v2" : "legacy1",
+      onboardingEnabled: fixture.onboardingEnabled,
+    };
   },
   publicConfig: () => "",
 }));
@@ -104,6 +110,31 @@ test("legacy Savings makes zero membership and admission reads", async () => {
   mount();
   await new Promise((done) => setTimeout(done, 0));
   expect(participationMetadataReadCount(fixture.reads)).toBe(0);
+});
+
+test("candidate savings with onboarding paused blocks only a fresh deposit", async () => {
+  fixture.version = "2";
+  fixture.scopeId = "candidate-v2";
+  fixture.onboardingEnabled = false;
+  fixture.principal = 10_000_000n;
+  mount();
+
+  await screen.findByRole("button", { name: "Review participation" });
+  expect((screen.getByRole("button", { name: "Deposit" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+  expect((screen.getByRole("button", { name: "Withdraw" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
+});
+
+test("legacy savings keeps fresh deposits available when its registry onboarding flag is false", () => {
+  fixture.onboardingEnabled = false;
+  mount();
+
+  expect((screen.getByRole("button", { name: "Deposit" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
 });
 
 test("a retained old-scope status refresh cannot replace settled participation", async () => {

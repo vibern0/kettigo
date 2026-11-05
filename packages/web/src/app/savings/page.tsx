@@ -2,7 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
+import {
+  createPublicClient,
+  encodeEventTopics,
+  encodeFunctionData,
+  getAddress,
+  http,
+  isAddress,
+  parseEventLogs,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem";
 import { sepolia } from "viem/chains";
 import {
   CONTRACTS,
@@ -13,7 +24,12 @@ import {
 } from "@/lib/contracts";
 import { formatUSDC, parseUSDC } from "@/lib/format";
 import { useWallet } from "@/lib/wallet-context";
-import { sendSmartTransaction, sendSmartTransactionBatch, type PasskeySmartSession, type PreparedSmartTransaction } from "@/lib/smart-session";
+import {
+  sendSmartTransaction,
+  sendSmartTransactionBatch,
+  type PasskeySmartSession,
+  type PreparedSmartTransaction,
+} from "@/lib/smart-session";
 import {
   asChecksumAddress,
   createPublicZamaSDK,
@@ -28,9 +44,13 @@ import { useToast } from "@/components/Toast";
 import { DepositSheet } from "@/components/savings/DepositSheet";
 import { WithdrawalSheet } from "@/components/savings/WithdrawalSheet";
 import { SavingsStatus } from "@/components/savings/SavingsStatus";
-import { ParticipationPanel, type ParticipationPanelHandle } from "@/components/savings/ParticipationPanel";
+import {
+  ParticipationPanel,
+  type ParticipationPanelHandle,
+} from "@/components/savings/ParticipationPanel";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
 import type { ActionPatch } from "@/lib/action-center-model";
 import {
   balanceBucketLabels,
@@ -67,7 +87,9 @@ function asAddress(value: unknown, label: string) {
 
 function getErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /encrypted|confidential|public|private|mock|testnet|sepolia|prototype|faucet|leakage|decrypted/i.test(message)
+  return /encrypted|confidential|public|private|mock|testnet|sepolia|prototype|faucet|leakage|decrypted/i.test(
+    message,
+  )
     ? "Something went wrong. Please try again."
     : message;
 }
@@ -98,18 +120,25 @@ function readStoredPendingUnwraps(token: `0x${string}`, user: `0x${string}`) {
   if (typeof window === "undefined") return [];
 
   try {
-    const stored = JSON.parse(window.localStorage.getItem(pendingUnwrapStorageKey(token, user)) ?? "[]");
+    const stored = JSON.parse(
+      window.localStorage.getItem(pendingUnwrapStorageKey(token, user)) ?? "[]",
+    );
     if (!Array.isArray(stored)) return [];
 
     return stored.filter(
-      (request): request is PendingUnwrap => isHexString(request?.requestId) && isHexString(request?.txHash),
+      (request): request is PendingUnwrap =>
+        isHexString(request?.requestId) && isHexString(request?.txHash),
     );
   } catch {
     return [];
   }
 }
 
-function writeStoredPendingUnwraps(token: `0x${string}`, user: `0x${string}`, requests: PendingUnwrap[]) {
+function writeStoredPendingUnwraps(
+  token: `0x${string}`,
+  user: `0x${string}`,
+  requests: PendingUnwrap[],
+) {
   if (typeof window === "undefined") return;
 
   window.localStorage.setItem(pendingUnwrapStorageKey(token, user), JSON.stringify(requests));
@@ -119,7 +148,9 @@ function readStoredPendingWithdrawals(pool: `0x${string}`, user: `0x${string}`) 
   if (typeof window === "undefined") return [];
 
   try {
-    const stored = JSON.parse(window.localStorage.getItem(pendingWithdrawalStorageKey(pool, user)) ?? "[]");
+    const stored = JSON.parse(
+      window.localStorage.getItem(pendingWithdrawalStorageKey(pool, user)) ?? "[]",
+    );
     if (!Array.isArray(stored)) return [];
 
     return stored
@@ -130,7 +161,9 @@ function readStoredPendingWithdrawals(pool: `0x${string}`, user: `0x${string}`) 
           batchId: BigInt(request.batchId),
           txHash: request.txHash,
           amount: typeof request.amount === "string" ? BigInt(request.amount) : undefined,
-          unwrapRequestId: isHexString(request.unwrapRequestId) ? request.unwrapRequestId : undefined,
+          unwrapRequestId: isHexString(request.unwrapRequestId)
+            ? request.unwrapRequestId
+            : undefined,
         };
       })
       .filter((request): request is PendingWithdrawal => request !== undefined);
@@ -139,7 +172,11 @@ function readStoredPendingWithdrawals(pool: `0x${string}`, user: `0x${string}`) 
   }
 }
 
-function writeStoredPendingWithdrawals(pool: `0x${string}`, user: `0x${string}`, requests: PendingWithdrawal[]) {
+function writeStoredPendingWithdrawals(
+  pool: `0x${string}`,
+  user: `0x${string}`,
+  requests: PendingWithdrawal[],
+) {
   if (typeof window === "undefined") return;
 
   window.localStorage.setItem(
@@ -183,8 +220,17 @@ export default function SavingsPage() {
   const [depositSheetStep, setDepositSheetStep] = useState<SheetStep>();
   const [withdrawSheetStep, setWithdrawSheetStep] = useState<SheetStep>();
   const [accessReviewStep, setAccessReviewStep] = useState<SheetStep>();
-  const preparedDeposit = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
-  const preparedAccess = useRef<{ session: PasskeySmartSession; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const preparedDeposit = useRef<{
+    session: PasskeySmartSession;
+    value: bigint;
+    transaction: PreparedSmartTransaction;
+    preparedAt: number;
+  }>();
+  const preparedAccess = useRef<{
+    session: PasskeySmartSession;
+    transaction: PreparedSmartTransaction;
+    preparedAt: number;
+  }>();
   const participation = useRef<ParticipationPanelHandle>(null);
   const reviewAbort = useRef<AbortController>();
   const [preparingDeposit, setPreparingDeposit] = useState(false);
@@ -215,11 +261,19 @@ export default function SavingsPage() {
     cancelOwnedReview();
   }, [depositSheetStep]);
 
-  useEffect(() => () => {
-    cancelOwnedReview();
-  }, []);
+  useEffect(
+    () => () => {
+      cancelOwnedReview();
+    },
+    [],
+  );
 
-  const preparedWithdrawal = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const preparedWithdrawal = useRef<{
+    session: PasskeySmartSession;
+    value: bigint;
+    transaction: PreparedSmartTransaction;
+    preparedAt: number;
+  }>();
   const [preparingWithdrawal, setPreparingWithdrawal] = useState(false);
   const withdrawalPreparationId = useRef(0);
 
@@ -232,9 +286,12 @@ export default function SavingsPage() {
     cancelOwnedReview();
   }, [withdrawSheetStep]);
 
-  useEffect(() => () => {
-    cancelOwnedReview();
-  }, []);
+  useEffect(
+    () => () => {
+      cancelOwnedReview();
+    },
+    [],
+  );
 
   const [confirmingAction, setConfirmingAction] = useState<"deposit" | "withdraw">();
 
@@ -256,7 +313,8 @@ export default function SavingsPage() {
   const poolReady = wrapperReady && isAddress(addresses.pool);
   // The pool caps the encrypted request, so a user can still request a known
   // amount while the optional balance display is unavailable.
-  const hasWithdrawablePrincipal = principal === undefined ? Boolean(session && poolReady) : principal > 0n;
+  const hasWithdrawablePrincipal =
+    principal === undefined ? Boolean(session && poolReady) : principal > 0n;
   const withdrawalUnwrapIds = new Set(
     pendingWithdrawals
       .map((request) => request.unwrapRequestId?.toLowerCase())
@@ -265,8 +323,14 @@ export default function SavingsPage() {
   const standalonePendingUnwraps = pendingUnwraps.filter(
     (request) => !withdrawalUnwrapIds.has(request.requestId.toLowerCase()),
   );
-  const showWithdraw = hasWithdrawablePrincipal || pendingWithdrawals.length > 0 || standalonePendingUnwraps.length > 0;
+  const showWithdraw =
+    hasWithdrawablePrincipal ||
+    pendingWithdrawals.length > 0 ||
+    standalonePendingUnwraps.length > 0;
   const withdrawalInProgress = pendingWithdrawalTotal(pendingWithdrawals);
+  const freshDepositEnabled = Boolean(
+    SELECTED_SCOPE && (SELECTED_SCOPE.id !== "candidate-v2" || SELECTED_SCOPE.onboardingEnabled),
+  );
 
   useEffect(() => {
     if (!session?.address) return;
@@ -291,7 +355,10 @@ export default function SavingsPage() {
       if (!stopped) timer = setTimeout(() => void poll(), 15_000);
     }
     timer = setTimeout(() => void poll(), 15_000);
-    return () => { stopped = true; clearTimeout(timer); };
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.address, poolReady]);
 
@@ -339,7 +406,11 @@ export default function SavingsPage() {
     setAllowance(approved);
   }
 
-  async function sendTx(currentSession: PasskeySmartSession, to: `0x${string}`, data: `0x${string}`) {
+  async function sendTx(
+    currentSession: PasskeySmartSession,
+    to: `0x${string}`,
+    data: `0x${string}`,
+  ) {
     const tx = await sendSmartTransaction(currentSession, to, data);
     return publicClient.waitForTransactionReceipt({ hash: tx });
   }
@@ -357,7 +428,10 @@ export default function SavingsPage() {
     if (requestId) {
       const token = asAddress(addresses.confidentialUsdc, "Savings token");
       setPendingUnwraps((current) => {
-        const next = [{ requestId, txHash: receipt.transactionHash }, ...current.filter((request) => request.requestId !== requestId)];
+        const next = [
+          { requestId, txHash: receipt.transactionHash },
+          ...current.filter((request) => request.requestId !== requestId),
+        ];
         writeStoredPendingUnwraps(token, user, next);
         return next;
       });
@@ -439,7 +513,8 @@ export default function SavingsPage() {
     const token = asAddress(addresses.confidentialUsdc, "Savings token");
     const stored = readStoredPendingUnwraps(token, user);
     const latestBlock = await publicClient.getBlockNumber();
-    const fromBlock = latestBlock > UNWRAP_LOG_LOOKBACK_BLOCKS ? latestBlock - UNWRAP_LOG_LOOKBACK_BLOCKS : 0n;
+    const fromBlock =
+      latestBlock > UNWRAP_LOG_LOOKBACK_BLOCKS ? latestBlock - UNWRAP_LOG_LOOKBACK_BLOCKS : 0n;
     let discovered: PendingUnwrap[] = [];
 
     try {
@@ -457,7 +532,9 @@ export default function SavingsPage() {
         eventName: "UnwrapFinalized",
         logs: finalizedLogs,
       });
-      const finalizedIds = new Set(finalized.map((event) => event.args.unwrapRequestId?.toLowerCase()));
+      const finalizedIds = new Set(
+        finalized.map((event) => event.args.unwrapRequestId?.toLowerCase()),
+      );
 
       discovered = requested
         .map((event) => {
@@ -508,7 +585,8 @@ export default function SavingsPage() {
     const sdk = createPublicZamaSDK();
     const decrypted = await decryptPublicUint64(sdk, requestId).finally(() => sdk.terminate());
     const clearValue = decrypted.clearValue;
-    if (finalizationOutcome(clearValue) === "invariant-error") throw new Error("Withdrawal needs support. Please contact us.");
+    if (finalizationOutcome(clearValue) === "invariant-error")
+      throw new Error("Withdrawal needs support. Please contact us.");
     const data = encodeFunctionData({
       abi: confidentialUsdcAbi,
       functionName: "finalizeUnwrap",
@@ -524,7 +602,8 @@ export default function SavingsPage() {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Valor invalido.");
-    if (!poolReady) throw new Error("Deposits are unavailable right now.");
+    if (!poolReady || !freshDepositEnabled)
+      throw new Error("New savings are not available right now.");
     const maxDeposit = remainingDepositCapacity();
     if (value > maxDeposit) throw new Error("Amount is above the current account limit.");
 
@@ -542,12 +621,7 @@ export default function SavingsPage() {
     const depositCall = encodeFunctionData({
       abi: confidentialUsdcAbi,
       functionName: "confidentialTransferAndCall",
-      args: [
-        pool,
-        encrypted.handle,
-        encrypted.inputProof,
-        "0x",
-      ],
+      args: [pool, encrypted.handle, encrypted.inputProof, "0x"],
     });
     const data = encodeFunctionData({
       abi: confidentialUsdcAbi,
@@ -571,10 +645,20 @@ export default function SavingsPage() {
     return currentSession.prepareTransaction([...readCalls, ...calls], { signal });
   }
 
-  async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+  async function depositConfidential(
+    value: bigint,
+    update: (patch: ActionPatch) => void,
+    onSigned: () => void,
+  ) {
+    if (!freshDepositEnabled) throw new Error("New savings are not available right now.");
     const currentSession = activeSession();
     const prepared = preparedDeposit.current;
-    if (!prepared || prepared.session !== currentSession || prepared.value !== value || Date.now() - prepared.preparedAt > 60_000) {
+    if (
+      !prepared ||
+      prepared.session !== currentSession ||
+      prepared.value !== value ||
+      Date.now() - prepared.preparedAt > 60_000
+    ) {
       preparedDeposit.current?.transaction.cancel();
       preparedDeposit.current = undefined;
       setDepositSheetStep("entry");
@@ -626,10 +710,19 @@ export default function SavingsPage() {
     return currentSession.prepareTransaction([...readCalls, { to: pool, data }], { signal });
   }
 
-  async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+  async function withdrawConfidential(
+    value: bigint,
+    update: (patch: ActionPatch) => void,
+    onSigned: () => void,
+  ) {
     const currentSession = activeSession();
     const prepared = preparedWithdrawal.current;
-    if (!prepared || prepared.session !== currentSession || prepared.value !== value || Date.now() - prepared.preparedAt > 60_000) {
+    if (
+      !prepared ||
+      prepared.session !== currentSession ||
+      prepared.value !== value ||
+      Date.now() - prepared.preparedAt > 60_000
+    ) {
       preparedWithdrawal.current?.transaction.cancel();
       preparedWithdrawal.current = undefined;
       setWithdrawSheetStep("entry");
@@ -698,16 +791,26 @@ export default function SavingsPage() {
     const pool = asAddress(addresses.pool, "Prize pool");
     let automatic = false;
     try {
-      await publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "withdrawalAccounts", args: [0n] });
+      await publicClient.readContract({
+        address: pool,
+        abi: confidentialPrizePoolAbi,
+        functionName: "withdrawalAccounts",
+        args: [0n],
+      });
       automatic = true;
-    } catch { /* Older pools require an account-authorized claim. */ }
+    } catch {
+      /* Older pools require an account-authorized claim. */
+    }
     setAutomaticWithdrawals(automatic);
     const stored = readStoredPendingWithdrawals(pool, user);
     const token = wrapperReady ? asAddress(addresses.confidentialUsdc, "Savings token") : undefined;
     const latestBlock = await publicClient.getBlockNumber();
-    const fromBlock = latestBlock > UNWRAP_LOG_LOOKBACK_BLOCKS ? latestBlock - UNWRAP_LOG_LOOKBACK_BLOCKS : 0n;
+    const fromBlock =
+      latestBlock > UNWRAP_LOG_LOOKBACK_BLOCKS ? latestBlock - UNWRAP_LOG_LOOKBACK_BLOCKS : 0n;
     const withdrawalFromBlock =
-      latestBlock > WITHDRAWAL_LOG_LOOKBACK_BLOCKS ? latestBlock - WITHDRAWAL_LOG_LOOKBACK_BLOCKS : 0n;
+      latestBlock > WITHDRAWAL_LOG_LOOKBACK_BLOCKS
+        ? latestBlock - WITHDRAWAL_LOG_LOOKBACK_BLOCKS
+        : 0n;
     let finalizedIds = new Set<string>();
     let discovered: PendingWithdrawal[] = [];
 
@@ -726,85 +829,119 @@ export default function SavingsPage() {
     }
 
     if (automatic) {
-      const currentBatch = await publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "currentWithdrawalBatchId" });
+      const currentBatch = await publicClient.readContract({
+        address: pool,
+        abi: confidentialPrizePoolAbi,
+        functionName: "currentWithdrawalBatchId",
+      });
       for (let batchId = 1n; batchId <= currentBatch; batchId++) {
         const [hasClaim, requestId] = await Promise.all([
-          publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "hasWithdrawalClaim", args: [batchId, user] }),
-          publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "withdrawalUnwrapRequest", args: [batchId, user] }),
+          publicClient.readContract({
+            address: pool,
+            abi: confidentialPrizePoolAbi,
+            functionName: "hasWithdrawalClaim",
+            args: [batchId, user],
+          }),
+          publicClient.readContract({
+            address: pool,
+            abi: confidentialPrizePoolAbi,
+            functionName: "withdrawalUnwrapRequest",
+            args: [batchId, user],
+          }),
         ]);
-        if (hasClaim || requestId !== zeroHash) discovered.push({ batchId, txHash: zeroHash, unwrapRequestId: requestId === zeroHash ? undefined : requestId });
+        if (hasClaim || requestId !== zeroHash)
+          discovered.push({
+            batchId,
+            txHash: zeroHash,
+            unwrapRequestId: requestId === zeroHash ? undefined : requestId,
+          });
       }
-    } else try {
-      const [requestedLogs, claimedLogs] = await Promise.all([
-        getWithdrawalLogs("WithdrawalRequested", user, withdrawalFromBlock, latestBlock),
-        getWithdrawalLogs("WithdrawalClaimedToUsdc", user, withdrawalFromBlock, latestBlock),
-      ]);
-      const requested = parseEventLogs({
-        abi: confidentialPrizePoolAbi,
-        eventName: "WithdrawalRequested",
-        logs: requestedLogs,
-      });
-      const claimed = parseEventLogs({
-        abi: confidentialPrizePoolAbi,
-        eventName: "WithdrawalClaimedToUsdc",
-        logs: claimedLogs,
-      });
-      const claimedByBatch = new Map(claimed.map((event) => [event.args.batchId, event.args.unwrapRequestId]));
+    } else
+      try {
+        const [requestedLogs, claimedLogs] = await Promise.all([
+          getWithdrawalLogs("WithdrawalRequested", user, withdrawalFromBlock, latestBlock),
+          getWithdrawalLogs("WithdrawalClaimedToUsdc", user, withdrawalFromBlock, latestBlock),
+        ]);
+        const requested = parseEventLogs({
+          abi: confidentialPrizePoolAbi,
+          eventName: "WithdrawalRequested",
+          logs: requestedLogs,
+        });
+        const claimed = parseEventLogs({
+          abi: confidentialPrizePoolAbi,
+          eventName: "WithdrawalClaimedToUsdc",
+          logs: claimedLogs,
+        });
+        const claimedByBatch = new Map(
+          claimed.map((event) => [event.args.batchId, event.args.unwrapRequestId]),
+        );
 
-      discovered = requested.map((event) => ({
-        batchId: event.args.batchId,
-        txHash: event.transactionHash,
-        unwrapRequestId: claimedByBatch.get(event.args.batchId),
-      }));
-    } catch {
-      discovered = [];
-    }
+        discovered = requested.map((event) => ({
+          batchId: event.args.batchId,
+          txHash: event.transactionHash,
+          unwrapRequestId: claimedByBatch.get(event.args.batchId),
+        }));
+      } catch {
+        discovered = [];
+      }
 
     const next = (
       await Promise.all(
-        mergePendingWithdrawals(stored, discovered).map(async (request): Promise<PendingWithdrawalView | undefined> => {
-          if (automatic) {
-            const requestId = await publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "withdrawalUnwrapRequest", args: [request.batchId, user] });
-            if (requestId !== zeroHash) request = { ...request, unwrapRequestId: requestId };
-          }
-          if (request.unwrapRequestId) {
-            if (finalizedIds.has(request.unwrapRequestId.toLowerCase())) return undefined;
-            const receiver = await publicClient.readContract({ address: token!, abi: confidentialUsdcAbi, functionName: "unwrapRequester", args: [request.unwrapRequestId] });
-            if (receiver === zeroAddress) return undefined;
-            return { ...request, stage: "finalizing" };
-          }
-
-          try {
-            const [statusCode, hasClaim, closesAt] = await Promise.all([
-              publicClient.readContract({
+        mergePendingWithdrawals(stored, discovered).map(
+          async (request): Promise<PendingWithdrawalView | undefined> => {
+            if (automatic) {
+              const requestId = await publicClient.readContract({
                 address: pool,
                 abi: confidentialPrizePoolAbi,
-                functionName: "withdrawalBatchStatus",
-                args: [request.batchId],
-              }),
-              publicClient.readContract({
-                address: pool,
-                abi: confidentialPrizePoolAbi,
-                functionName: "hasWithdrawalClaim",
+                functionName: "withdrawalUnwrapRequest",
                 args: [request.batchId, user],
-              }),
-              publicClient.readContract({
-                address: pool,
-                abi: confidentialPrizePoolAbi,
-                functionName: "withdrawalBatchClosesAt",
-                args: [request.batchId],
-              }),
-            ]);
-            const stage = deriveWithdrawalStage(request, {
-              batchStatus: batchStatusFromContract(Number(statusCode)),
-              hasClaim,
-            });
-            if (stage === "complete") return undefined;
-            return { ...request, stage, closesAt };
-          } catch {
-            return { ...request, stage: "requested" };
-          }
-        }),
+              });
+              if (requestId !== zeroHash) request = { ...request, unwrapRequestId: requestId };
+            }
+            if (request.unwrapRequestId) {
+              if (finalizedIds.has(request.unwrapRequestId.toLowerCase())) return undefined;
+              const receiver = await publicClient.readContract({
+                address: token!,
+                abi: confidentialUsdcAbi,
+                functionName: "unwrapRequester",
+                args: [request.unwrapRequestId],
+              });
+              if (receiver === zeroAddress) return undefined;
+              return { ...request, stage: "finalizing" };
+            }
+
+            try {
+              const [statusCode, hasClaim, closesAt] = await Promise.all([
+                publicClient.readContract({
+                  address: pool,
+                  abi: confidentialPrizePoolAbi,
+                  functionName: "withdrawalBatchStatus",
+                  args: [request.batchId],
+                }),
+                publicClient.readContract({
+                  address: pool,
+                  abi: confidentialPrizePoolAbi,
+                  functionName: "hasWithdrawalClaim",
+                  args: [request.batchId, user],
+                }),
+                publicClient.readContract({
+                  address: pool,
+                  abi: confidentialPrizePoolAbi,
+                  functionName: "withdrawalBatchClosesAt",
+                  args: [request.batchId],
+                }),
+              ]);
+              const stage = deriveWithdrawalStage(request, {
+                batchStatus: batchStatusFromContract(Number(statusCode)),
+                hasClaim,
+              });
+              if (stage === "complete") return undefined;
+              return { ...request, stage, closesAt };
+            } catch {
+              return { ...request, stage: "requested" };
+            }
+          },
+        ),
       )
     ).filter((request): request is PendingWithdrawalView => request !== undefined);
 
@@ -828,7 +965,9 @@ export default function SavingsPage() {
     if (requestId) {
       setPendingWithdrawals((current) => {
         const next = current.map((request) =>
-          request.batchId === batchId ? { ...request, unwrapRequestId: requestId, stage: "finalizing" as const } : request,
+          request.batchId === batchId
+            ? { ...request, unwrapRequestId: requestId, stage: "finalizing" as const }
+            : request,
         );
         writeStoredPendingWithdrawals(pool, user, next);
         return next;
@@ -863,27 +1002,44 @@ export default function SavingsPage() {
         ? 0n
         : MAX_USER_PRINCIPAL - principal;
   const depositBalanceAfter =
-    usdcBalance === undefined || parsedDepositAmount > usdcBalance ? undefined : usdcBalance - parsedDepositAmount;
+    usdcBalance === undefined || parsedDepositAmount > usdcBalance
+      ? undefined
+      : usdcBalance - parsedDepositAmount;
   const depositPoolAfter =
     principal === undefined || parsedDepositAmount === 0n || parsedDepositAmount > remainingDeposit
       ? principal
       : principal + parsedDepositAmount;
   const withdrawPoolAfter =
-    principal === undefined || parsedWithdrawAmount > principal ? undefined : principal - parsedWithdrawAmount;
+    principal === undefined || parsedWithdrawAmount > principal
+      ? undefined
+      : principal - parsedWithdrawAmount;
 
   async function reviewDeposit() {
+    if (!freshDepositEnabled) {
+      toast({ tone: "error", title: "New savings are not available right now." });
+      return;
+    }
     if (parsedDepositAmount === 0n) {
-      reportClientToast({ title: "Enter an amount first." }, { action: "deposit", stage: "validation" });
+      reportClientToast(
+        { title: "Enter an amount first." },
+        { action: "deposit", stage: "validation" },
+      );
       toast({ tone: "error", title: "Enter an amount first." });
       return;
     }
     if (usdcBalance !== undefined && parsedDepositAmount > usdcBalance) {
-      reportClientToast({ title: "Amount is above your wallet balance." }, { action: "deposit", stage: "validation" });
+      reportClientToast(
+        { title: "Amount is above your wallet balance." },
+        { action: "deposit", stage: "validation" },
+      );
       toast({ tone: "error", title: "Amount is above your wallet balance." });
       return;
     }
     if (parsedDepositAmount > remainingDepositCapacity()) {
-      reportClientToast({ title: "Amount is above the current account limit." }, { action: "deposit", stage: "validation" });
+      reportClientToast(
+        { title: "Amount is above the current account limit." },
+        { action: "deposit", stage: "validation" },
+      );
       toast({ tone: "error", title: "Amount is above the current account limit." });
       return;
     }
@@ -899,7 +1055,12 @@ export default function SavingsPage() {
         transaction.cancel();
         return;
       }
-      preparedDeposit.current = { session: currentSession, value: parsedDepositAmount, transaction, preparedAt: Date.now() };
+      preparedDeposit.current = {
+        session: currentSession,
+        value: parsedDepositAmount,
+        transaction,
+        preparedAt: Date.now(),
+      };
       setDepositSheetStep("confirm");
     } catch (error) {
       const errorMessage = getErrorMessage(error);
@@ -923,12 +1084,18 @@ export default function SavingsPage() {
 
   async function reviewWithdraw() {
     if (parsedWithdrawAmount === 0n) {
-      reportClientToast({ title: "Enter an amount first." }, { action: "withdraw", stage: "validation" });
+      reportClientToast(
+        { title: "Enter an amount first." },
+        { action: "withdraw", stage: "validation" },
+      );
       toast({ tone: "error", title: "Enter an amount first." });
       return;
     }
     if (principal !== undefined && parsedWithdrawAmount > principal) {
-      reportClientToast({ title: "Amount is above your pool balance." }, { action: "withdraw", stage: "validation" });
+      reportClientToast(
+        { title: "Amount is above your pool balance." },
+        { action: "withdraw", stage: "validation" },
+      );
       toast({ tone: "error", title: "Amount is above your pool balance." });
       return;
     }
@@ -944,7 +1111,12 @@ export default function SavingsPage() {
         transaction.cancel();
         return;
       }
-      preparedWithdrawal.current = { session: currentSession, value: parsedWithdrawAmount, transaction, preparedAt: Date.now() };
+      preparedWithdrawal.current = {
+        session: currentSession,
+        value: parsedWithdrawAmount,
+        transaction,
+        preparedAt: Date.now(),
+      };
       setWithdrawSheetStep("confirm");
     } catch (error) {
       const errorMessage = getErrorMessage(error);
@@ -996,7 +1168,10 @@ export default function SavingsPage() {
           });
         } catch (error) {
           if (session?.getPendingOperation?.()?.phase === "attempted") {
-            update({ status: "confirming", error: "Still processing. Check status to see the latest update." });
+            update({
+              status: "confirming",
+              error: "Still processing. Check status to see the latest update.",
+            });
             toast({ tone: "success", title: "Still processing. Follow progress in Activity." });
             throw error;
           }
@@ -1053,7 +1228,9 @@ export default function SavingsPage() {
         if (!controller.signal.aborted) setAccessReviewStep(undefined);
         return;
       }
-      const transaction = await currentSession.prepareTransaction(calls, { signal: controller.signal });
+      const transaction = await currentSession.prepareTransaction(calls, {
+        signal: controller.signal,
+      });
       if (controller.signal.aborted || reviewAbort.current !== controller) {
         transaction.cancel();
         return;
@@ -1062,8 +1239,16 @@ export default function SavingsPage() {
       setAccessReviewStep("confirm");
     } catch (error) {
       if (controller.signal.aborted) return;
-      reportClientToast({ title: "Could not review balance access", description: "Please try again." }, { action: "balance-access", stage: "preparation" }, error);
-      toast({ tone: "error", title: "Could not review balance access", description: "Please try again." });
+      reportClientToast(
+        { title: "Could not review balance access", description: "Please try again." },
+        { action: "balance-access", stage: "preparation" },
+        error,
+      );
+      toast({
+        tone: "error",
+        title: "Could not review balance access",
+        description: "Please try again.",
+      });
       setAccessReviewStep(undefined);
     }
   }
@@ -1071,7 +1256,11 @@ export default function SavingsPage() {
   function confirmBalanceAccess() {
     const currentSession = activeSession();
     const prepared = preparedAccess.current;
-    if (!prepared || prepared.session !== currentSession || Date.now() - prepared.preparedAt > 60_000) {
+    if (
+      !prepared ||
+      prepared.session !== currentSession ||
+      Date.now() - prepared.preparedAt > 60_000
+    ) {
       preparedAccess.current?.transaction.cancel();
       preparedAccess.current = undefined;
       setAccessReviewStep(undefined);
@@ -1094,7 +1283,14 @@ export default function SavingsPage() {
           await refreshConfidentialBalances();
           update({ status: "completed" });
         } catch (error) {
-          reportClientToast({ title: "Could not update balance access", description: "Check Activity for the latest status." }, { action: "balance-access", stage: "submission" }, error);
+          reportClientToast(
+            {
+              title: "Could not update balance access",
+              description: "Check Activity for the latest status.",
+            },
+            { action: "balance-access", stage: "submission" },
+            error,
+          );
           throw error;
         }
       },
@@ -1117,15 +1313,42 @@ export default function SavingsPage() {
 
       <TestnetWarning />
 
-      <SavingsStatus walletBalance={usdcBalance} principal={principal} pendingTotal={withdrawalInProgress} pendingWithdrawals={pendingWithdrawals} loading={confidentialBalancesLoading} error={confidentialBalancesError} accessRequired={confidentialBalancesReadState === "access-required"} accessConfirming={accessReviewStep === "confirm"} accessAvailable={Boolean(session)} automaticWithdrawals={automaticWithdrawals} withdrawalRefreshError={withdrawalRefreshError} onAccessBack={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }} onAccessConfirm={confirmBalanceAccess} onAccessReview={() => void reviewBalanceAccess()} />
+      <SavingsStatus
+        walletBalance={usdcBalance}
+        principal={principal}
+        pendingTotal={withdrawalInProgress}
+        pendingWithdrawals={pendingWithdrawals}
+        loading={confidentialBalancesLoading}
+        error={confidentialBalancesError}
+        accessRequired={confidentialBalancesReadState === "access-required"}
+        accessConfirming={accessReviewStep === "confirm"}
+        accessAvailable={Boolean(session)}
+        automaticWithdrawals={automaticWithdrawals}
+        withdrawalRefreshError={withdrawalRefreshError}
+        onAccessBack={() => {
+          cancelOwnedReview();
+          setAccessReviewStep(undefined);
+        }}
+        onAccessConfirm={confirmBalanceAccess}
+        onAccessReview={() => void reviewBalanceAccess()}
+      />
 
-      <ParticipationPanel ref={participation} account={session?.address} pool={poolReady ? asAddress(addresses.pool, "Prize pool") : undefined} session={session ?? undefined} onReviewStart={cancelOwnedReview} />
+      <ParticipationPanel
+        ref={participation}
+        account={session?.address}
+        pool={poolReady ? asAddress(addresses.pool, "Prize pool") : undefined}
+        session={session ?? undefined}
+        onReviewStart={cancelOwnedReview}
+      />
 
       <div className="grid grid-cols-2 gap-3">
         <button
           type="button"
-          onClick={() => { cancelOwnedReview(); setDepositSheetStep("entry"); }}
-          disabled={!session || !poolReady}
+          onClick={() => {
+            cancelOwnedReview();
+            setDepositSheetStep("entry");
+          }}
+          disabled={!session || !poolReady || !freshDepositEnabled}
           className="btn-primary w-full"
         >
           <svg
@@ -1147,7 +1370,10 @@ export default function SavingsPage() {
 
         <button
           type="button"
-          onClick={() => { cancelOwnedReview(); setWithdrawSheetStep("entry"); }}
+          onClick={() => {
+            cancelOwnedReview();
+            setWithdrawSheetStep("entry");
+          }}
           disabled={!showWithdraw}
           className="btn-secondary w-full"
         >
@@ -1180,11 +1406,16 @@ export default function SavingsPage() {
           poolAfter={depositPoolAfter}
           preparing={preparingDeposit}
           confirming={confirmingAction === "deposit"}
-          canReview={Boolean(session && poolReady)}
-          canConfirm={Boolean(session && poolReady && confirmingAction !== "deposit")}
+          canReview={Boolean(session && poolReady && freshDepositEnabled)}
+          canConfirm={Boolean(
+            session && poolReady && freshDepositEnabled && confirmingAction !== "deposit",
+          )}
           onAmountChange={setDepositAmount}
           onMax={() => {
-            const max = usdcBalance !== undefined && usdcBalance < remainingDeposit ? usdcBalance : remainingDeposit;
+            const max =
+              usdcBalance !== undefined && usdcBalance < remainingDeposit
+                ? usdcBalance
+                : remainingDeposit;
             setDepositAmount(formatUSDC(max, 6));
           }}
           onReview={reviewDeposit}
@@ -1253,13 +1484,16 @@ export default function SavingsPage() {
             void run(() => claimWithdrawal(batchId), "Withdrawal ready to finalize.", "pending")
           }
           onFinalize={(requestId) =>
-            void run(() => finalizeUnwrap(requestId), "Your USDC withdrawal is finalized.", "pending")
+            void run(
+              () => finalizeUnwrap(requestId),
+              "Your USDC withdrawal is finalized.",
+              "pending",
+            )
           }
           onCopy={(requestId) => void copyPendingHash(requestId)}
           formatShortHash={formatShortHash}
         />
       )}
-
     </div>
   );
 }

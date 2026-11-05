@@ -40,6 +40,12 @@ function poolVersion() {
   return SELECTED_SCOPE?.mode === "v2";
 }
 
+function freshOnboardingEnabled() {
+  return Boolean(
+    SELECTED_SCOPE && (SELECTED_SCOPE.id !== "candidate-v2" || SELECTED_SCOPE.onboardingEnabled),
+  );
+}
+
 function copyPending(
   value: readonly [Hex, bigint, Hex, boolean] | PendingAdmission,
 ): PendingAdmission {
@@ -327,7 +333,9 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
           )
         ) : (
           <p className="text-sm text-muted">
-            Add to savings, then finish setup when you are ready to participate.
+            {freshOnboardingEnabled()
+              ? "Add to savings, then finish setup when you are ready to participate."
+              : "New savings are not available right now."}
           </p>
         )}
       </section>

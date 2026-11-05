@@ -15,6 +15,8 @@ export type ParticipationFixture = {
   account: `0x${string}`;
   pool: `0x${string}`;
   version: string;
+  scopeId: "legacy-e65" | "candidate-v2";
+  onboardingEnabled: boolean;
   reads: Mock;
   archive: Mock;
   prepare: Mock;
@@ -39,6 +41,8 @@ export function pendingAdmission(requested = true): PendingAdmission {
 
 export function resetParticipationFixture(fixture: ParticipationFixture) {
   fixture.version = "legacy1";
+  fixture.scopeId = "legacy-e65";
+  fixture.onboardingEnabled = false;
   fixture.pending = [pendingAdmission()];
   fixture.membershipIndex = 0n;
   fixture.walletBalance = 0n;

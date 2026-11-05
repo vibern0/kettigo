@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { createPublicClient, encodeFunctionData, getAddress, http, isAddress } from "viem";
 import { sepolia } from "viem/chains";
 import { CONTRACTS, RPC_URL, confidentialPrizePoolAbi } from "@/lib/contracts";
@@ -34,6 +35,8 @@ import {
   SafeUserOperationNotSubmittedError,
   SafeUserOperationRejectedError,
 } from "@/lib/passkey-operation";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
+import { scopeHref } from "@/lib/scope-navigation";
 
 type Status = "idle" | "working" | "success" | "error";
 type WorkingAction = PrizeActionId | undefined;
@@ -82,6 +85,9 @@ export default function DrawPage() {
 
   const ready = isAddress(addresses.pool);
   const runtime = drawRuntimeConfig();
+  const currentHref = typeof window === "undefined" ? undefined : window.location.href;
+  const scopeId = SELECTED_SCOPE?.id;
+  const savingsHref = scopeId ? scopeHref("/savings", scopeId, currentHref) : "/savings";
   const scope = `${session?.address?.toLowerCase() ?? ""}:${addresses.pool.toLowerCase()}:${runtime.mode2 ? "2" : "legacy1"}`;
   scopeRef.current = scope;
   const mode2 = hydrated && runtime.mode2;
@@ -519,7 +525,11 @@ export default function DrawPage() {
       )}
       {participationPending && (
         <p className="text-sm text-muted">
-          Your savings are waiting to be included in a future draw. Review participation in Savings.
+          Your savings are waiting to be included in a future draw. Review participation in{" "}
+          <Link href={savingsHref} className="text-brand hover:underline">
+            Savings
+          </Link>
+          .
         </p>
       )}
     </div>

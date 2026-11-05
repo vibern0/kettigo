@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useWallet } from "@/lib/wallet-context";
 import { shortAddress } from "@/lib/format";
@@ -11,6 +11,8 @@ import { cn } from "@/lib/cn";
 import { m } from "motion/react";
 import { SheetViewport } from "@/components/SheetViewport";
 import { TestnetWarning } from "@/components/TestnetWarning";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
+import { isAlternateSavingsOrigin, scopeHref } from "@/lib/scope-navigation";
 
 const NAV = [
   { href: "/", label: "Home" },
@@ -20,10 +22,28 @@ const NAV = [
 
 export function Header() {
   const path = usePathname();
-  const { session, connect, connecting, disconnect, error, passkeyReady, pimlicoReady, hasSavedAccount } = useWallet();
+  const {
+    session,
+    connect,
+    connecting,
+    disconnect,
+    error,
+    passkeyReady,
+    pimlicoReady,
+    hasSavedAccount,
+  } = useWallet();
   const [accountSheetOpen, setAccountSheetOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [alternateOrigin, setAlternateOrigin] = useState(false);
   const navItems = NAV;
+  const currentHref = typeof window === "undefined" ? undefined : window.location.href;
+  const selectedScopeId = SELECTED_SCOPE?.id;
+  const scopedHref = (href: string) =>
+    selectedScopeId ? scopeHref(href, selectedScopeId, currentHref) : href;
+
+  useEffect(() => {
+    setAlternateOrigin(isAlternateSavingsOrigin(window.location.origin));
+  }, []);
 
   async function copyAddress() {
     if (!session) return;
@@ -81,7 +101,7 @@ export function Header() {
               </div>
             </div>
           </SheetViewport>,
-          document.body
+          document.body,
         )
       : null;
 
@@ -89,7 +109,7 @@ export function Header() {
     <>
       <header className="sticky top-0 z-30 border-b border-white/40 bg-white/30 backdrop-blur-2xl">
         <div className="flex items-center justify-between px-5 h-16">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href={scopedHref("/")} className="flex items-center gap-2">
             <Image
               src="/kettigo-mark-header.svg"
               alt="Kettigo"
@@ -111,9 +131,7 @@ export function Header() {
               aria-expanded={accountSheetOpen}
             >
               <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-              <span className="text-xs font-medium">
-                {shortAddress(session.address)}
-              </span>
+              <span className="text-xs font-medium">{shortAddress(session.address)}</span>
             </button>
           ) : (
             <button
@@ -132,21 +150,34 @@ export function Header() {
             return (
               <Link
                 key={item.href}
-                href={item.href}
+                href={scopedHref(item.href)}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "relative isolate px-3 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap",
                   "font-display",
                   active
                     ? "text-text"
-                    : "border border-white/25 bg-white/10 text-white/90 hover:bg-white/20 hover:text-white"
+                    : "border border-white/25 bg-white/10 text-white/90 hover:bg-white/20 hover:text-white",
                 )}
               >
-                {active && <m.span layoutId="active-nav" className="absolute inset-0 -z-10 rounded-full bg-citron shadow-lg shadow-black/10" />}
+                {active && (
+                  <m.span
+                    layoutId="active-nav"
+                    className="absolute inset-0 -z-10 rounded-full bg-citron shadow-lg shadow-black/10"
+                  />
+                )}
                 <span>{item.label}</span>
               </Link>
             );
           })}
+          {selectedScopeId === "candidate-v2" && alternateOrigin && (
+            <a
+              href="https://kettigo.xyz"
+              className="px-3 py-1.5 text-sm font-medium text-white/90 hover:text-white whitespace-nowrap"
+            >
+              Earlier savings
+            </a>
+          )}
         </nav>
       </header>
       {accountSheet}

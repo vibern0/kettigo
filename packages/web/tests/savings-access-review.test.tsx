@@ -34,6 +34,10 @@ vi.mock("@/lib/contracts", async (original) => ({
     },
   },
 }));
+vi.mock("@/lib/runtime-config", () => ({
+  SELECTED_SCOPE: { id: "legacy-e65", mode: "legacy1", onboardingEnabled: false },
+  publicConfig: (_name: string, fallback?: string) => fallback ?? "",
+}));
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
     session: fixture.session,

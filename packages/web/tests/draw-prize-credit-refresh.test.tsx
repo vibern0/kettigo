@@ -226,11 +226,9 @@ test("reinvest refreshes an unadmitted member's current participation status", a
   fireEvent.click(await screen.findByRole("button", { name: "Add prize to savings" }));
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
-  expect(
-    await screen.findByText(
-      "Your savings are waiting to be included in a future draw. Review participation in Savings.",
-    ),
-  ).toBeTruthy();
+  expect((await screen.findByRole("link", { name: "Savings" })).getAttribute("href")).toBe(
+    "/savings",
+  );
 });
 
 test("a post-completion display read can refresh without resending the credited action", async () => {
