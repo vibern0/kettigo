@@ -269,9 +269,9 @@ test("keeps pending intent for a pending exact identity and rejects foreign scop
       },
     },
   });
-  assert.equal((await coordinator.reconcile(pending)).state, "pending");
+  assert.equal((await coordinator.reconcile(4n, pending)).state, "pending");
   await assert.rejects(
-    coordinator.reconcile({ ...pending, pool: "0x3333333333333333333333333333333333333333" }),
+    coordinator.reconcile(4n, { ...pending, pool: "0x3333333333333333333333333333333333333333" }),
     /different account or draw/i,
   );
   assert.equal(lookedUp, 1);
@@ -386,6 +386,153 @@ test("retains checked immutable award when unrelated global winnings are consume
   setChecked(true);
   setAward(HASH);
   assert.deepEqual(await coordinator.review(4n), { state: "checked", drawId: 4n, award: HASH });
+});
+
+test("archive negatives, outage, and malformed proof outcomes never prepare or send", async () => {
+  for (const outcome of [
+    { kind: "not-eligible" },
+    { kind: "indexing", reason: "catching up" },
+    { kind: "history-unavailable", reason: "archive" },
+    { kind: "unavailable", reason: "tampered" },
+  ]) {
+    let prepared = 0;
+    const { coordinator } = fixture({
+      getProofClient: () => ({ getProof: async () => outcome }),
+      session: {
+        address: ACCOUNT,
+        prepareTransaction: async () => {
+          prepared += 1;
+          throw new Error("must not prepare");
+        },
+      },
+    });
+    assert.equal((await coordinator.review(4n)).state, outcome.kind);
+    assert.equal(prepared, 0);
+  }
+});
+
+test("rejects mismatched lookup sender or hash without clearing the retained intent", async () => {
+  for (const changed of [{ sender: POOL }, { userOperationHash: HASH }]) {
+    let cleared = 0;
+    const saved = {
+      chainId: 11155111,
+      pool: POOL,
+      account: ACCOUNT,
+      drawId: 4n,
+      action: "checkPrize",
+      operation: identity(),
+    };
+    const { coordinator } = fixture({
+      intentStore: {
+        read: () => saved,
+        save: async () => {},
+        clear: async () => {
+          cleared += 1;
+        },
+      },
+      session: {
+        address: ACCOUNT,
+        prepareTransaction: async () => {
+          throw new Error("unused");
+        },
+        lookupUserOperation: async () => ({
+          state: "pending",
+          operation: { ...identity(), ...changed },
+        }),
+      },
+    });
+    await assert.rejects(coordinator.reconcile(4n, saved), /different operation/i);
+    assert.equal(cleared, 0);
+  }
+});
+
+test("inner failed and confirmed-but-unchecked receipts do not report a checked award", async () => {
+  for (const receipt of [
+    {
+      state: "failed",
+      operation: identity(),
+      transactionHash: HASH,
+      blockNumber: 10n,
+      blockHash: HASH,
+    },
+    {
+      state: "confirmed",
+      operation: identity(),
+      transactionHash: HASH,
+      blockNumber: 10n,
+      blockHash: HASH,
+    },
+  ]) {
+    let checkedReads = 0;
+    const saved = {
+      chainId: 11155111,
+      pool: POOL,
+      account: ACCOUNT,
+      drawId: 4n,
+      action: "checkPrize",
+      operation: identity(),
+    };
+    const { coordinator } = fixture({
+      readChecked: async () => {
+        checkedReads += 1;
+        return false;
+      },
+      intentStore: { read: () => saved, save: async () => {}, clear: async () => {} },
+      session: {
+        address: ACCOUNT,
+        prepareTransaction: async () => {
+          throw new Error("unused");
+        },
+        lookupUserOperation: async () => receipt,
+      },
+    });
+    if (receipt.state === "failed")
+      assert.equal((await coordinator.reconcile(4n, saved)).state, "failed");
+    else await assert.rejects(coordinator.reconcile(4n, saved), /not confirmed/i);
+    assert.equal(checkedReads, receipt.state === "confirmed" ? 1 : 0);
+  }
+});
+
+test("rejects a valid stored intent for a different requested draw before lookup", async () => {
+  let lookup = 0;
+  const saved = {
+    chainId: 11155111,
+    pool: POOL,
+    account: ACCOUNT,
+    drawId: 5n,
+    action: "checkPrize",
+    operation: identity(),
+  };
+  const { coordinator } = fixture({
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => {
+        throw new Error("unused");
+      },
+      lookupUserOperation: async () => {
+        lookup += 1;
+        return { state: "pending", operation: identity() };
+      },
+    },
+  });
+  await assert.rejects(coordinator.reconcile(4n, saved), /different account or draw/i);
+  assert.equal(lookup, 0);
+});
+
+test("pinned checked and award adapter calls reject once without latest fallback", async () => {
+  let calls = 0;
+  const reader = createViemPrizeChainReader(
+    {
+      request: async () => {
+        calls += 1;
+        throw new Error("canonical reorg");
+      },
+    },
+    POOL,
+  );
+  await assert.rejects(reader.readChecked(4n, ACCOUNT, { blockHash: HASH }), /canonical reorg/);
+  await assert.rejects(reader.readAward(4n, ACCOUNT, { blockHash: HASH }), /canonical reorg/);
+  assert.equal(calls, 2);
 });
 
 test("already checked reads immutable historical award without a proof client or a send", async () => {

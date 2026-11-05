@@ -1,21 +1,12 @@
-import {
-  decodeFunctionResult,
-  encodeFunctionData,
-  getAddress,
-  isAddress,
-  isHex,
-  type Address,
-  type Hex,
-} from "viem";
+import { encodeFunctionData, getAddress, isAddress, isHex, type Address, type Hex } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 
 import { confidentialPrizePoolAbi } from "./contracts.ts";
-import type {
-  PrizeProof,
-  PrizeProofClientOptions,
-  PrizeProofResult,
-} from "./prize-proof-client.ts";
-import { createPrizeProofClient } from "./prize-proof-client.ts";
+import type { PrizeProof, PrizeProofResult } from "./prize-proof-client.ts";
+export {
+  createViemPrizeChainReader,
+  createViemPrizeProofClient,
+} from "./prize-check-viem-reader.ts";
 import {
   SafeUserOperationNotSubmittedError,
   SafeUserOperationRejectedError,
@@ -310,11 +301,13 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
     return ready(prepared, { ...scope, drawId: reviewed.drawId }, dependencies, signal);
   };
   const reconcile = async (
+    requestedDrawId: bigint,
     saved: PrizeCheckIntent,
     signal?: AbortSignal,
   ): Promise<PrizeCheckState | SafeUserOperationReceipt> => {
     aborted(signal);
-    if (!sameIntentForScope(saved, scope))
+    assertDraw(requestedDrawId);
+    if (!sameIntentForScope(saved, scope, requestedDrawId))
       throw new Error("The saved prize check belongs to a different account or draw.");
     if (!dependencies.session.lookupUserOperation)
       throw new Error("Operation reconciliation is unavailable.");
@@ -335,9 +328,10 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
     review,
     prepare,
     reconcile,
-    pending: () => {
+    pending: (requestedDrawId: bigint) => {
+      assertDraw(requestedDrawId);
       const saved = dependencies.intentStore.read();
-      if (saved && !sameIntentForScope(saved, scope))
+      if (saved && !sameIntentForScope(saved, scope, requestedDrawId))
         throw new Error("The saved prize check belongs to a different account or draw.");
       return saved;
     },
@@ -347,10 +341,12 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
 function sameIntentForScope(
   intentValue: PrizeCheckIntent,
   scope: Readonly<{ pool: Address; account: Address }>,
+  requestedDrawId: bigint,
 ): boolean {
   try {
     assertDraw(intentValue.drawId);
     return (
+      intentValue.drawId === requestedDrawId &&
       intentValue.chainId === 11155111 &&
       intentValue.action === ACTION &&
       same(intentValue.pool, scope.pool) &&
@@ -408,6 +404,7 @@ function ready(
           async () => {
             if (!observed) throw new Error("The pending prize check could not be recovered.");
             const result = await createPrizeCheckCoordinator(dependencies).reconcile(
+              scope.drawId,
               observed,
               signal,
             );
@@ -431,111 +428,5 @@ function ready(
       }
       return confirmation;
     },
-  });
-}
-
-type ViemRequestClient = Readonly<{
-  request(args: { method: string; params: readonly unknown[] }): Promise<unknown>;
-}>;
-type ReaderOptions = Readonly<{ signal?: AbortSignal; blockHash?: Hex }>;
-
-/** Reads proof anchors with raw EIP-1898 calls; a rejected canonical hash is never downgraded. */
-export function createViemPrizeChainReader(client: ViemRequestClient, pool: Address) {
-  const target = getAddress(pool);
-  const call = async (data: Hex, options: ReaderOptions = {}): Promise<Hex> => {
-    aborted(options.signal);
-    const block = options.blockHash
-      ? { blockHash: options.blockHash, requireCanonical: true }
-      : "latest";
-    const result = await client.request({
-      method: "eth_call",
-      params: [{ to: target, data }, block],
-    });
-    aborted(options.signal);
-    if (!isHex(result)) throw new Error("Invalid chain read response.");
-    return result;
-  };
-  return Object.freeze({
-    async readBlockHash(options: ReaderOptions = {}): Promise<Hex> {
-      aborted(options.signal);
-      const block = await client.request({
-        method: "eth_getBlockByNumber",
-        params: ["latest", false],
-      });
-      aborted(options.signal);
-      if (!block || typeof block !== "object" || !isHex((block as { hash?: unknown }).hash))
-        throw new Error("Invalid block response.");
-      return (block as { hash: Hex }).hash;
-    },
-    async getBlockHash(blockNumber: bigint, options: ReaderOptions = {}): Promise<Hex> {
-      aborted(options.signal);
-      const block = await client.request({
-        method: "eth_getBlockByNumber",
-        params: [`0x${blockNumber.toString(16)}`, false],
-      });
-      aborted(options.signal);
-      if (!block || typeof block !== "object" || !isHex((block as { hash?: unknown }).hash))
-        throw new Error("Invalid block response.");
-      return (block as { hash: Hex }).hash;
-    },
-    async readDraw(drawId: bigint, options: ReaderOptions = {}) {
-      const data = encodeFunctionData({
-        abi: confidentialPrizePoolAbi,
-        functionName: "draws",
-        args: [drawId],
-      });
-      const raw = await call(data, options);
-      const value = decodeFunctionResult({
-        abi: confidentialPrizePoolAbi,
-        functionName: "draws",
-        data: raw,
-      }) as readonly [Hex, Hex, Hex, Hex, Hex, bigint, bigint];
-      return Object.freeze({
-        rootHash: value[0],
-        rootSum: value[1],
-        ticket: value[2],
-        upperBound: value[5],
-        closeBlockNumber: value[6],
-      });
-    },
-    async readChecked(drawId: bigint, account: Address, options: ReaderOptions = {}) {
-      const raw = await call(
-        encodeFunctionData({
-          abi: confidentialPrizePoolAbi,
-          functionName: "checked",
-          args: [drawId, getAddress(account)],
-        }),
-        options,
-      );
-      return decodeFunctionResult({
-        abi: confidentialPrizePoolAbi,
-        functionName: "checked",
-        data: raw,
-      }) as boolean;
-    },
-    async readAward(drawId: bigint, account: Address, options: ReaderOptions = {}) {
-      const raw = await call(
-        encodeFunctionData({
-          abi: confidentialPrizePoolAbi,
-          functionName: "encryptedAwardOf",
-          args: [drawId, getAddress(account)],
-        }),
-        options,
-      );
-      return decodeFunctionResult({
-        abi: confidentialPrizePoolAbi,
-        functionName: "encryptedAwardOf",
-        data: raw,
-      }) as Hex;
-    },
-  });
-}
-
-export function createViemPrizeProofClient(
-  options: Omit<PrizeProofClientOptions, "chainReader"> & { client: ViemRequestClient },
-) {
-  return createPrizeProofClient({
-    ...options,
-    chainReader: createViemPrizeChainReader(options.client, options.pool),
   });
 }
