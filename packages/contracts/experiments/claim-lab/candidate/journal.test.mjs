@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -130,18 +130,6 @@ test("prevents concurrent reservation overspend and refuses an active or foreign
   await journal.close();
 });
 
-test("recovers only a proven-dead local lease", async () => {
-  const dir = await directory();
-  await writeFile(
-    join(dir, "writer.lock"),
-    JSON.stringify({ pid: 999_999_999, token: "dead-owner" }),
-    { mode: 0o600 },
-  );
-  const journal = await open(dir, { processAlive: () => false });
-  assert.equal(journal.snapshot().intents.length, 0);
-  await journal.close();
-});
-
 test("fails closed when atomic persistence fails before a signed transition", async () => {
   const journal = await open(await directory());
   journal.failPublish = true;
@@ -157,4 +145,118 @@ test("validates persisted state rather than silently treating it as a new run", 
   const { writeFile } = await import("node:fs/promises");
   await writeFile(join(dir, "journal.json"), "{", { mode: 0o600 });
   await assert.rejects(open(dir), /invalid journal/);
+});
+
+test("fails closed for a dead lease and never removes its lock automatically", async () => {
+  const dir = await directory();
+  const lock = join(dir, "writer.lock");
+  await writeFile(lock, JSON.stringify({ pid: 999_999_999, token: "dead-owner" }), { mode: 0o600 });
+  await assert.rejects(open(dir, { processAlive: () => false }), /lease/);
+  assert.equal((await stat(lock)).isFile(), true);
+});
+
+test("serializes concurrent reservations and blocks stale writes after close", async () => {
+  const envelope = { ...ORIGINAL_ENVELOPE, maxSignedTransactions: 1 };
+  const journal = await CandidateRunJournal.open({
+    directory: await directory(),
+    envelope,
+    now: () => 1000,
+  });
+  const [first, second] = await Promise.allSettled([
+    journal.reserve(request(1)),
+    journal.reserve(request(2)),
+  ]);
+  assert.equal([first, second].filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(journal.snapshot().intents.length, 1);
+  await journal.close();
+  await assert.rejects(journal.recordTerminal("intent-1", {}), /closed/);
+});
+
+test("accepts nonce zero and contract creation while preserving exact creation receipts", async () => {
+  const journal = await open(await directory());
+  const creation = { ...request(), nonce: 0, offeredAt: 0, to: null, input: "0x6000" };
+  await journal.reserve(creation);
+  await journal.saveSigned("intent-1", raw(1), digest(9));
+  await journal.recordAttempt("intent-1");
+  await journal.recordTerminal("intent-1", {
+    hash: digest(9),
+    status: 1,
+    feeWei: 7n,
+    from: SENDER,
+    to: null,
+    input: "0x6000",
+    nonce: 0,
+    chainId: 11155111,
+  });
+  await journal.close();
+});
+
+test("requires an attempt before terminal and rejects attempts after terminal", async () => {
+  const journal = await open(await directory());
+  await journal.reserve(request());
+  await journal.saveSigned("intent-1", raw(1), digest(9));
+  const receipt = {
+    hash: digest(9),
+    status: 1,
+    feeWei: 7n,
+    from: SENDER,
+    to: TARGET,
+    input: "0x1234",
+    nonce: 1,
+    chainId: 11155111,
+  };
+  await assert.rejects(journal.recordTerminal("intent-1", receipt), /attempt/);
+  await journal.recordAttempt("intent-1");
+  await journal.recordTerminal("intent-1", receipt);
+  await assert.rejects(journal.recordAttempt("intent-1"), /terminal/);
+  await journal.close();
+});
+
+test("recomputes persisted totals and frees terminal fee headroom without releasing funding", async () => {
+  const envelope = { ...ORIGINAL_ENVELOPE, maxFeeWei: "150" };
+  const journal = await CandidateRunJournal.open({
+    directory: await directory(),
+    envelope,
+    now: () => 1000,
+  });
+  await journal.reserve(request(1));
+  await journal.saveSigned("intent-1", raw(1), digest(9));
+  await journal.recordAttempt("intent-1");
+  await journal.recordTerminal("intent-1", {
+    hash: digest(9),
+    status: 1,
+    feeWei: 10n,
+    from: SENDER,
+    to: TARGET,
+    input: "0x1234",
+    nonce: 1,
+    chainId: 11155111,
+  });
+  await journal.reserve({ ...request(2), maxFeeWei: 140n });
+  assert.equal(journal.snapshot().budget.fundingCommittedWei, "20");
+  await journal.close();
+});
+
+test("rejects a tampered restart deadline and recomputed budget", async () => {
+  const dir = await directory();
+  const journal = await open(dir);
+  await journal.reserve(request());
+  await journal.close();
+  const path = join(dir, "journal.json");
+  const state = JSON.parse(await readFile(path, "utf8"));
+  state.deadlineAt += 1;
+  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+  await assert.rejects(open(dir), /invalid journal/);
+  state.deadlineAt -= 1;
+  state.budget.feeReservedWei = "0";
+  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+  await assert.rejects(open(dir), /invalid persisted budget/);
+});
+
+test("poisons future writes when persistence fails after publication", async () => {
+  const journal = await open(await directory());
+  journal.failPublish = "after-rename";
+  await assert.rejects(journal.reserve(request()), /persist failed/);
+  await assert.rejects(journal.reserve(request(2)), /uncertain/);
+  await journal.close();
 });

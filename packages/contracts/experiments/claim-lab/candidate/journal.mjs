@@ -1,8 +1,14 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { Buffer } from "node:buffer";
-import { chmod, lstat, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import process from "node:process";
+import { acquireLease, assertLease, persist, releaseLease } from "./persistence.mjs";
+import {
+  findIntent,
+  occupiedFee,
+  serializeReceipt,
+  validateReceipt,
+  validateStoredReceipt,
+} from "./receipt.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -74,8 +80,9 @@ function validateEnvelope(envelope) {
 }
 function validateState(state, envelope, identity) {
   validateStateIdentity(state, envelope, identity);
-  validateStateStructure(state);
+  validateStateStructure(state, envelope);
   for (const intent of state.intents) validatePersistedIntent(intent);
+  validateRecomputedBudget(state);
 }
 function validateStateIdentity(state, envelope, identity) {
   if (
@@ -88,11 +95,12 @@ function validateStateIdentity(state, envelope, identity) {
   )
     fail("invalid journal identity");
 }
-function validateStateStructure(state) {
+function validateStateStructure(state, envelope) {
   if (
     !Array.isArray(state.intents) ||
     !state.budget ||
-    (state.startedAt !== null && !Number.isSafeInteger(state.startedAt))
+    !validClock(state, envelope) ||
+    !validBudget(state.budget)
   )
     fail("invalid journal structure");
 }
@@ -101,15 +109,97 @@ function validatePersistedIntent(intent) {
     !intent ||
     typeof intent.intentId !== "string" ||
     !validAddress(intent.sender) ||
-    !natural(intent.nonce, "nonce") ||
+    !isNatural(intent.nonce) ||
     !validHash(intent.unsignedDigest) ||
-    !natural(intent.offeredAt, "offered time") ||
+    !isNatural(intent.offeredAt) ||
+    !validTarget(intent.to, intent.input) ||
     !validIntentBudget(intent) ||
     !Array.isArray(intent.attempts)
   )
     fail("invalid persisted intent");
   if (intent.signed && (!HEX.test(intent.signed.raw) || !validHash(intent.signed.hash)))
     fail("invalid persisted signature");
+  validatePersistedTransition(intent);
+}
+function validClock(state, envelope) {
+  return state.startedAt === null
+    ? state.deadlineAt === null && state.intents.length === 0
+    : Number.isSafeInteger(state.startedAt) &&
+        Number.isSafeInteger(state.deadlineAt) &&
+        state.deadlineAt === state.startedAt + envelope.durationMs;
+}
+function validBudget(budget) {
+  return (
+    Number.isSafeInteger(budget.signedCount) &&
+    budget.signedCount >= 0 &&
+    ["feeReservedWei", "feeActualWei", "fundingCommittedWei", "usdcCommittedMicro"].every((key) =>
+      UINT.test(budget[key] ?? ""),
+    )
+  );
+}
+function isNatural(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+function validTarget(to, input) {
+  return (
+    (validAddress(to) || to === null) &&
+    typeof input === "string" &&
+    HEX.test(input) &&
+    (to !== null || input !== "0x")
+  );
+}
+function validatePersistedTransition(intent) {
+  const hasSigned = Boolean(intent.signed);
+  const terminal = intent.terminal;
+  if (
+    !["reserved", "signed", "broadcast-attempted", "terminal"].includes(intent.state) ||
+    (intent.state === "reserved" && hasSigned) ||
+    (intent.state !== "reserved" && !hasSigned)
+  )
+    fail("invalid persisted transition");
+  validateAttempts(intent);
+  if (terminal) {
+    if (intent.state !== "terminal" || !intent.attempts.length) fail("invalid persisted terminal");
+    validateStoredReceipt(terminal, intent);
+  } else if (intent.state === "terminal") fail("invalid persisted terminal");
+}
+function validateAttempts(intent) {
+  let first = null;
+  let unrecoverable = null;
+  for (const attempt of intent.attempts) {
+    if (
+      !attempt ||
+      !isNatural(attempt.at) ||
+      (![null, undefined].includes(attempt.error) &&
+        (typeof attempt.error !== "string" || !attempt.error)) ||
+      typeof attempt.unrecoverable !== "boolean"
+    )
+      fail("invalid persisted attempt");
+    if (attempt.error && !first) first = attempt.error;
+    if (attempt.error && attempt.unrecoverable && !unrecoverable) unrecoverable = attempt.error;
+  }
+  if (intent.firstError !== first || intent.firstUnrecoverableError !== unrecoverable)
+    fail("invalid persisted errors");
+}
+function validateRecomputedBudget(state) {
+  const expected = budgetZero();
+  for (const intent of state.intents) {
+    expected.signedCount += 1;
+    expected.feeReservedWei = (
+      BigInt(expected.feeReservedWei) + BigInt(intent.maxFeeWei)
+    ).toString();
+    expected.fundingCommittedWei = (
+      BigInt(expected.fundingCommittedWei) + BigInt(intent.fundingWei)
+    ).toString();
+    expected.usdcCommittedMicro = (
+      BigInt(expected.usdcCommittedMicro) + BigInt(intent.usdcCommitmentMicro)
+    ).toString();
+    if (intent.terminal)
+      expected.feeActualWei = (
+        BigInt(expected.feeActualWei) + BigInt(intent.terminal.feeWei)
+      ).toString();
+  }
+  if (canonical(expected) !== canonical(state.budget)) fail("invalid persisted budget");
 }
 async function loadState(statePath, envelope, identity) {
   try {
@@ -142,13 +232,7 @@ function validIntentBudget(intent) {
 }
 
 export class CandidateRunJournal {
-  static async open({
-    directory,
-    envelope,
-    now = Date.now,
-    failPublish = false,
-    processAlive = defaultProcessAlive,
-  } = {}) {
+  static async open({ directory, envelope, now = Date.now, failPublish = false } = {}) {
     validateEnvelope(envelope);
     if (typeof directory !== "string" || !directory) fail("state directory required");
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -156,7 +240,7 @@ export class CandidateRunJournal {
     const identity = envelopeIdentity(envelope);
     const lockPath = join(directory, LOCK);
     const token = randomUUID();
-    await acquireLease(lockPath, token, processAlive);
+    await acquireLease(lockPath, token);
     try {
       const statePath = join(directory, JOURNAL);
       const { state, created } = await loadState(statePath, envelope, identity);
@@ -180,6 +264,9 @@ export class CandidateRunJournal {
   constructor(options) {
     Object.assign(this, options);
     this.closed = false;
+    this.closing = false;
+    this.poisoned = null;
+    this.tail = Promise.resolve();
   }
   snapshot() {
     return clone(this.state);
@@ -189,86 +276,101 @@ export class CandidateRunJournal {
     return intent ? clone(intent) : undefined;
   }
   async close() {
-    if (!this.closed) {
+    if (this.closed) return;
+    if (this.closing) return this.tail;
+    this.closing = true;
+    const operation = this.tail.then(async () => {
       this.closed = true;
       await releaseLease(join(this.directory, LOCK), this.token);
-    }
+    });
+    this.tail = operation.catch(() => {});
+    return operation;
   }
 
   async reserve(request) {
-    this.#assertOpen();
-    validateRequest(request);
-    const existing = this.state.intents.find((entry) => entry.intentId === request.intentId);
-    if (existing) {
-      if (sameRequest(existing, request)) return { replay: true, intent: clone(existing) };
-      fail("duplicate intent has different unsigned request");
-    }
-    if (
-      this.state.intents.some(
-        (entry) =>
-          entry.sender.toLowerCase() === request.sender.toLowerCase() &&
-          entry.nonce === request.nonce,
+    return this.#mutate(async () => {
+      validateRequest(request);
+      const existing = this.state.intents.find((entry) => entry.intentId === request.intentId);
+      if (existing) {
+        if (sameRequest(existing, request)) return { replay: true, intent: clone(existing) };
+        fail("duplicate intent has different unsigned request");
+      }
+      if (
+        this.state.intents.some(
+          (entry) =>
+            entry.sender.toLowerCase() === request.sender.toLowerCase() &&
+            entry.nonce === request.nonce,
+        )
       )
-    )
-      fail("sender nonce collision");
-    const proposed = clone(this.state);
-    addReservation(proposed, request, this.envelope, this.now, this.#assertBudget.bind(this));
-    await this.#commit(proposed);
-    return { replay: false, intent: this.intent(request.intentId) };
+        fail("sender nonce collision");
+      const proposed = clone(this.state);
+      addReservation(proposed, request, this.envelope, this.now, this.#assertBudget.bind(this));
+      await this.#commit(proposed);
+      return { replay: false, intent: this.intent(request.intentId) };
+    });
   }
 
   async saveSigned(intentId, raw, hash) {
-    this.#assertSigningAllowed();
-    if (!HEX.test(raw) || !validHash(hash)) fail("invalid signed payload");
-    const proposed = clone(this.state);
-    const intent = findIntent(proposed, intentId);
-    if (intent.signed) {
-      if (intent.signed.raw === raw && intent.signed.hash === hash) return clone(intent);
-      fail("signature replacement refused");
-    }
-    intent.signed = { raw, hash };
-    intent.state = "signed";
-    await this.#commit(proposed);
-    return this.intent(intentId);
+    return this.#mutate(async () => {
+      this.#assertSigningAllowed();
+      if (!HEX.test(raw) || !validHash(hash)) fail("invalid signed payload");
+      const proposed = clone(this.state);
+      const intent = findIntent(proposed, intentId);
+      if (intent.signed) {
+        if (intent.signed.raw === raw && intent.signed.hash === hash) return clone(intent);
+        fail("signature replacement refused");
+      }
+      intent.signed = { raw, hash };
+      intent.state = "signed";
+      await this.#commit(proposed);
+      return this.intent(intentId);
+    });
   }
 
   async recordAttempt(intentId, { at = this.now(), error = null, unrecoverable = false } = {}) {
-    this.#assertSigningAllowed();
-    natural(at, "attempt time");
-    if (error !== null && (typeof error !== "string" || !error)) fail("invalid attempt error");
-    const proposed = clone(this.state);
-    const intent = findIntent(proposed, intentId);
-    if (!intent.signed) fail("attempt without durable signature");
-    intent.attempts.push({ at, error, unrecoverable: Boolean(unrecoverable) });
-    if (error && !intent.firstError) intent.firstError = error;
-    if (error && unrecoverable && !intent.firstUnrecoverableError)
-      intent.firstUnrecoverableError = error;
-    intent.state = "broadcast-attempted";
-    await this.#commit(proposed);
-    return this.intent(intentId);
+    return this.#mutate(async () => {
+      this.#assertSigningAllowed();
+      natural(at, "attempt time");
+      if (error !== null && (typeof error !== "string" || !error)) fail("invalid attempt error");
+      const proposed = clone(this.state);
+      const intent = findIntent(proposed, intentId);
+      if (!intent.signed) fail("attempt without durable signature");
+      if (intent.terminal) fail("attempt after terminal");
+      intent.attempts.push({ at, error, unrecoverable: Boolean(unrecoverable) });
+      if (error && !intent.firstError) intent.firstError = error;
+      if (error && unrecoverable && !intent.firstUnrecoverableError)
+        intent.firstUnrecoverableError = error;
+      intent.state = "broadcast-attempted";
+      await this.#commit(proposed);
+      return this.intent(intentId);
+    });
   }
 
   async recordTerminal(intentId, receipt) {
-    const proposed = clone(this.state);
-    const intent = findIntent(proposed, intentId);
-    validateReceipt(receipt, intent);
-    if (BigInt(receipt.feeWei) > BigInt(intent.maxFeeWei)) fail("actual fee exceeds reservation");
-    if (intent.terminal) {
-      if (canonical(intent.terminal) === canonical(serializeReceipt(receipt)))
-        return this.intent(intentId);
-      fail("terminal receipt replacement refused");
-    }
-    intent.terminal = serializeReceipt(receipt);
-    intent.state = "terminal";
-    proposed.budget.feeActualWei = (
-      BigInt(proposed.budget.feeActualWei) + BigInt(receipt.feeWei)
-    ).toString();
-    await this.#commit(proposed);
-    return this.intent(intentId);
+    return this.#mutate(async () => {
+      const proposed = clone(this.state);
+      const intent = findIntent(proposed, intentId);
+      validateReceipt(receipt, intent);
+      if (!intent.attempts.length) fail("terminal requires broadcast attempt");
+      if (BigInt(receipt.feeWei) > BigInt(intent.maxFeeWei)) fail("actual fee exceeds reservation");
+      if (intent.terminal) {
+        if (canonical(intent.terminal) === canonical(serializeReceipt(receipt)))
+          return this.intent(intentId);
+        fail("terminal receipt replacement refused");
+      }
+      intent.terminal = serializeReceipt(receipt);
+      intent.state = "terminal";
+      proposed.budget.feeActualWei = (
+        BigInt(proposed.budget.feeActualWei) + BigInt(receipt.feeWei)
+      ).toString();
+      await this.#commit(proposed);
+      return this.intent(intentId);
+    });
   }
 
   #assertOpen() {
-    if (this.closed) fail("journal is closed");
+    if (this.closed || this.closing) fail("journal is closed");
+    if (this.poisoned) fail("journal persistence is uncertain");
   }
   #assertSigningAllowed() {
     this.#assertOpen();
@@ -280,7 +382,7 @@ export class CandidateRunJournal {
   #assertBudget(budget, fee, funding, usdc) {
     if (budget.signedCount + 1 > this.envelope.maxSignedTransactions)
       fail("signature budget exceeded");
-    if (BigInt(budget.feeReservedWei) + fee > BigInt(this.envelope.maxFeeWei))
+    if (occupiedFee(this.state) + fee > BigInt(this.envelope.maxFeeWei))
       fail("fee budget exceeded");
     if (BigInt(budget.fundingCommittedWei) + funding > BigInt(this.envelope.maxFundingWei))
       fail("funding budget exceeded");
@@ -289,8 +391,23 @@ export class CandidateRunJournal {
   }
   async #commit(next) {
     validateState(next, this.envelope, this.identity);
-    await persist(join(this.directory, JOURNAL), next, this.failPublish);
+    try {
+      await persist(join(this.directory, JOURNAL), next, this.failPublish);
+    } catch (error) {
+      this.poisoned ??= error;
+      throw error;
+    }
     this.state = next;
+  }
+  async #mutate(operation) {
+    if (this.closed || this.closing || this.poisoned) this.#assertOpen();
+    const next = this.tail.then(async () => {
+      this.#assertOpen();
+      await assertLease(join(this.directory, LOCK), this.token);
+      return operation();
+    });
+    this.tail = next.catch(() => {});
+    return next;
   }
 }
 
@@ -300,11 +417,10 @@ function validateRequest(request) {
     typeof request.intentId !== "string" ||
     !request.intentId ||
     !validAddress(request.sender) ||
-    !natural(request.nonce, "nonce") ||
+    !isNatural(request.nonce) ||
     !validHash(request.unsignedDigest) ||
-    !validAddress(request.to) ||
-    !HEX.test(request.input) ||
-    !natural(request.offeredAt, "offered time") ||
+    !validTarget(request.to, request.input) ||
+    !isNatural(request.offeredAt) ||
     typeof request.maxGasPriceWei !== "bigint"
   )
     fail("invalid intent");
@@ -359,99 +475,4 @@ function savedIntent(request, fee, gasPrice, funding, usdc) {
   };
   delete intent.usdcCommitment;
   return intent;
-}
-function findIntent(state, intentId) {
-  const intent = state.intents.find((entry) => entry.intentId === intentId);
-  if (!intent) fail("unknown intent");
-  return intent;
-}
-function validateReceipt(receipt, intent) {
-  if (
-    !receipt ||
-    !validHash(receipt.hash) ||
-    receipt.hash !== intent.signed.hash ||
-    ![0, 1].includes(receipt.status) ||
-    receipt.from !== intent.sender ||
-    receipt.to !== intent.to ||
-    receipt.input !== intent.input ||
-    receipt.nonce !== intent.nonce ||
-    receipt.chainId !== 11155111 ||
-    typeof receipt.feeWei !== "bigint" ||
-    receipt.feeWei < 0n
-  )
-    fail("invalid canonical receipt");
-}
-function serializeReceipt(receipt) {
-  return { ...receipt, feeWei: receipt.feeWei.toString() };
-}
-async function persist(path, state, failPublish) {
-  if (failPublish) fail("persist failed");
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const text = JSON.stringify(state);
-  let handle;
-  try {
-    handle = await open(temporary, "wx", 0o600);
-    await handle.writeFile(text);
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await rename(temporary, path);
-    await chmod(path, 0o600);
-    const directory = await open(join(path, ".."), "r");
-    await directory.sync();
-    await directory.close();
-  } catch (error) {
-    if (handle) await handle.close();
-    await unlink(temporary).catch(() => {});
-    fail(`persist failed: ${error.message}`);
-  }
-}
-async function acquireLease(path, token, processAlive) {
-  const record = JSON.stringify({ pid: process.pid, token });
-  try {
-    await writeFile(path, record, { flag: "wx", mode: 0o600 });
-    return;
-  } catch (error) {
-    if (error?.code !== "EEXIST") fail("unable to acquire lease");
-  }
-  let prior;
-  try {
-    prior = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    fail("foreign lease");
-  }
-  if (
-    !Number.isSafeInteger(prior.pid) ||
-    prior.pid <= 0 ||
-    typeof prior.token !== "string" ||
-    processAlive(prior.pid)
-  )
-    fail("active or foreign lease");
-  const observed = await lstat(path);
-  const check = await lstat(path);
-  if (observed.ino !== check.ino) fail("lease changed during recovery");
-  await unlink(path);
-  return acquireLease(path, token, processAlive);
-}
-async function releaseLease(path, token) {
-  try {
-    const current = JSON.parse(await readFile(path, "utf8"));
-    if (equalToken(current.token, token)) await unlink(path);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
-}
-function equalToken(left, right) {
-  if (typeof left !== "string" || typeof right !== "string") return false;
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-function defaultProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
 }
