@@ -349,10 +349,14 @@ export class SafeBudgetAdapter {
     if (JSON.stringify(received) !== JSON.stringify(reservation.signed))
       fail("route payload differs from persisted signed operation");
     this.routed.add(reservation.intentId);
-    return this.journal.attemptWithPermit(reservation.intentId, async () => {
-      this.marker("actual-send");
-      return send();
-    });
+    return this.journal.attemptWithPermit(
+      reservation.intentId,
+      async () => {
+        this.marker("actual-send");
+        return send();
+      },
+      () => this.#assertPolicy(canonical),
+    );
   }
 
   async reconcile(intentId, { lookup } = {}) {

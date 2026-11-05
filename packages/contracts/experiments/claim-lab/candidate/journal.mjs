@@ -117,7 +117,12 @@ function validateStateStructure(state, envelope) {
     !state.budget ||
     !validClock(state, envelope) ||
     !validBudget(state.budget) ||
-    !(state.safePolicy == null || validPersistedSafePolicy(state.safePolicy))
+    !(state.safePolicy == null || validPersistedSafePolicy(state.safePolicy)) ||
+    !(state.safePolicyIdentity == null || typeof state.safePolicyIdentity === "string") ||
+    (state.safePolicy && state.safePolicyIdentity !== state.safePolicy.policyIdentity) ||
+    (!state.safePolicy &&
+      state.safePolicyIdentity !== undefined &&
+      state.safePolicyIdentity !== null)
   )
     fail("invalid journal structure");
 }
@@ -176,6 +181,7 @@ function newState(envelope, identity) {
     envelopeId: envelope.id,
     envelopeIdentity: identity,
     safePolicy: null,
+    safePolicyIdentity: null,
     startedAt: null,
     deadlineAt: null,
     budget: budgetZero(),
@@ -214,6 +220,7 @@ export class CandidateRunJournal {
           fail("Safe policy identity required");
       } else if (safePolicy !== null) {
         const supplied = persistedSafePolicy(safePolicy);
+        if (state.safePolicyIdentity) fail("Safe policy removed from journal");
         if (supplied.baseEnvelopeIdentity !== identity) fail("Safe policy does not bind envelope");
       }
       if (created) await persist(statePath, state, failPublish);
@@ -313,6 +320,7 @@ export class CandidateRunJournal {
       }
       const proposed = clone(this.state);
       proposed.safePolicy = policy;
+      proposed.safePolicyIdentity = policy.policyIdentity;
       await this.#commit(proposed);
       return clone(policy);
     });
@@ -368,8 +376,9 @@ export class CandidateRunJournal {
     });
   }
 
-  async attemptWithPermit(intentId, send) {
+  async attemptWithPermit(intentId, send, permit = () => {}) {
     if (typeof send !== "function") fail("send callback required");
+    if (typeof permit !== "function") fail("permit callback required");
     return this.#mutate(async () => {
       assertSigningAllowed(this, fail);
       const proposed = clone(this.state);
@@ -386,6 +395,7 @@ export class CandidateRunJournal {
       await this.#commit(proposed);
       try {
         assertSigningAllowed(this, fail);
+        permit();
       } catch (error) {
         const suppressed = clone(this.state);
         const saved = findIntent(suppressed, intentId);

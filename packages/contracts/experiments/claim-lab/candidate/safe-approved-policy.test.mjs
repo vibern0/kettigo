@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 
 import { createSafePolicyCapability } from "./safe-approved-policy.mjs";
+import { deterministicUserOperationRecord } from "./safe-budget-adapter.mjs";
 import {
   ENTRY_POINT,
   SAFE,
@@ -206,5 +209,54 @@ test("rechecks synthetic policy expiry before signed persistence", async () => {
     fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) }),
     /policy/,
   );
+  await journal.close();
+});
+
+test("rejects an on-disk policy removal when the original authority is supplied", async () => {
+  const journal = await createJournal();
+  const policy = policyFor(journal);
+  await adapter(journal, { policy }).reserve({
+    intentId: "remove-policy",
+    operation: operation(),
+    offeredAt: 1000,
+  });
+  const directory = journal.directory;
+  await journal.close();
+  const path = join(directory, "journal.json");
+  const state = JSON.parse(await readFile(path, "utf8"));
+  state.safePolicy = null;
+  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+  await assert.rejects(reopenJournal(directory, { safePolicy: policy }), /journal|policy/);
+});
+
+test("suppresses an expired policy after durable route attempt and before external send", async () => {
+  const journal = await createJournal();
+  const policy = policyFor(journal, { approval: { expiresAt: 1001 } });
+  const reserveFence = adapter(journal, { policy, now: () => 1000 });
+  const reservation = await reserveFence.reserve({
+    intentId: "expires-route",
+    operation: operation(),
+    offeredAt: 1000,
+  });
+  const persisted = await reserveFence.saveSigned({
+    reservation,
+    operation: operation({ signature: SIGNATURE }),
+  });
+  let checks = 0;
+  const routeFence = adapter(journal, { policy, now: () => (checks++ === 0 ? 1000 : 1001) });
+  let sends = 0;
+  await assert.rejects(
+    routeFence.route({
+      reservation: persisted,
+      wire: deterministicUserOperationRecord(operation({ signature: SIGNATURE })),
+      entryPoint: ENTRY_POINT,
+      send: async () => {
+        sends += 1;
+      },
+    }),
+    /policy/,
+  );
+  assert.equal(sends, 0);
+  assert.equal(journal.intent("expires-route").attempts.at(-1).outcome, "suppressed");
   await journal.close();
 });
