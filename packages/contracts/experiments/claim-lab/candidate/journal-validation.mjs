@@ -79,19 +79,24 @@ function validateStateStructure(state, envelope) {
     !state.budget ||
     !validClock(state, envelope) ||
     !validBudget(state.budget) ||
-    !(state.safePolicy == null || validPersistedSafePolicy(state.safePolicy)) ||
-    !(state.safePolicyIdentity == null || typeof state.safePolicyIdentity === "string") ||
-    !(
-      state.workloadDefinition === undefined ||
-      state.workloadDefinition === null ||
-      validWorkloadDefinition(state.workloadDefinition)
-    ) ||
-    (state.safePolicy && state.safePolicyIdentity !== state.safePolicy.policyIdentity) ||
-    (!state.safePolicy &&
-      state.safePolicyIdentity !== undefined &&
-      state.safePolicyIdentity !== null)
+    !validStateMetadata(state)
   )
     fail("invalid journal structure");
+}
+
+function validStateMetadata(state) {
+  const validPolicy = state.safePolicy == null || validPersistedSafePolicy(state.safePolicy);
+  const validPolicyIdentity =
+    state.safePolicyIdentity == null || typeof state.safePolicyIdentity === "string";
+  const validWorkload =
+    state.workloadDefinition === undefined ||
+    state.workloadDefinition === null ||
+    validWorkloadDefinition(state.workloadDefinition);
+  const policyMatches =
+    !state.safePolicy || state.safePolicyIdentity === state.safePolicy.policyIdentity;
+  const noDanglingIdentity =
+    state.safePolicy || state.safePolicyIdentity === undefined || state.safePolicyIdentity === null;
+  return validPolicy && validPolicyIdentity && validWorkload && policyMatches && noDanglingIdentity;
 }
 
 function validWorkloadDefinition(value) {

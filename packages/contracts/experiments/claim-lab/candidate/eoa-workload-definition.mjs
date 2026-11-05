@@ -45,15 +45,7 @@ export function compileCandidateWorkload(definition) {
     ["bootstrap-eth"],
     "bootstrap-usdc",
   );
-  for (let index = 0; index < 3; index += 1)
-    add(
-      `deploy-${index}`,
-      "deploy",
-      "sponsor",
-      "creation",
-      [index ? `deploy-${index - 1}` : "bootstrap-usdc"],
-      `creation-${index}`,
-    );
+  addDeployments(add);
   add("configure-morpho", "deploy", "sponsor", "candidatePool", ["deploy-2"]);
   for (let index = 0; index < 32; index += 1)
     add(
@@ -185,12 +177,23 @@ function validateDefinition(definition) {
     ...definition.allowedEoaTargets,
   ])
     getAddress(value);
-  for (const key of ["creationInputDigests", "deploymentCreationHashes"])
-    if (
-      !Array.isArray(definition[key]) ||
-      definition[key].some((value) => !/^0x[0-9a-fA-F]{64}$/.test(value))
-    )
-      fail(`invalid ${key}`);
+  validateHashes(definition.creationInputDigests, "creation input digests");
+  validateHashes(definition.deploymentCreationHashes, "deployment creation hashes");
+}
+function addDeployments(add) {
+  for (let index = 0; index < 3; index += 1)
+    add(
+      `deploy-${index}`,
+      "deploy",
+      "sponsor",
+      "creation",
+      [index ? `deploy-${index - 1}` : "bootstrap-usdc"],
+      `creation-${index}`,
+    );
+}
+function validateHashes(values, label) {
+  if (!Array.isArray(values) || values.some((value) => !/^0x[0-9a-fA-F]{64}$/.test(value)))
+    fail(`invalid ${label}`);
 }
 function normalizedDefinition(definition) {
   return Object.freeze({
