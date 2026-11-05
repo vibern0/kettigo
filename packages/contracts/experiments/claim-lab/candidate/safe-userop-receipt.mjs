@@ -26,6 +26,13 @@ const outerShape = (value) =>
   HASH.test(value.transactionHash) &&
   HASH.test(value.blockHash) &&
   decimal(value.blockNumber);
+const sameIdentity = (operation, identity) =>
+  plain(identity) &&
+  operation.chainId === identity.chainId &&
+  operation.entryPoint === identity.entryPoint &&
+  operation.sender === identity.sender &&
+  operation.userOperationHash === identity.userOperationHash &&
+  operation.nonce === identity.nonce;
 
 export function validateSafeUserOperationReceipt(value, identity) {
   if (!own(value, ["kind", "operation", "status", "feeWei", "outer"]))
@@ -41,8 +48,7 @@ export function validateSafeUserOperationReceipt(value, identity) {
   const outer = value.outer;
   if (!operationShape(operation)) fail("invalid operation evidence");
   if (!outerShape(outer)) fail("invalid outer evidence");
-  if (!plain(identity) || Object.entries(operation).some(([key, field]) => identity[key] !== field))
-    fail("receipt identity mismatch");
+  if (!sameIdentity(operation, identity)) fail("receipt identity mismatch");
   return value;
 }
 
@@ -58,8 +64,7 @@ export function validateStoredSafeUserOperationReceipt(value, identity) {
     !decimal(value.feeWei) ||
     !operationShape(value.operation) ||
     !outerShape(value.outer) ||
-    !plain(identity) ||
-    Object.entries(value.operation).some(([key, field]) => identity[key] !== field)
+    !sameIdentity(value.operation, identity)
   )
     fail("invalid persisted receipt");
 }

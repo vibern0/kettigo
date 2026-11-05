@@ -436,6 +436,18 @@ test("reconciles a persisted Safe operation using only its own canonical event c
   });
   assert.deepEqual(result, { state: "reverted" });
   assert.equal(j.intent("safe-reconcile").terminal.feeWei, "7");
+  await fence.reconcile("safe-reconcile", {
+    lookup: async (identity) => ({
+      state: "failed",
+      operation: identity,
+      transactionHash: `0x${"22".repeat(32)}`,
+      blockNumber: 42n,
+      blockHash: `0x${"33".repeat(32)}`,
+      nonce: 0n,
+      actualGasCost: 7n,
+    }),
+  });
+  assert.equal(j.snapshot().budget.feeActualWei, "7");
   await j.close();
 });
 
