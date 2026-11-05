@@ -1,5 +1,6 @@
 import {
   checkTemplate,
+  currentPrincipalRef,
   depositTemplate,
   discoveryRef,
   publicDecryptRef,
@@ -221,12 +222,13 @@ function addEoaFinalRequests(add, call, definition) {
           `final-request-eoa-${id}`,
           "candidatePool",
           definition.actors.eoaParticipants[index],
-          index === 0 ? "3000000" : index === 1 ? "1000000" : "2000000",
+          currentPrincipalRef(definition, definition.actors.eoaParticipants[index]),
           "withdrawal",
         ),
         sdkProofRef(`final-request-eoa-${id}`),
       ]),
       [
+        "safe-reinvest",
         "safe-conditional-wallet-claim",
         ...Array.from(
           { length: 7 },
@@ -261,12 +263,13 @@ function addSafeFinalRequest(add, call, definition) {
         "safe-withdrawal-request",
         "candidatePool",
         definition.actors.safeParticipant,
-        "2000000",
+        currentPrincipalRef(definition, definition.actors.safeParticipant),
         "withdrawal",
       ),
       sdkProofRef("safe-withdrawal-request"),
     ]),
     [
+      "safe-reinvest",
       "safe-conditional-wallet-claim",
       ...Array.from(
         { length: 7 },

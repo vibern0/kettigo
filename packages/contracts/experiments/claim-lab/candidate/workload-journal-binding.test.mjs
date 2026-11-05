@@ -42,6 +42,14 @@ test("binds the full canonical workload before finance, returns clones, and surv
   bound.actions[0].id = "changed-copy";
   assert.equal(journal.workloadDefinition().actions[0].id, "bootstrap-eth");
   await journal.bindWorkloadDefinition(workload());
+  const replacementDefinition = workloadDefinitionFixture();
+  replacementDefinition.actors.eoaParticipants[0] = "0x0000000000000000000000000000000000000099";
+  await assert.rejects(
+    journal.bindWorkloadDefinition(
+      compileCandidateWorkload(replacementDefinition, workloadManifestFixture()),
+    ),
+    /replacement/,
+  );
   await journal.close();
   const restarted = await open(directoryPath);
   assert.deepEqual(restarted.workloadDefinition(), compiled);

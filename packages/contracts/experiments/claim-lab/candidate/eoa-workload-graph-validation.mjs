@@ -35,7 +35,7 @@ export function validateActions(actions) {
   }
 }
 function validateRef(ref, entry, byId) {
-  const staticKinds = ["sdkInput", "sdkProof", "delegateData", "abiBytes"];
+  const staticKinds = ["sdkInput", "sdkProof", "delegateData", "abiBytes", "currentPrincipal"];
   const kinds = ["receiptEvent", "publicDecrypt", "historicalProof", ...staticKinds];
   if (!kinds.includes(ref.kind)) fail("untyped reference");
   if (staticKinds.includes(ref.kind)) return;

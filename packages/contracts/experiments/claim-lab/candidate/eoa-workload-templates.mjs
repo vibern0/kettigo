@@ -76,6 +76,19 @@ export function sdkRef(producer, contractRole, actor, amount, purpose) {
     constraints: ["checksummed-contract", "checksummed-actor", "uint64"],
   };
 }
+export function currentPrincipalRef(definition, account) {
+  return {
+    kind: "currentPrincipal",
+    contractRole: "candidatePool",
+    contract: definition.contracts.candidatePool,
+    account,
+    getter: "encryptedPrincipalOf(address)",
+    handleType: "euint64",
+    clearType: "uint64",
+    abiType: "uint64",
+    constraints: ["checksummed-contract", "checksummed-account", "dependency-complete"],
+  };
+}
 export function sdkProofRef(producer) {
   return {
     kind: "sdkProof",

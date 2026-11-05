@@ -208,6 +208,28 @@ test("routes every principal and prize allocation through its immutable source",
   assert.equal(action("safe-reinvest").allocation.provenance, "bootstrap-usdc-78/prize-B");
 });
 
+test("uses each account's current encrypted principal for all final withdrawal inputs", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  for (let index = 0; index < 32; index += 1) {
+    const id = String(index).padStart(2, "0");
+    const amount = action(`final-request-eoa-${id}`).operation.args[0].amount;
+    assert.equal(amount.kind, "currentPrincipal");
+    assert.equal(amount.account, workload.definition.actors.eoaParticipants[index]);
+    assert.equal(amount.contractRole, "candidatePool");
+    assert.equal(amount.getter, "encryptedPrincipalOf(address)");
+    assert.equal(amount.handleType, "euint64");
+    assert.equal(amount.clearType, "uint64");
+    assert.ok(amount.constraints.includes("dependency-complete"));
+  }
+  const safe = action("safe-withdrawal-request");
+  assert.equal(safe.operation.args[0].amount.kind, "currentPrincipal");
+  assert.equal(safe.operation.args[0].amount.account, workload.definition.actors.safeParticipant);
+  assert.ok(safe.dependencies.includes("safe-reinvest"));
+  assert.equal(workload.actions.length, 375);
+  assert.equal(workload.totals.usdcMicro, "78000000");
+});
+
 test("uses whole admission barriers, a topological sponsor tail, and receipt-backed unwraps", () => {
   const workload = compileCandidateWorkload(definition(), manifest());
   const action = (id) => workload.actions.find((entry) => entry.id === id);
@@ -270,6 +292,21 @@ test("rejects regenerated mutations to required immutable workload fields", () =
     (value) => (value.actions.find((entry) => entry.id === "fund-eth-eoa-00").target = hex(99)),
     (value) =>
       (value.actions.find((entry) => entry.id === "safe-reinvest").allocation.provenance = "wrong"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "final-request-eoa-00").operation.args[0].amount =
+        "3000000"),
+    (value) =>
+      (value.actions.find(
+        (entry) => entry.id === "final-request-eoa-00",
+      ).operation.args[0].amount.account = hex(99)),
+    (value) =>
+      (value.actions.find(
+        (entry) => entry.id === "final-request-eoa-00",
+      ).operation.args[0].amount.contractRole = "wrapper"),
+    (value) =>
+      (value.actions.find(
+        (entry) => entry.id === "final-request-eoa-00",
+      ).operation.args[0].amount.clearType = "bytes32"),
     (value) =>
       (value.actions.find((entry) => entry.id === "check-stage8-eoa-01").concurrency.width = 99),
     (value) => value.actions.find((entry) => entry.id === "prize-fund-8").dependencies.pop(),
