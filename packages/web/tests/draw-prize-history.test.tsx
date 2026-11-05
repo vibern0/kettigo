@@ -157,6 +157,44 @@ test("lists one bounded descending page of past results", async () => {
   expect(request.limit).toBeLessThanOrEqual(100);
 });
 
+test("keeps a requested checked result while the initial result list arrives late", async () => {
+  fixture.version = "2";
+  let resolveList!: (value: Awaited<ReturnType<typeof fixture.listDraws>>) => void;
+  fixture.listDraws.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveList = resolve;
+      }),
+  );
+  mount();
+  await screen.findByText("Your past results");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  expect(await screen.findByText("Round #12")).toBeTruthy();
+  expect(screen.getByText("5.000000 USDC")).toBeTruthy();
+  resolveList({
+    kind: "draws",
+    draws: [
+      {
+        drawId: 4n,
+        closeBlockNumber: 44n,
+        closeLogIndex: 0,
+        chainId: 11155111n,
+        pool: fixture.pool,
+        blockHash: `0x${"a".repeat(64)}`,
+        rootHash: `0x${"b".repeat(64)}`,
+        rootSum: `0x${"c".repeat(64)}`,
+        ticket: `0x${"d".repeat(64)}`,
+        upperBound: 2n,
+      },
+    ],
+  });
+  expect(await screen.findByRole("button", { name: "Round #4" })).toBeTruthy();
+  expect(screen.getByText("Round #12")).toBeTruthy();
+});
+
 test("loads an earlier page only when the person asks", async () => {
   fixture.version = "2";
   const draw = (drawId: bigint) => ({

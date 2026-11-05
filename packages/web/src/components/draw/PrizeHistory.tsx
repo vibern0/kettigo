@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPublicClient, getAddress, http, type Address, type Hex } from "viem";
 import { sepolia } from "viem/chains";
 
-import { formatUSDC } from "@/lib/format";
 import {
   createPrizeCheckCoordinator,
   createPrizeCheckIntentStore,
@@ -17,6 +16,7 @@ import { RPC_URL } from "@/lib/contracts";
 import type { PasskeySmartSession, PreparedSmartTransaction } from "@/lib/smart-session";
 import { decryptExistingSmartUint64, prepareSmartReadSessionCalls } from "@/lib/zama";
 import { useActionCenter } from "@/components/ActionCenter";
+import { PrizeHistorySelection } from "./PrizeHistorySelection";
 
 const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
 const requestClient = {
@@ -25,8 +25,8 @@ const requestClient = {
 const PAGE_SIZE = 25;
 const UINT256_MAX = (1n << 256n) - 1n;
 
-type ListedDraw = Readonly<{ drawId: bigint }>;
-type Selection =
+export type ListedDraw = Readonly<{ drawId: bigint }>;
+export type Selection =
   | Readonly<{ kind: "loading"; drawId: bigint }>
   | Readonly<{ kind: "unchecked"; drawId: bigint }>
   | Readonly<{
@@ -86,6 +86,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
   const selectionEpoch = useRef(0);
   const listAbortRef = useRef<AbortController>();
   const selectionAbortRef = useRef<AbortController>();
+  const preparedCheckRef = useRef<PreparedPrizeCheck>();
   const confirmingCheckRef = useRef<PreparedPrizeCheck>();
   const preparedAccessRef = useRef<PreparedSmartTransaction>();
   const confirmingAccessRef = useRef<PreparedSmartTransaction>();
@@ -99,6 +100,9 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
     selectionEpoch.current += 1;
     selectionAbortRef.current?.abort();
     selectionAbortRef.current = undefined;
+    if (preparedCheckRef.current && preparedCheckRef.current !== confirmingCheckRef.current)
+      preparedCheckRef.current.cancel();
+    preparedCheckRef.current = undefined;
     if (preparedAccessRef.current && preparedAccessRef.current !== confirmingAccessRef.current)
       preparedAccessRef.current.cancel();
     preparedAccessRef.current = undefined;
@@ -316,6 +320,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         prepared.cancel();
         return;
       }
+      preparedCheckRef.current = prepared;
       setSelection({
         kind: "ready",
         drawId: selection.drawId,
@@ -352,6 +357,9 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
               error: "Still processing. Check status to see the latest update.",
             });
           throw error;
+        } finally {
+          if (confirmingCheckRef.current === prepared) confirmingCheckRef.current = undefined;
+          if (preparedCheckRef.current === prepared) preparedCheckRef.current = undefined;
         }
       },
     );
@@ -402,132 +410,20 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
 
   const requested = validRound(requestedRound);
   return (
-    <section className="card space-y-3">
-      <div>
-        <p className="label">Your past results</p>
-        <p className="mt-1 text-xs leading-relaxed text-muted">
-          Choose a completed round to see its result. Eligibility is decided when each draw ends.
-        </p>
-      </div>
-      <div className="flex gap-2">
-        <input
-          aria-label="Round number"
-          className="input min-w-0 flex-1"
-          inputMode="numeric"
-          min="1"
-          type="number"
-          value={requestedRound}
-          onChange={(event) => setRequestedRound(event.target.value)}
-        />
-        <button
-          className="btn-secondary shrink-0"
-          disabled={!requested}
-          onClick={() => requested && void viewRound(requested)}
-        >
-          View round
-        </button>
-      </div>
-      {draws.length > 0 && (
-        <div className="grid gap-2">
-          {draws.map((draw) => (
-            <button
-              className="btn-secondary w-full text-left"
-              key={draw.drawId.toString()}
-              onClick={() => void viewRound(draw.drawId)}
-            >
-              Round #{draw.drawId.toString()}
-            </button>
-          ))}
-        </div>
-      )}
-      {nextCursor !== undefined && (
-        <button className="btn-secondary w-full" onClick={() => void loadPage(nextCursor)}>
-          Show earlier results
-        </button>
-      )}
-      {historyUnavailable && (
-        <p className="text-sm text-muted">Past results are unavailable right now.</p>
-      )}
-      {selection?.kind === "loading" && (
-        <p className="text-sm text-muted">Checking round #{selection.drawId.toString()}.</p>
-      )}
-      {selection?.kind === "unchecked" && (
-        <div className="space-y-2">
-          <p className="text-sm text-muted">This result is ready to check.</p>
-          <button className="btn-primary w-full" onClick={() => void startCheck()}>
-            Review check
-          </button>
-        </div>
-      )}
-      {selection?.kind === "pending" && (
-        <p className="text-sm text-muted">This check is still processing.</p>
-      )}
-      {selection?.kind === "updating" && (
-        <p className="text-sm text-muted">This result is updating. Check back shortly.</p>
-      )}
-      {selection?.kind === "failed" && (
-        <p className="text-sm text-muted">This check did not go through.</p>
-      )}
-      {selection?.kind === "rejected" && (
-        <p className="text-sm text-muted">This check was not approved.</p>
-      )}
-      {selection?.kind === "not-submitted" && (
-        <div className="space-y-2">
-          <p className="text-sm text-muted">This check was not sent.</p>
-          <button className="btn-primary w-full" onClick={() => void startCheck()}>
-            Review check
-          </button>
-        </div>
-      )}
-      {selection?.kind === "not-eligible" && (
-        <p className="text-sm text-muted">
-          This round was not available to check for your account.
-        </p>
-      )}
-      {selection?.kind === "indexing" && (
-        <p className="text-sm text-muted">
-          This result is still being prepared. Check back shortly.
-        </p>
-      )}
-      {selection?.kind === "history-unavailable" && (
-        <p className="text-sm text-muted">Past results are unavailable right now.</p>
-      )}
-      {selection?.kind === "ready" && (
-        <button className="btn-primary w-full" onClick={confirmCheck}>
-          Confirm
-        </button>
-      )}
-      {selection?.kind === "access-ready" && (
-        <button className="btn-primary w-full" onClick={confirmAccess}>
-          Confirm
-        </button>
-      )}
-      {selection?.kind === "unavailable" && (
-        <p className="text-sm text-muted">This result is unavailable right now.</p>
-      )}
-      {selection?.kind === "checked" && (
-        <div className="rounded-2xl border border-white/50 bg-white/35 p-3">
-          <p className="text-xs font-semibold text-muted">Round #{selection.drawId.toString()}</p>
-          <p className="mt-1 text-sm text-muted">Result checked</p>
-          {selection.award === undefined ? null : (
-            <p className="font-display text-2xl font-bold text-brand">
-              {formatUSDC(selection.award, 6)} USDC
-            </p>
-          )}
-          {selection.access && (
-            <div className="mt-2 space-y-2">
-              <p className="text-sm text-muted">This result needs account access to show.</p>
-              <button className="btn-secondary w-full" onClick={() => void reviewAccess()}>
-                Review access
-              </button>
-            </div>
-          )}
-          {selection.unavailable && (
-            <p className="mt-2 text-sm text-muted">This result cannot be shown right now.</p>
-          )}
-        </div>
-      )}
-    </section>
+    <PrizeHistorySelection
+      draws={draws}
+      historyUnavailable={historyUnavailable}
+      nextCursor={nextCursor}
+      onConfirmCheck={selection?.kind === "access-ready" ? confirmAccess : confirmCheck}
+      onLoadPage={(cursor) => void loadPage(cursor)}
+      onRequestedRoundChange={setRequestedRound}
+      onReviewAccess={() => void reviewAccess()}
+      onStartCheck={() => void startCheck()}
+      onViewRound={(drawId) => void viewRound(drawId)}
+      requested={requested}
+      requestedRound={requestedRound}
+      selection={selection}
+    />
   );
 }
 

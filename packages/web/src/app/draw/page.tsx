@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPublicClient, encodeFunctionData, getAddress, http, isAddress } from "viem";
 import { sepolia } from "viem/chains";
 import { CONTRACTS, RPC_URL, confidentialPrizePoolAbi } from "@/lib/contracts";
@@ -163,14 +163,11 @@ export default function DrawPage() {
   const winningsSessionRef = useRef(session?.address);
   winningsSessionRef.current = session?.address;
   const refreshRef = useRef<(blockNumber?: bigint) => Promise<void>>(async () => undefined);
-  const addresses = useMemo(
-    () => ({
-      pool: isAddress(CONTRACTS.confidentialPrizePool)
-        ? getAddress(CONTRACTS.confidentialPrizePool)
-        : CONTRACTS.confidentialPrizePool,
-    }),
-    [],
-  );
+  const addresses = {
+    pool: isAddress(CONTRACTS.confidentialPrizePool)
+      ? getAddress(CONTRACTS.confidentialPrizePool)
+      : CONTRACTS.confidentialPrizePool,
+  };
 
   const ready = isAddress(addresses.pool);
   const runtime = drawRuntimeConfig();

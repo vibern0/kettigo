@@ -5,11 +5,13 @@ import { ZamaReadSessionAccessRequiredError } from "@/lib/zama-session-manager";
 
 const fixture = vi.hoisted(() => {
   const account = "0x1111111111111111111111111111111111111111" as const;
-  const pool = "0x3333333333333333333333333333333333333333" as const;
+  const pool = "0x3333333333333333333333333333333333333333" as `0x${string}`;
   const award = `0x${"2".repeat(64)}` as const;
   return {
     account,
     pool,
+    alternateAccount: "0x4444444444444444444444444444444444444444" as const,
+    alternatePool: "0x5555555555555555555555555555555555555555" as const,
     award,
     version: "2",
     proofUrl: "https://proof.example",
@@ -44,7 +46,9 @@ vi.mock("@/lib/contracts", async (original) => ({
   CONTRACTS: {
     usdc: fixture.account,
     confidentialUsdc: "0x2222222222222222222222222222222222222222",
-    confidentialPrizePool: fixture.pool,
+    get confidentialPrizePool() {
+      return fixture.pool;
+    },
   },
 }));
 vi.mock("@/lib/runtime-config", () => ({
@@ -438,6 +442,60 @@ test("cancels an unused historical access review without losing the checked resu
   expect(await screen.findByRole("button", { name: "Review access" })).toBeTruthy();
   expect(fixture.send).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Review check" })).toBeNull();
+});
+
+test("cancels a late unused check review but retains an attempted operation", async () => {
+  const lateCancel = vi.fn();
+  let resolvePrepare!: (value: { cancel: () => void; confirm: typeof fixture.confirm }) => void;
+  fixture.prepare.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolvePrepare = resolve;
+      }),
+  );
+
+  mount();
+  await viewRound();
+  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  resolvePrepare({ cancel: lateCancel, confirm: fixture.confirm });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+
+  const readyCancel = vi.fn();
+  fixture.prepare.mockResolvedValue({ cancel: readyCancel, confirm: fixture.confirm });
+  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
+  expect(await screen.findByRole("button", { name: "Confirm" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  await waitFor(() => expect(readyCancel).toHaveBeenCalledTimes(1));
+
+  const operation = {
+    chainId: 11155111 as const,
+    entryPoint: entryPoint07Address,
+    sender: fixture.account,
+    userOperationHash: `0x${"f".repeat(64)}` as const,
+  };
+  const attemptedCancel = vi.fn();
+  fixture.prepare.mockResolvedValue({
+    cancel: attemptedCancel,
+    confirm: ({
+      onOperationPrepared,
+    }: {
+      onOperationPrepared: (value: typeof operation) => void;
+    }) => {
+      onOperationPrepared(operation);
+      return new Promise<never>(() => undefined);
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await waitFor(() =>
+    expect(screen.getByTestId("actions").textContent).toContain(operation.userOperationHash),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  expect(attemptedCancel).not.toHaveBeenCalled();
+  expect(screen.getByTestId("actions").textContent).toContain(operation.userOperationHash);
 });
 
 test("keeps a NotEntitled historical read terminal without offering an access review", async () => {
