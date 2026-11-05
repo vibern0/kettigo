@@ -258,6 +258,45 @@ test("freezes reviewed nonce and marker primitives against later reader mutation
   assert.equal(getPrepareCalls(), 0);
 });
 
+test("keeps the reviewed tuple stable while marker decryption is pending", async () => {
+  const decrypting = deferred();
+  const decryptStarted = deferred();
+  const mutable = pending();
+  let reads = 0;
+  let prepared = 0;
+  const coordinator = createAdmissionCoordinator({
+    account: ACCOUNT,
+    pool: POOL,
+    decryptPublicBoolean: async () => {
+      decryptStarted.resolve();
+      return decrypting.promise;
+    },
+    readPendingAdmission: async () => {
+      reads += 1;
+      return mutable;
+    },
+    readMembershipIndex: async () => 0n,
+    encodeFinalizeAdmission: () => "0xabcdef",
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => {
+        prepared += 1;
+        return { cancel() {}, send: async () => "0xdead" };
+      },
+    },
+  });
+  const reviewing = coordinator.review();
+  await decryptStarted.promise;
+  mutable.nonce = 8n;
+  mutable.marker = OTHER_MARKER;
+  decrypting.resolve({ clearValue: true, decryptionProof: PROOF });
+  const review = await reviewing;
+
+  await assert.rejects(coordinator.prepare(review), AdmissionStaleError);
+  assert.equal(reads, 2);
+  assert.equal(prepared, 0);
+});
+
 test("does not retry a terminal permission denial", async () => {
   const denial = { code: "NOT_ENTITLED" };
   let reads = 0;
@@ -369,6 +408,25 @@ test("preserves the first rate-limit failure when visibility observation rejects
   );
 });
 
+test("lets an abort during visibility observation outrank the earlier rate-limit error", async () => {
+  const controller = new AbortController();
+  const rateLimit = new RpcRateLimitError("rate limited");
+  await assert.rejects(
+    readWithConfirmedVisibility({
+      read: async () => {
+        throw rateLimit;
+      },
+      scope: visibilityScope(),
+      observeConfirmedVisibility: async () => {
+        controller.abort(new Error("account switched"));
+        return observation();
+      },
+      signal: controller.signal,
+    }),
+    /account switched/,
+  );
+});
+
 test("aborts after either successful visibility read before returning data", async () => {
   const first = new AbortController();
   await assert.rejects(
@@ -399,4 +457,39 @@ test("aborts after either successful visibility read before returning data", asy
     }),
     /account switched/,
   );
+});
+
+test("cancels an unused Ready action immediately when its scope aborts", async () => {
+  let cancelled = 0;
+  let sends = 0;
+  const coordinator = createAdmissionCoordinator({
+    account: ACCOUNT,
+    pool: POOL,
+    decryptPublicBoolean: async () => ({ clearValue: true, decryptionProof: PROOF }),
+    readPendingAdmission: async () => pending(),
+    readMembershipIndex: async () => 0n,
+    encodeFinalizeAdmission: () => "0xabcdef",
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => ({
+        cancel: () => {
+          cancelled += 1;
+        },
+        send: () => {
+          sends += 1;
+          return Promise.resolve("0xdead");
+        },
+      }),
+    },
+  });
+  const controller = new AbortController();
+  const ready = await coordinator.prepare(
+    await coordinator.review(controller.signal),
+    controller.signal,
+  );
+  controller.abort(new Error("account switched"));
+
+  assert.equal(cancelled, 1);
+  await assert.rejects(ready.confirm(), /account switched/);
+  assert.equal(sends, 0);
 });

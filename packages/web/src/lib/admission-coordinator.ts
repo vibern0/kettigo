@@ -108,7 +108,9 @@ export function createAdmissionCoordinator(input: AdmissionCoordinatorDependenci
   return Object.freeze({
     async review(signal?: AbortSignal): Promise<AdmissionReview> {
       assertActive(signal);
-      const pending = await dependencies.readPendingAdmission(dependencies.account, signal);
+      const pending = copyPending(
+        await dependencies.readPendingAdmission(dependencies.account, signal),
+      );
       assertActive(signal);
       if (!pending.requested) throw new AdmissionStaleError();
       const decrypted = await dependencies.decryptPublicBoolean(pending.marker);
@@ -160,13 +162,18 @@ function readyAdmission(
   signal?: AbortSignal,
 ) {
   let active = true;
+  let attempted = false;
   let confirmation: Promise<AdmissionResult> | undefined;
+  const removeAbort = () => signal?.removeEventListener("abort", cancel);
+  function cancel() {
+    if (!active || attempted) return;
+    active = false;
+    removeAbort();
+    prepared.cancel();
+  }
+  signal?.addEventListener("abort", cancel, { once: true });
   return Object.freeze({
-    cancel: () => {
-      if (!active) return;
-      active = false;
-      prepared.cancel();
-    },
+    cancel,
     // Do not make this async: prepared.send must begin within the Confirm gesture stack.
     confirm: () => {
       if (confirmation) return confirmation;
@@ -176,7 +183,9 @@ function readyAdmission(
         return Promise.reject(error);
       }
       if (!active) return Promise.reject(new Error("Please review your savings again."));
+      attempted = true;
       active = false;
+      removeAbort();
       try {
         const sent = prepared.send();
         confirmation = sent.then(() => reconcile(dependencies, review, signal));
@@ -267,6 +276,7 @@ export async function readWithConfirmedVisibility<T>(
     observation = await options.observeConfirmedVisibility(scope, options.signal);
     assertActive(options.signal);
   } catch {
+    if (options.signal?.aborted) assertActive(options.signal);
     throw firstError;
   }
   if (!isConfirmedObservation(scope, observation) || !observation.visible) throw firstError;
