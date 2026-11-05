@@ -18,7 +18,9 @@ import { DrawPoolSummary } from "@/components/draw/DrawPoolSummary";
 import { readDrawSnapshot } from "@/components/draw/draw-snapshot";
 import {
   asDrawAddress as asAddress,
+  drawOperationKey,
   drawErrorMessage as getErrorMessage,
+  isStoredDrawOperation,
   drawRuntimeConfig,
   formatDrawDateTime as formatDateTime,
   formatDrawInterval as formatInterval,
@@ -134,10 +136,11 @@ export default function DrawPage() {
     for (const action of actions) {
       if (
         !action.operation ||
+        !isStoredDrawOperation(action.operation) ||
         !["completed", "failed", "rejected", "not-submitted"].includes(action.status)
       )
         continue;
-      const key = creditOperationKey(action.operation);
+      const key = drawOperationKey(action.operation);
       const owner = pendingCreditOwnersRef.current.get(key);
       if (!owner) continue;
       reviewLeaseRef.current.complete(owner);
@@ -179,7 +182,7 @@ export default function DrawPage() {
     setWinningsOwner(undefined);
     if (!session?.address) return;
     void refresh();
-  }, [session?.address]);
+  }, [addresses.pool, runtime.mode2, session?.address]);
 
   function activeSession() {
     if (!session) throw new Error("Connect your smart account first.");
@@ -190,8 +193,9 @@ export default function DrawPage() {
     await refreshRef.current();
   }
 
-  async function decryptWinnings() {
-    const currentSession = activeSession();
+  const decryptWinnings = useCallback(async () => {
+    if (!session) throw new Error("Connect your smart account first.");
+    const currentSession = session;
     const user = currentSession.address;
     const requestScope = scope;
     const requestId = winningsRequestId.current + 1;
@@ -243,7 +247,7 @@ export default function DrawPage() {
     setWinnings(revealedWinnings);
     setWinningsOwner(user);
     return getPrizeRevealFeedback(revealedWinnings);
-  }
+  }, [addresses.pool, ready, scope, session]);
 
   const refreshCompletedCredit = useCallback(
     async (action: AsyncAction) => {
@@ -253,6 +257,7 @@ export default function DrawPage() {
         !["completed", "updating"].includes(action.status) ||
         !isCreditScope(creditScope) ||
         !action.operation ||
+        !isStoredDrawOperation(action.operation) ||
         typeof actionAccount !== "string" ||
         !isAddress(actionAccount) ||
         !session?.address ||
@@ -262,13 +267,13 @@ export default function DrawPage() {
         creditScope.mode !== (runtime.mode2 ? "2" : "legacy1")
       )
         return;
-      const operationKey = creditOperationKey(action.operation);
+      const operationKey = drawOperationKey(action.operation);
       if (refreshedCreditOperationsRef.current.has(operationKey)) return;
       const requestScope = scope;
       try {
         await decryptWinnings();
         if (scopeRef.current !== requestScope) return;
-        await Promise.all([refresh(), refreshConfidentialBalances()]);
+        await Promise.all([refreshRef.current(), refreshConfidentialBalances()]);
         if (
           scopeRef.current !== requestScope ||
           creditScope.action !== "addPrizeToSavings" ||
@@ -313,6 +318,7 @@ export default function DrawPage() {
     },
     [
       addresses.pool,
+      decryptWinnings,
       refreshConfidentialBalances,
       runtime.mode2,
       scope,
@@ -373,7 +379,7 @@ export default function DrawPage() {
         try {
           await review.prepared.send({
             onOperationPrepared: (operation) => {
-              pendingCreditOwnersRef.current.set(creditOperationKey(operation), review.owner);
+              pendingCreditOwnersRef.current.set(drawOperationKey(operation), review.owner);
               update({ status: "confirming", operation });
             },
           });
@@ -385,7 +391,7 @@ export default function DrawPage() {
             error instanceof SafeUserOperationNotSubmittedError ||
             error instanceof SafeUserOperationRejectedError
           ) {
-            pendingCreditOwnersRef.current.delete(creditOperationKey(error.operation));
+            pendingCreditOwnersRef.current.delete(drawOperationKey(error.operation));
             reviewLeaseRef.current.complete(review.owner);
           }
           throw error;
@@ -433,8 +439,10 @@ export default function DrawPage() {
   ) {
     setStatus("working");
     setWorkingAction(currentAction);
+    let stale = false;
     try {
       const completed = await action();
+      stale = completed === false;
       if (completed === false) return;
       setStatus("success");
       toast(completed ?? { tone: "success", title: ok });
@@ -448,6 +456,7 @@ export default function DrawPage() {
       setStatus("error");
       toast({ tone: "error", title: "Transaction failed", description: errorMessage });
     } finally {
+      if (stale) setStatus("idle");
       setWorkingAction(undefined);
     }
   }
@@ -515,15 +524,6 @@ export default function DrawPage() {
       )}
     </div>
   );
-}
-
-function creditOperationKey(operation: {
-  chainId: number;
-  entryPoint: string;
-  sender: string;
-  userOperationHash: string;
-}) {
-  return `${operation.chainId}:${operation.entryPoint.toLowerCase()}:${operation.sender.toLowerCase()}:${operation.userOperationHash.toLowerCase()}`;
 }
 
 function isCreditScope(value: unknown): value is NonNullable<AsyncAction["creditScope"]> {

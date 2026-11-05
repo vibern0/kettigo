@@ -5,6 +5,31 @@ import { asChecksumAddress } from "@/lib/zama";
 export const asDrawAddress = (value: unknown, label: string): Address =>
   asChecksumAddress(value, label);
 
+export function isStoredDrawOperation(value: unknown): value is {
+  chainId: number;
+  entryPoint: string;
+  sender: string;
+  userOperationHash: string;
+} {
+  if (typeof value !== "object" || value === null) return false;
+  const operation = value as Record<string, unknown>;
+  return (
+    typeof operation.chainId === "number" &&
+    typeof operation.entryPoint === "string" &&
+    typeof operation.sender === "string" &&
+    typeof operation.userOperationHash === "string"
+  );
+}
+
+export function drawOperationKey(operation: {
+  chainId: number;
+  entryPoint: string;
+  sender: string;
+  userOperationHash: string;
+}) {
+  return `${operation.chainId}:${operation.entryPoint.toLowerCase()}:${operation.sender.toLowerCase()}:${operation.userOperationHash.toLowerCase()}`;
+}
+
 export function drawRuntimeConfig() {
   return {
     mode2:

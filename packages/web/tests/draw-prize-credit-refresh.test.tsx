@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import React from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import React, { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { SafeUserOperationPendingError } from "@/lib/passkey-operation";
@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => {
   return {
     account,
     pool,
+    originalPool: pool,
     alternateAccount: "0x4444444444444444444444444444444444444444" as const,
     alternatePool: "0x5555555555555555555555555555555555555555" as const,
     aggregate: `0x${"1".repeat(64)}` as `0x${string}`,
@@ -31,7 +32,8 @@ vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     getBlockNumber: async () => 0n,
-    readContract: (args: { functionName: string; address: `0x${string}` }) => fixture.readContract(args),
+    readContract: (args: { functionName: string; address: `0x${string}` }) =>
+      fixture.readContract(args),
     request: async () => [],
     watchBlockNumber: () => () => {},
   }),
@@ -72,7 +74,7 @@ vi.mock("canvas-confetti", () => ({
 }));
 
 import DrawPage from "@/app/draw/page";
-import { ActionCenterProvider } from "@/components/ActionCenter";
+import { ActionCenterProvider, useActionCenter } from "@/components/ActionCenter";
 import { ToastProvider } from "@/components/Toast";
 
 function tree() {
@@ -89,6 +91,24 @@ function mount() {
   return render(tree());
 }
 
+function ActionProbe() {
+  const { actions } = useActionCenter();
+  return <output data-testid="actions">{JSON.stringify(actions)}</output>;
+}
+
+function RetainedProviders() {
+  const [showDraw, setShowDraw] = useState(true);
+  return (
+    <ToastProvider>
+      <ActionCenterProvider>
+        <button onClick={() => setShowDraw(false)}>Hide Draw</button>
+        {showDraw && <DrawPage />}
+        <ActionProbe />
+      </ActionCenterProvider>
+    </ToastProvider>
+  );
+}
+
 function operation() {
   return {
     chainId: 11155111 as const,
@@ -100,6 +120,7 @@ function operation() {
 
 beforeEach(() => {
   localStorage.clear();
+  fixture.pool = fixture.originalPool;
   fixture.aggregate = `0x${"1".repeat(64)}`;
   fixture.aggregateRead.mockReset();
   fixture.aggregateRead.mockImplementation(() => fixture.aggregate);
@@ -250,7 +271,7 @@ test("cancels a late unused credit preparation after the Draw mode changes", asy
   expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 });
 
-test("ignores a late aggregate reveal after the selected pool changes", async () => {
+test("ignores an old pool aggregate and reads the newly selected pool only when checked", async () => {
   let resolveAggregate!: (value: `0x${string}`) => void;
   fixture.aggregateRead.mockReturnValue(
     new Promise<`0x${string}`>((resolve) => {
@@ -261,8 +282,135 @@ test("ignores a late aggregate reveal after the selected pool changes", async ()
   fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
   fixture.pool = fixture.alternatePool;
   rendered.rerender(tree());
-  resolveAggregate(`0x${"1".repeat(64)}`);
+  await act(async () => resolveAggregate(`0x${"1".repeat(64)}`));
+  expect(screen.queryByText("5.000000 USDC")).toBeNull();
+
+  fixture.aggregate = `0x${"0".repeat(64)}`;
+  fixture.aggregateRead.mockReset();
+  fixture.aggregateRead.mockImplementation(() => fixture.aggregate);
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Check prize" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+
+  await waitFor(() => expect(screen.getByText("Nothing ready to claim")).toBeTruthy());
+  const aggregateReads = fixture.readContract.mock.calls
+    .map(([args]) => args)
+    .filter(({ functionName }) => functionName === "encryptedWinningsOf");
+  expect(aggregateReads.at(-1)).toMatchObject({
+    address: fixture.alternatePool,
+    args: [fixture.account],
+  });
+});
+
+test("clears revealed winnings when the selected pool changes for the same account", async () => {
+  const rendered = mount();
+  fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+  await screen.findByText("5.000000 USDC");
+
+  fixture.pool = fixture.alternatePool;
+  rendered.rerender(tree());
+
+  await waitFor(() => expect(screen.queryByText("5.000000 USDC")).toBeNull());
+  expect(screen.getByRole("button", { name: "Check prize" })).toBeTruthy();
+});
+
+test("retains an observed credited operation after only Draw unmounts", async () => {
+  let observe!: (value: ReturnType<typeof operation>) => void;
+  let rejectSend!: (reason: Error) => void;
+  const pending = operation();
+  const cancel = vi.fn();
+  const send = vi.fn(({ onOperationPrepared }) => {
+    observe = onOperationPrepared;
+    return new Promise<`0x${string}`>((_resolve, reject) => {
+      rejectSend = reject;
+    });
+  });
+  fixture.prepare.mockResolvedValue({ cancel, send });
+
+  render(<RetainedProviders />);
+  fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Claim prize" }));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  expect(send).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "Hide Draw" }));
+  observe(pending);
+  rejectSend(new SafeUserOperationPendingError(pending));
+
+  await waitFor(() => expect(screen.getByTestId("actions").textContent).toContain("confirming"));
+  const retained = JSON.parse(screen.getByTestId("actions").textContent ?? "[]") as unknown[];
+  expect(retained).toHaveLength(1);
+  expect(screen.getByTestId("actions").textContent).toContain(pending.userOperationHash);
+  expect(cancel).not.toHaveBeenCalled();
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("Results and winnings.")).toBeNull();
+  expect(screen.queryByText("Unable to prepare")).toBeNull();
+});
+
+test("uses controlled preparation failure copy instead of a raw provider error", async () => {
+  const providerReason = "https://provider.example/unique-prepare-reason";
+  fixture.prepare.mockRejectedValue(new Error(providerReason));
+
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Claim prize" }));
+
+  expect(await screen.findByText("Unable to prepare")).toBeTruthy();
+  expect(screen.getByText("Please review your request again.")).toBeTruthy();
+  expect(screen.queryByText(providerReason)).toBeNull();
+});
+
+test("does not show a preparation error after Draw unmounts", async () => {
+  let rejectPrepare!: (reason: Error) => void;
+  const providerReason = "https://provider.example/stale-prepare-reason";
+  fixture.prepare.mockImplementation(
+    () =>
+      new Promise((_, reject) => {
+        rejectPrepare = reject;
+      }),
+  );
+
+  render(<RetainedProviders />);
+  fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Claim prize" }));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+  fireEvent.click(screen.getByRole("button", { name: "Hide Draw" }));
+  rejectPrepare(new Error(providerReason));
 
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(screen.queryByText("5.000000 USDC")).toBeNull();
+  expect(screen.queryByText("Unable to prepare")).toBeNull();
+  expect(screen.queryByText(providerReason)).toBeNull();
+});
+
+test("ignores a restored credited record with a malformed operation identity", async () => {
+  localStorage.setItem(
+    "kettigo:actions",
+    JSON.stringify([
+      {
+        id: "malformed-credit",
+        label: "Claim prize",
+        type: "claim",
+        status: "completed",
+        createdAt: 1,
+        updatedAt: 1,
+        account: fixture.account,
+        operation: {},
+        creditScope: {
+          kind: "prize-credit",
+          action: "claimPrize",
+          pool: fixture.pool,
+          mode: "legacy1",
+        },
+      },
+    ]),
+  );
+
+  mount();
+
+  expect(await screen.findByRole("button", { name: "Check prize" })).toBeTruthy();
+  expect(fixture.refreshBalances).not.toHaveBeenCalled();
 });
