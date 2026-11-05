@@ -5,14 +5,124 @@ import {
   createStorage,
   delay,
   dependencies,
+  EthSafeSignature,
   operation,
   relay,
+  RAW_ID,
   SAFE_ADDRESS,
   test,
+  VERIFIER_ADDRESS,
+  COORDINATES,
 } from "./pending-operation-session-fixtures.mjs";
 import { createGuardedPasskeySession } from "../src/lib/pending-operation-session.ts";
-import { createPendingOperationManager } from "../src/lib/pending-operation-guard.ts";
-import { createPasskeyAccount, SafeUserOperationPendingError } from "../src/lib/passkey-safe.ts";
+import {
+  createPendingOperationManager,
+  PendingOperationRecoveryBlockedError,
+} from "../src/lib/pending-operation-guard.ts";
+import {
+  PASSKEY_METADATA_KEY,
+  readPasskeyMetadata,
+  writePasskeyMetadata,
+} from "../src/lib/passkey-metadata.ts";
+import {
+  createPasskeyAccount,
+  restorePasskeyAccount,
+  SafeUserOperationPendingError,
+} from "../src/lib/passkey-safe.ts";
+
+const metadata = {
+  rawId: RAW_ID,
+  coordinates: COORDINATES,
+  verifierAddress: VERIFIER_ADDRESS,
+  safeAddress: SAFE_ADDRESS,
+};
+const typedData = {
+  domain: { name: "Kettigo", version: "1", chainId: 11155111n, verifyingContract: SAFE_ADDRESS },
+  types: { Authorization: [{ name: "expires", type: "uint256" }] },
+  primaryType: "Authorization",
+  message: { expires: 123n },
+};
+const badRecords = [
+  ["malformed JSON", "{"],
+  [
+    "wrong sender",
+    JSON.stringify({
+      version: 1,
+      ...operation(),
+      createdAt: 1,
+      phase: "attempted",
+      sender: VERIFIER_ADDRESS,
+    }),
+  ],
+  [
+    "wrong chain",
+    JSON.stringify({ version: 1, ...operation(), createdAt: 1, phase: "attempted", chainId: 1 }),
+  ],
+  [
+    "wrong EntryPoint",
+    JSON.stringify({
+      version: 1,
+      ...operation(),
+      createdAt: 1,
+      phase: "attempted",
+      entryPoint: VERIFIER_ADDRESS,
+    }),
+  ],
+];
+
+async function restoreWithBadPending(badRecord) {
+  const storage = createStorage();
+  const locks = createLocks();
+  const manager = createPendingOperationManager({ sender: SAFE_ADDRESS, storage, locks });
+  writePasskeyMetadata(metadata, storage);
+  storage.setItem(manager.storageKey, badRecord);
+  const state = { credentials: 0, executes: 0, safeMessageHashes: 0, signedHashes: 0 };
+  const instance = relay();
+  instance.protocolKit.getSafeMessageHash = async (hash) => {
+    state.safeMessageHashes += 1;
+    return hash;
+  };
+  instance.protocolKit.signHash = async () => {
+    state.signedHashes += 1;
+    return new EthSafeSignature(VERIFIER_ADDRESS, `0x${"11".repeat(64)}1b`);
+  };
+  instance.executeTransaction = async () => {
+    state.executes += 1;
+    return `0x${"60".repeat(32)}`;
+  };
+  const session = await restorePasskeyAccount(
+    { rpId: "app.kettigo.xyz", storage, metadata },
+    dependencies({
+      pendingOperationLocks: locks,
+      async getCredential() {
+        state.credentials += 1;
+        return { id: "credential" };
+      },
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+  return { session, state, storage };
+}
+
+async function assertBadPendingSession({ session, state, storage }, label) {
+  assert.equal(session.address, SAFE_ADDRESS, label);
+  assert.equal(readPasskeyMetadata(storage).status, "valid", label);
+  assert.notEqual(storage.getItem(PASSKEY_METADATA_KEY), null, label);
+  assert.equal(await session.signTypedData(typedData), `0x${"11".repeat(64)}1b`, label);
+  assert.equal(state.safeMessageHashes, 1, label);
+  assert.equal(state.signedHashes, 1, label);
+  assert.throws(() => session.getPendingOperation(), PendingOperationRecoveryBlockedError, label);
+  await assert.rejects(session.sendTransaction(calls), PendingOperationRecoveryBlockedError, label);
+  await assert.rejects(
+    session.prepareTransaction(calls),
+    PendingOperationRecoveryBlockedError,
+    label,
+  );
+  assert.equal(state.credentials, 0, label);
+  assert.equal(state.executes, 0, label);
+}
 
 test("direct unavailable durable support blocks before Safe transaction work", async () => {
   let created = 0;
@@ -32,6 +142,11 @@ test("direct unavailable durable support blocks before Safe transaction work", a
   );
   await assert.rejects(session.sendTransaction(calls), /storage|locks/i);
   assert.equal(created, 0);
+});
+
+test("restored production sessions keep signing available but block corrupt or wrong-scope pending state", async () => {
+  for (const [label, badRecord] of badRecords)
+    await assertBadPendingSession(await restoreWithBadPending(badRecord), label);
 });
 
 test("persistent attempted readback poison remains blocked after actual send", async () => {

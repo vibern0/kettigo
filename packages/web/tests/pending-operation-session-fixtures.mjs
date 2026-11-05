@@ -4,6 +4,7 @@ export {
   createStorage,
   delay,
   dependencies,
+  EthSafeSignature,
   entryPoint07Address,
   finalUserOperation,
   getAddress,
