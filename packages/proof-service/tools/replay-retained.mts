@@ -10,7 +10,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { D1Archive, type ArchiveDatabase, type BlockHeader } from "../src/archive.ts";
 import {
   checksum,
@@ -47,11 +47,11 @@ const tables = [
 export class SqliteD1 implements ArchiveDatabase {
   constructor(readonly sqlite: DatabaseSync) {}
   prepare(sql: string) {
-    const state: { values: unknown[] } = { values: [] };
+    const state: { values: SQLInputValue[] } = { values: [] };
     const statement = {
       __sql: sql,
       bind: (...values: unknown[]) => {
-        state.values = values;
+        state.values = values as SQLInputValue[];
         return statement;
       },
       run: async () => this.sqlite.prepare(sql).run(...state.values),
@@ -61,13 +61,17 @@ export class SqliteD1 implements ArchiveDatabase {
     };
     return statement as unknown as D1PreparedStatement;
   }
-  async batch(statements: D1PreparedStatement[]) {
+  async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
-      const results: D1Result[] = [];
+      const results: D1Result<T>[] = [];
       for (const statement of statements) {
         const sql = (statement as unknown as { __sql?: string }).__sql?.trimStart().toUpperCase();
-        results.push(sql?.startsWith("SELECT") ? await statement.all() : await statement.run());
+        results.push(
+          (sql?.startsWith("SELECT")
+            ? await statement.all<T>()
+            : await statement.run()) as D1Result<T>,
+        );
       }
       this.sqlite.exec("COMMIT");
       return results;

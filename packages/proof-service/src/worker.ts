@@ -139,7 +139,8 @@ export async function initializeArchiveForTick(
   }
   if (namespace.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
   const anchor = await source.block(namespace.deploymentBlock - 1, signal);
-  if (anchor.number !== namespace.deploymentBlock - 1) throw new Error("deployment parent block mismatch");
+  if (anchor.number !== namespace.deploymentBlock - 1)
+    throw new Error("deployment parent block mismatch");
   throwIfAborted(signal);
   await archive.initialize(namespace, anchor.hash);
 }

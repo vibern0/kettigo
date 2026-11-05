@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -23,13 +23,15 @@ const headers = (target: number): BlockHeader[] =>
 
 function logsFor(namespace: Namespace, block: BlockHeader): ArchiveLog[] {
   const account = "0x1111111111111111111111111111111111111111";
-  const logs: ArchiveLog[] = [{
-    blockNumber: block.number,
-    blockHash: block.hash,
-    logIndex: 0,
-    name: "SlotAssigned",
-    args: { account, index: "0", generation: "1" },
-  }];
+  const logs: ArchiveLog[] = [
+    {
+      blockNumber: block.number,
+      blockHash: block.hash,
+      logIndex: 0,
+      name: "SlotAssigned",
+      args: { account, index: "0", generation: "1" },
+    },
+  ];
   let node: Node = { hash: leafHash(account, "1", zero), sum: zero };
   logs.push({
     blockNumber: block.number,
@@ -60,22 +62,42 @@ class FixtureRpc implements RpcSource {
     readonly chainIdValue = "11155111",
     readonly finalized = chain.at(-1)!,
   ) {}
-  async chainId() { return this.chainIdValue; }
-  async finalizedHead() { return { number: this.finalized.number, hash: this.finalized.hash }; }
-  async latestHead() { return this.chain.at(-1)!; }
-  async block(number: number) { this.calls.push(number); return this.chain[number]!; }
-  async logs(from: number, to: number) {
-    return Array.from({ length: to - from + 1 }, (_, i) => this.logsByBlock.get(from + i) ?? []).flat();
+  async chainId() {
+    return this.chainIdValue;
   }
-  async receiptLogs(block: BlockHeader) { return this.logsByBlock.get(block.number) ?? []; }
-  async drawSnapshot() { throw new Error("unexpected draw snapshot"); }
+  async finalizedHead() {
+    return { number: this.finalized.number, hash: this.finalized.hash };
+  }
+  async latestHead() {
+    return this.chain.at(-1)!;
+  }
+  async block(number: number) {
+    this.calls.push(number);
+    return this.chain[number]!;
+  }
+  async logs(from: number, to: number) {
+    return Array.from(
+      { length: to - from + 1 },
+      (_, i) => this.logsByBlock.get(from + i) ?? [],
+    ).flat();
+  }
+  async receiptLogs(block: BlockHeader) {
+    return this.logsByBlock.get(block.number) ?? [];
+  }
+  async drawSnapshot(): ReturnType<RpcSource["drawSnapshot"]> {
+    throw new Error("unexpected draw snapshot");
+  }
   async membershipRoot(block: BlockHeader) {
     const updates = [...this.logsByBlock.entries()]
       .filter(([number]) => number <= block.number)
       .flatMap(([, logs]) => logs)
-      .filter((log) => log.name === "NodeUpdated" && log.args.level === String(this.namespace.depth));
+      .filter(
+        (log) => log.name === "NodeUpdated" && log.args.level === String(this.namespace.depth),
+      );
     const update = updates.at(-1);
-    return update ? { hash: update.args.hash, sum: update.args.sum } : { hash: this.namespace.emptyHashes[this.namespace.depth], sum: zero };
+    return update
+      ? { hash: update.args.hash, sum: update.args.sum }
+      : { hash: this.namespace.emptyHashes[this.namespace.depth], sum: zero };
   }
 }
 
@@ -104,6 +126,7 @@ test("backfill builds an absent SQLite archive through the exact fixed target", 
   assert.equal(result.checkpoint.lastFinalizedBlock, 4);
   assert.equal(result.checkpoint.lastFinalizedHash, chain[4].hash);
   assert.equal(existsSync(output), true);
+  assert.equal(statSync(output).mode & 0o777, 0o600);
   assert.equal(rpc.calls.includes(5), false);
   const db = new DatabaseSync(output, { readOnly: true });
   const archive = new D1Archive(new SqliteD1(db));
@@ -126,7 +149,16 @@ test("backfill never publishes a partial archive on a fixed-target reorg or no p
     };
     const output = join(directory, "reorg.sqlite");
     await assert.rejects(
-      () => runRpcBackfill({ namespace, target: { chainId: "11155111", number: 4, hash: chain[4].hash }, output, source: rpc, maxBlocksPerSlice: 2, maxSlices: 4, deadlineMs: 1_000 }),
+      () =>
+        runRpcBackfill({
+          namespace,
+          target: { chainId: "11155111", number: 4, hash: chain[4].hash },
+          output,
+          source: rpc,
+          maxBlocksPerSlice: 2,
+          maxSlices: 4,
+          deadlineMs: 1_000,
+        }),
       /target canonicality changed/,
     );
     assert.equal(existsSync(output), false);
@@ -135,7 +167,16 @@ test("backfill never publishes a partial archive on a fixed-target reorg or no p
     const rpc = new FixtureRpc(chain, new Map(), namespace, "11155111", chain[1]);
     const output = join(directory, "lagging.sqlite");
     await assert.rejects(
-      () => runRpcBackfill({ namespace, target: { chainId: "11155111", number: 4, hash: chain[4].hash }, output, source: rpc, maxBlocksPerSlice: 2, maxSlices: 4, deadlineMs: 1_000 }),
+      () =>
+        runRpcBackfill({
+          namespace,
+          target: { chainId: "11155111", number: 4, hash: chain[4].hash },
+          output,
+          source: rpc,
+          maxBlocksPerSlice: 2,
+          maxSlices: 4,
+          deadlineMs: 1_000,
+        }),
       /target is not confirmed/,
     );
     assert.equal(existsSync(output), false);
@@ -149,10 +190,40 @@ test("backfill rejects an existing output without changing it", async () => {
   const namespace = namespaceAtTwo();
   const chain = headers(4);
   await assert.rejects(
-    () => runRpcBackfill({ namespace, target: { chainId: "11155111", number: 4, hash: chain[4].hash }, output, source: new FixtureRpc(chain, new Map(), namespace), maxBlocksPerSlice: 2, maxSlices: 4, deadlineMs: 1_000 }),
+    () =>
+      runRpcBackfill({
+        namespace,
+        target: { chainId: "11155111", number: 4, hash: chain[4].hash },
+        output,
+        source: new FixtureRpc(chain, new Map(), namespace),
+        maxBlocksPerSlice: 2,
+        maxSlices: 4,
+        deadlineMs: 1_000,
+      }),
     /output already exists/,
   );
   assert.equal(readFileSync(output, "utf8"), "leave-me");
+});
+
+test("backfill rejects an unsupported deployment-zero namespace before creating output", async () => {
+  const directory = mkdtempSync("/tmp/kettigo-rpc-backfill-zero-");
+  const namespace = { ...namespaceAtTwo(), deploymentBlock: 0 };
+  const chain = headers(4);
+  const output = join(directory, "zero.sqlite");
+  await assert.rejects(
+    () =>
+      runRpcBackfill({
+        namespace,
+        target: { chainId: "11155111", number: 4, hash: chain[4].hash },
+        output,
+        source: new FixtureRpc(chain, new Map(), namespace),
+        maxBlocksPerSlice: 2,
+        maxSlices: 4,
+        deadlineMs: 1_000,
+      }),
+    /deployment block zero is unsupported/,
+  );
+  assert.equal(existsSync(output), false);
 });
 
 test("native SQLite restart repairs the only legacy scheduler interruption shape", async () => {
@@ -204,7 +275,9 @@ test("backfill pins a fallback source when the primary is pruned and aborts disa
   });
   await t.test("fallback", async () => {
     const primary = new FixtureRpc(chain, new Map(), namespace);
-    primary.logs = async () => { throw new Error("pruned primary"); };
+    primary.logs = async () => {
+      throw new Error("pruned primary");
+    };
     const fallback = new FixtureRpc(chain, new Map(), namespace);
     const rpc = new FallbackRpc(primary, fallback, namespace);
     const output = join(directory, "fallback.sqlite");
@@ -221,8 +294,7 @@ test("backfill pins a fallback source when the primary is pruned and aborts disa
   });
   await t.test("deadline", async () => {
     const source = new FixtureRpc(chain, new Map(), namespace);
-    source.finalizedHead = async (signal) =>
-      new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    source.finalizedHead = async () => new Promise(() => undefined);
     const output = join(directory, "deadline.sqlite");
     await assert.rejects(() => runRpcBackfill(options(output, source, 5)), /deadline exceeded/);
     assert.equal(existsSync(output), false);
@@ -246,11 +318,33 @@ test("CLI rejects malformed inputs and existing output without contacting an RPC
       stdio: "pipe",
     });
   assert.throws(
-    () => run(namespace, target, join(directory, "missing.sqlite"), "--deadline-ms", "1", "--max-slices", "1"),
+    () =>
+      run(
+        namespace,
+        target,
+        join(directory, "missing.sqlite"),
+        "--confirmations",
+        "1",
+        "--deadline-ms",
+        "1",
+        "--max-slices",
+        "1",
+      ),
     /SyntaxError/,
   );
   assert.throws(
-    () => run(namespace, target, output, "--deadline-ms", "1", "--max-slices", "1"),
+    () =>
+      run(
+        namespace,
+        target,
+        output,
+        "--confirmations",
+        "1",
+        "--deadline-ms",
+        "1",
+        "--max-slices",
+        "1",
+      ),
     /backfill output already exists/,
   );
   assert.equal(readFileSync(output, "utf8"), "leave-me");

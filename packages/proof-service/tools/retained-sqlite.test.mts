@@ -8,7 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { constants, DatabaseSync } from "node:sqlite";
 import { D1Archive } from "../src/archive.ts";
-import { branchHash, leafHash } from "../src/domain.ts";
+import { branchHash, leafHash, type ArchiveLog } from "../src/domain.ts";
 import { account, depth32Fixture, otherAccount, zero } from "../tests/fixtures.ts";
 import {
   SqliteD1,
@@ -43,7 +43,7 @@ async function sourceArchive(path: string) {
   ]);
   // Full exit/reuse/rejoin with real node transitions and a second draw.
   const second = { number: 2, hash: hex(2), parentHash: fixture.block.hash };
-  const logs = [
+  const logs: ArchiveLog[] = [
     {
       blockNumber: 2,
       blockHash: second.hash,
@@ -383,7 +383,7 @@ test("native SQLite adapter returns SELECT batches and rolls back stale CAS and 
   const adapter = new SqliteD1(db);
   db.exec("CREATE TABLE sample(value INTEGER UNIQUE)");
   await adapter.batch([adapter.prepare("INSERT INTO sample VALUES(?)").bind(1)]);
-  const selected = await adapter.batch([
+  const selected = await adapter.batch<Record<string, unknown>>([
     adapter.prepare("SELECT value FROM sample WHERE value=?").bind(1),
   ]);
   assert.deepEqual(
@@ -482,7 +482,11 @@ test("WAL SQL snapshot stays on the pre-commit checkpoint during a concurrent wr
   ).prepare = function (sql: string) {
     const statement = originalPrepare.call(this, sql);
     if (this !== writer && sql.includes("FROM ingestion_state"))
-      this.setAuthorizer((action, arg1) => {
+      (
+        this as unknown as {
+          setAuthorizer(callback: (action: number, arg1: string | null) => number): void;
+        }
+      ).setAuthorizer((action: number, arg1: string | null) => {
         if (!committed && action === constants.SQLITE_READ && arg1 === "ingestion_state") {
           committed = true;
           writer.exec(

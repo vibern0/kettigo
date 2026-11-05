@@ -85,12 +85,10 @@ describe("finalized RPC ingestion", () => {
     const parent = header(0, "a");
     const archive = new D1Archive(env.PROOF_DB);
     // Exact old interruption shape: namespace and state existed, but no parent anchor.
-    await env.PROOF_DB
-      .prepare("INSERT INTO namespaces VALUES(?,?,?,?,?,?)")
+    await env.PROOF_DB.prepare("INSERT INTO namespaces VALUES(?,?,?,?,?,?)")
       .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock)
       .run();
-    await env.PROOF_DB
-      .prepare("INSERT INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
+    await env.PROOF_DB.prepare("INSERT INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
       .bind(n.chainId, n.pool, n.deploymentBlock, 0, parent.hash, 0, null, new Date().toISOString())
       .run();
 
