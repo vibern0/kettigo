@@ -2,7 +2,13 @@ import { Transaction, getAddress, isAddress, keccak256 } from "ethers";
 
 const CHAIN_ID = 11155111;
 const ZERO = "0x";
-const FORBIDDEN_POOL_TARGETS = new Set([getAddress("0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27")]);
+const FORBIDDEN_POOL_TARGETS = new Set(
+  [
+    "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b",
+    "0x9c23E5f7143612dc1232FC643A57300291e0d719",
+    "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27",
+  ].map((address) => getAddress(address)),
+);
 const fail = (message) => {
   throw new Error(`candidate EOA sender: ${message}`);
 };
@@ -17,6 +23,13 @@ const asBigInt = (value, label) => {
 };
 const sameAddress = (left, right) => getAddress(left) === getAddress(right);
 const errorText = (error) => String(error?.message ?? error).slice(0, 2048);
+const reservationIdentity = (request) =>
+  JSON.stringify({
+    unsignedDigest: transactionDigest(request),
+    offeredAt: request.offeredAt,
+    fundingWei: request.value.toString(),
+    usdcCommitment: request.usdcCommitment,
+  });
 
 function normalizedTarget(to) {
   if (to === null) return null;
@@ -97,13 +110,16 @@ export class DurableEoaSender {
     this.#assertTarget(normalized);
     const existing = this.inflight.get(normalized.intentId);
     if (existing) {
-      if (existing.digest !== transactionDigest(normalized))
+      if (existing.reservation !== reservationIdentity(normalized))
         fail("duplicate intent has different unsigned request");
       return existing.operation;
     }
     const operation = this.actorTail.then(() => this.#submit(normalized));
     this.actorTail = operation.catch(() => {});
-    this.inflight.set(normalized.intentId, { digest: transactionDigest(normalized), operation });
+    this.inflight.set(normalized.intentId, {
+      reservation: reservationIdentity(normalized),
+      operation,
+    });
     try {
       return await operation;
     } finally {

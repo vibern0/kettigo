@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +14,10 @@ const SENDER = getAddress(wallet.address);
 const TARGET = getAddress("0x2222222222222222222222222222222222222222");
 const secondTarget = getAddress("0x3333333333333333333333333333333333333333");
 const CANARY = getAddress("0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27");
+const LEGACY_POOLS = [
+  getAddress("0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b"),
+  getAddress("0x9c23E5f7143612dc1232FC643A57300291e0d719"),
+];
 
 class FakeProvider {
   constructor() {
@@ -289,6 +294,22 @@ test("1 unresolved actor work blocks a fresh sender, while 6 conflicting in-flig
   );
   await assert.rejects(duplicate, /unresolved/);
   await j.close();
+  const fresh = await journal();
+  let releaseAddress;
+  const delayed = sender(fresh, new FakeProvider(), {
+    signer: {
+      getAddress: () =>
+        new Promise((resolve) => {
+          releaseAddress = resolve;
+        }),
+      signTransaction: wallet.signTransaction.bind(wallet),
+    },
+  });
+  const pending = delayed.submit(request());
+  await assert.rejects(delayed.submit(request({ usdcCommitment: "1" })), /different/);
+  releaseAddress(wallet.address);
+  await pending;
+  await fresh.close();
 });
 
 test("3 lower or unknown resume nonce aborts, while 9 exact known pending does not rebroadcast", async () => {
@@ -364,7 +385,10 @@ test("2 signer lookup and 10 post-attempt deadline changes result in zero signat
     usdcCommitment: "0",
   });
   await j2.saveSigned("attempt-only", "0x0001", "0x" + "02".repeat(32));
-  now += ORIGINAL_ENVELOPE.durationMs;
+  j2.now = () => {
+    const persisted = JSON.parse(readFileSync(join(j2.directory, "journal.json"), "utf8"));
+    return persisted.intents[0].attempts.length ? 1000 + ORIGINAL_ENVELOPE.durationMs : 1000;
+  };
   await assert.rejects(
     j2.attemptWithPermit("attempt-only", () => provider.sendRawTransaction("0x0001")),
     /deadline/,
@@ -382,9 +406,10 @@ test("positive value cannot bypass the funding cap and USDC commitment is explic
     /funding must equal/,
   );
   await assert.rejects(s.submit({ ...request(), usdcCommitment: undefined }), /explicit USDC/);
-  await assert.rejects(
-    sender(j, provider, { targets: [TARGET, CANARY] }).submit(request({ to: CANARY })),
-    /forbidden/,
-  );
+  for (const target of [...LEGACY_POOLS, CANARY])
+    await assert.rejects(
+      sender(j, provider, { targets: [TARGET, target] }).submit(request({ to: target })),
+      /forbidden/,
+    );
   await j.close();
 });
