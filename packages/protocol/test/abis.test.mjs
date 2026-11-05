@@ -19,6 +19,93 @@ function has(abi, type, name) {
   return abi.some((item) => item.type === type && item.name === name);
 }
 
+const poolFunctionSurface = [
+  "PRIZE_FUNDING_DATA",
+  "token",
+  "morphoYieldAdapter",
+  "drawId",
+  "drawInterval",
+  "nextDrawAt",
+  "participantCount",
+  "publicPrizeReserve",
+  "MAX_USER_PRINCIPAL",
+  "morphoAvailablePrincipalAssets",
+  "morphoAccruedYieldAssets",
+  "morphoPendingDepositCount",
+  "lastMorphoUnwrapAt",
+  "morphoUnwrapInterval",
+  "encryptedTotalPrincipal",
+  "encryptedPrizeReserve",
+  "encryptedPendingMorphoPrincipal",
+  "encryptedPrincipalOf",
+  "encryptedWinningsOf",
+  "currentWithdrawalBatchId",
+  "withdrawalAccounts",
+  "withdrawalUnwrapRequest",
+  "withdrawalBatchStatus",
+  "withdrawalBatchClosesAt",
+  "withdrawalBatchFunded",
+  "withdrawalBatchRestoredAmount",
+  "withdrawalBatchRequestCount",
+  "withdrawalBatchClaimantCount",
+  "hasWithdrawalClaim",
+  "encryptedWithdrawalBatchTotal",
+  "encryptedWithdrawalBatchMorphoRestore",
+  "closeDraw",
+  "claimPrize",
+  "claimPrizeToSavings",
+  "requestWithdrawal",
+  "claimWithdrawalToUsdc",
+  "closeWithdrawalBatch",
+  "settleWithdrawalBatch",
+  "processWithdrawal",
+  "supplyAvailableMorphoPrincipal",
+  "requestMorphoPrincipalUnwrap",
+  "membershipTreeDepth",
+  "membershipZero",
+  "emptyHash",
+  "membershipNode",
+  "checked",
+  "checkPrize",
+  "pendingAdmissionOf",
+  "finalizeAdmission",
+  "membershipIndexOf",
+  "encryptedAwardOf",
+];
+const poolEventSurface = [
+  "DrawSnapshotClosed",
+  "PrizeChecked",
+  "SlotAssigned",
+  "SlotReleased",
+  "NodeUpdated",
+];
+const wrapperFunctionSurface = [
+  "wrap",
+  "confidentialBalanceOf",
+  "confidentialTransferAndCall",
+  "unwrap",
+  "finalizeUnwrap",
+  "unwrapRequester",
+  "multicall",
+];
+const adapterFunctionSurface = [
+  "usdc",
+  "confidentialUsdc",
+  "prizePool",
+  "morpho",
+  "marketId",
+  "suppliedPrincipal",
+  "idlePrincipal",
+  "availablePrincipalAssets",
+  "accruedYieldAssets",
+  "suppliedAssets",
+  "marketParams",
+];
+
+function assertSurface(abi, type, names) {
+  for (const name of names) assert.equal(has(abi, type, name), true, name);
+}
+
 test("official Morpho ABIs expose every shared read and write", () => {
   for (const name of [
     "market",
@@ -39,100 +126,13 @@ test("official Morpho ABIs expose every shared read and write", () => {
 });
 
 test("custom ABIs contain the union consumed by the web app, keepers, and lab", () => {
-  for (const name of [
-    "PRIZE_FUNDING_DATA",
-    "token",
-    "morphoYieldAdapter",
-    "drawId",
-    "drawInterval",
-    "nextDrawAt",
-    "participantCount",
-    "publicPrizeReserve",
-    "MAX_USER_PRINCIPAL",
-    "morphoAvailablePrincipalAssets",
-    "morphoAccruedYieldAssets",
-    "morphoPendingDepositCount",
-    "lastMorphoUnwrapAt",
-    "morphoUnwrapInterval",
-    "encryptedTotalPrincipal",
-    "encryptedPrizeReserve",
-    "encryptedPendingMorphoPrincipal",
-    "encryptedPrincipalOf",
-    "encryptedWinningsOf",
-    "currentWithdrawalBatchId",
-    "withdrawalAccounts",
-    "withdrawalUnwrapRequest",
-    "withdrawalBatchStatus",
-    "withdrawalBatchClosesAt",
-    "withdrawalBatchFunded",
-    "withdrawalBatchRestoredAmount",
-    "withdrawalBatchRequestCount",
-    "withdrawalBatchClaimantCount",
-    "hasWithdrawalClaim",
-    "encryptedWithdrawalBatchTotal",
-    "encryptedWithdrawalBatchMorphoRestore",
-    "closeDraw",
-    "claimPrize",
-    "claimPrizeToSavings",
-    "requestWithdrawal",
-    "claimWithdrawalToUsdc",
-    "closeWithdrawalBatch",
-    "settleWithdrawalBatch",
-    "processWithdrawal",
-    "supplyAvailableMorphoPrincipal",
-    "requestMorphoPrincipalUnwrap",
-    "membershipTreeDepth",
-    "membershipZero",
-    "emptyHash",
-    "membershipNode",
-    "checked",
-    "checkPrize",
-    "pendingAdmissionOf",
-    "finalizeAdmission",
-    "membershipIndexOf",
-    "encryptedAwardOf",
-  ])
-    assert.equal(has(confidentialPrizePoolAbi, "function", name), true, name);
-
-  for (const name of [
-    "DrawSnapshotClosed",
-    "PrizeChecked",
-    "SlotAssigned",
-    "SlotReleased",
-    "NodeUpdated",
-  ]) {
-    assert.equal(has(confidentialPrizePoolAbi, "event", name), true, name);
-  }
-
-  for (const name of [
-    "wrap",
-    "confidentialBalanceOf",
-    "confidentialTransferAndCall",
-    "unwrap",
-    "finalizeUnwrap",
-    "unwrapRequester",
-    "multicall",
-  ]) {
-    assert.equal(has(confidentialUsdcAbi, "function", name), true, name);
-  }
+  assertSurface(confidentialPrizePoolAbi, "function", poolFunctionSurface);
+  assertSurface(confidentialPrizePoolAbi, "event", poolEventSurface);
+  assertSurface(confidentialUsdcAbi, "function", wrapperFunctionSurface);
   assert.equal(has(confidentialUsdcAbi, "event", "UnwrapRequested"), true);
   assert.equal(has(confidentialUsdcAbi, "event", "UnwrapFinalized"), true);
 
-  for (const name of [
-    "usdc",
-    "confidentialUsdc",
-    "prizePool",
-    "morpho",
-    "marketId",
-    "suppliedPrincipal",
-    "idlePrincipal",
-    "availablePrincipalAssets",
-    "accruedYieldAssets",
-    "suppliedAssets",
-    "marketParams",
-  ]) {
-    assert.equal(has(morphoYieldAdapterAbi, "function", name), true, name);
-  }
+  assertSurface(morphoYieldAdapterAbi, "function", adapterFunctionSurface);
 });
 
 test("token and event exports come from the canonical ABI surfaces", () => {
