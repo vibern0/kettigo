@@ -62,7 +62,12 @@ class SmartAccountZamaSigner implements GenericSigner {
   }
 
   requireWalletAccount() {
-    return this.walletAccount.getSnapshot() ?? { address: getAddress(this.session.address), chainId: sepolia.id };
+    return (
+      this.walletAccount.getSnapshot() ?? {
+        address: getAddress(this.session.address),
+        chainId: sepolia.id,
+      }
+    );
   }
 
   signTypedData(typedData: EIP712TypedData) {
@@ -70,11 +75,13 @@ class SmartAccountZamaSigner implements GenericSigner {
   }
 
   writeContract(config: any) {
-    return this.session.sendTransaction([{
+    return this.session.sendTransaction([
+      {
         to: getAddress(config.address),
         data: encodeFunctionData(config as any),
         value: config.value,
-      }]) as Promise<ZamaHex>;
+      },
+    ]) as Promise<ZamaHex>;
   }
 }
 
@@ -88,10 +95,12 @@ class ReadSessionZamaSigner implements GenericSigner {
   }
 
   requireWalletAccount() {
-    return this.walletAccount.getSnapshot() ?? {
-      address: getAddress(this.#account.address),
-      chainId: sepolia.id,
-    };
+    return (
+      this.walletAccount.getSnapshot() ?? {
+        address: getAddress(this.#account.address),
+        chainId: sepolia.id,
+      }
+    );
   }
 
   signTypedData(typedData: EIP712TypedData) {
@@ -121,8 +130,8 @@ function configFor(signer?: GenericSigner): ZamaConfig {
   });
 }
 
-const smartZamaSessions = createZamaSessionManager((session: PasskeySmartSession) =>
-  new ZamaSDK(configFor(new SmartAccountZamaSigner(session))),
+const smartZamaSessions = createZamaSessionManager(
+  (session: PasskeySmartSession) => new ZamaSDK(configFor(new SmartAccountZamaSigner(session))),
 );
 
 function browserStorage() {
@@ -142,43 +151,41 @@ async function readSessionDelegationCalls(
   const delegate = getAddress(key.address);
   const expiration = BigInt(Math.floor(key.expiresAtMs / 1_000));
   const uniqueContracts = [...new Set(contracts.map((address) => getAddress(address)))];
-  const delegationStates = await Promise.all(uniqueContracts.map(async (contractAddress) => ({
-    contractAddress,
-    currentExpiration: await publicClient.readContract(getDelegationExpiryContract(
-      acl,
-      delegator,
-      delegate,
+  const delegationStates = await Promise.all(
+    uniqueContracts.map(async (contractAddress) => ({
       contractAddress,
-    )),
-  })));
+      currentExpiration: await publicClient.readContract(
+        getDelegationExpiryContract(acl, delegator, delegate, contractAddress),
+      ),
+    })),
+  );
   const calls = delegationStates.flatMap(({ contractAddress, currentExpiration }) => {
     if (currentExpiration >= expiration) return [];
-    const config = delegateForUserDecryptionContract(
-      acl,
-      delegate,
-      contractAddress,
-      expiration,
-    );
-    return [{
-      to: acl,
-      data: encodeFunctionData(config),
-    }];
+    const config = delegateForUserDecryptionContract(acl, delegate, contractAddress, expiration);
+    return [
+      {
+        to: acl,
+        data: encodeFunctionData(config),
+      },
+    ];
   });
 
   return calls;
 }
 
-async function ensureReadSessionDelegated(session: PasskeySmartSession, key: ZamaReadSessionKey, contracts: Address[]) {
+async function ensureReadSessionDelegated(
+  session: PasskeySmartSession,
+  key: ZamaReadSessionKey,
+  contracts: Address[],
+) {
   const calls = await readSessionDelegationCalls(session, key, contracts);
   if (calls.length > 0) await session.sendTransaction(calls);
 }
 
 const delegatedZamaSessions = createDelegatedZamaSessionManager({
   async loadSessionKey(session: PasskeySmartSession) {
-    return loadZamaReadSessionKey(
-      browserStorage(),
-      session.address,
-      (privateKey) => getAddress(privateKeyToAccount(privateKey).address),
+    return loadZamaReadSessionKey(browserStorage(), session.address, (privateKey) =>
+      getAddress(privateKeyToAccount(privateKey).address),
     );
   },
   async createSessionKey(session: PasskeySmartSession) {
@@ -213,6 +220,11 @@ export function clearValueToBigInt(value: unknown) {
   if (typeof value === "number") return BigInt(value);
   if (typeof value === "string") return BigInt(value);
   throw new Error("Reveal result is unavailable.");
+}
+
+export function clearValueToBoolean(value: unknown) {
+  if (typeof value !== "boolean") throw new Error("Reveal result is not a boolean.");
+  return value;
 }
 
 function decryptedValueForHandle(values: Record<string, unknown>, handle: Hex) {
@@ -277,10 +289,7 @@ export async function prepareSmartReadSession(session: PasskeySmartSession) {
 }
 
 export async function clearSmartZamaSession(session: PasskeySmartSession) {
-  await Promise.all([
-    smartZamaSessions.clear(session),
-    delegatedZamaSessions.clear(session),
-  ]);
+  await Promise.all([smartZamaSessions.clear(session), delegatedZamaSessions.clear(session)]);
   removeZamaReadSessionKey(browserStorage(), session.address);
 }
 
@@ -302,17 +311,15 @@ export async function encryptUint64(
   };
 }
 
-export async function decryptUint64(
-  sdk: ZamaSDK,
-  handle: Hex,
-  contractAddress: Address,
-) {
+export async function decryptUint64(sdk: ZamaSDK, handle: Hex, contractAddress: Address) {
   if (isZeroEncryptedHandle(handle)) return 0n;
 
-  const result = await sdk.decryption.decryptValues([{
-    encryptedValue: handle,
-    contractAddress: getAddress(contractAddress),
-  }]);
+  const result = await sdk.decryption.decryptValues([
+    {
+      encryptedValue: handle,
+      contractAddress: getAddress(contractAddress),
+    },
+  ]);
 
   return clearValueToBigInt(decryptedValueForHandle(result, handle));
 }
@@ -324,22 +331,40 @@ export async function decryptSmartUint64(
 ) {
   if (isZeroEncryptedHandle(handle)) return 0n;
 
-  const result = await decryptWithSmartReadSession(session, [{
-    encryptedValue: handle,
-    contractAddress: getAddress(contractAddress),
-  }]);
+  const result = await decryptWithSmartReadSession(session, [
+    {
+      encryptedValue: handle,
+      contractAddress: getAddress(contractAddress),
+    },
+  ]);
   return clearValueToBigInt(decryptedValueForHandle(result, handle));
 }
 
 export async function decryptPublicUint64(sdk: ZamaSDK, handle: Hex) {
-  const decrypted = await sdk.decryption.decryptPublicValues([handle], { timeout: DEFAULT_TIMEOUT_MS });
+  const decrypted = await sdk.decryption.decryptPublicValues([handle], {
+    timeout: DEFAULT_TIMEOUT_MS,
+  });
   const clearValue = decryptedValueForHandle(decrypted.clearValues, handle);
-  if (typeof clearValue !== "bigint" && typeof clearValue !== "number" && typeof clearValue !== "string") {
+  if (
+    typeof clearValue !== "bigint" &&
+    typeof clearValue !== "number" &&
+    typeof clearValue !== "string"
+  ) {
     throw new Error("Reveal result is unavailable.");
   }
 
   return {
     clearValue: clearValueToBigInt(clearValue),
+    decryptionProof: decrypted.decryptionProof as Hex,
+  };
+}
+
+export async function decryptPublicBoolean(sdk: ZamaSDK, handle: Hex) {
+  const decrypted = await sdk.decryption.decryptPublicValues([handle], {
+    timeout: DEFAULT_TIMEOUT_MS,
+  });
+  return {
+    clearValue: clearValueToBoolean(decryptedValueForHandle(decrypted.clearValues, handle)),
     decryptionProof: decrypted.decryptionProof as Hex,
   };
 }
