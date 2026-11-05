@@ -192,27 +192,30 @@ function validRoute(requestRoute: Route, n: Namespace) {
       uint(requestRoute.drawId, 256, "draw id") === requestRoute.drawId)
   );
 }
+type ListRequest = { limit: number; cursor?: string };
+function listRequest(url: URL): ListRequest | undefined {
+  const limit = Number(url.searchParams.get("limit") ?? "20");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return;
+  const cursor = url.searchParams.get("cursor") ?? undefined;
+  if (cursor !== undefined && uint(cursor, 256, "cursor") !== cursor) return;
+  return { limit, cursor };
+}
 async function listDraws(
   archive: D1Archive,
   n: Namespace,
-  url: URL,
+  request: ListRequest,
   env: Env,
   headers: HeadersInit,
 ) {
-  const limit = Number(url.searchParams.get("limit") ?? "20");
-  const cursor = url.searchParams.get("cursor") ?? undefined;
-  if (
-    !Number.isSafeInteger(limit) ||
-    limit < 1 ||
-    limit > 100 ||
-    (cursor !== undefined && uint(cursor, 256, "cursor") !== cursor)
-  )
-    return response({ outcome: "HISTORY_UNAVAILABLE" }, 400, headers);
   await archive.assertNamespace(n);
   const state = await archive.status(n);
   if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
   await authenticateCheckpoint(state, env, n);
-  return response({ draws: await archive.listDraws(n, cursor, limit) }, 200, headers);
+  return response(
+    { draws: await archive.listDraws(n, request.cursor, request.limit) },
+    200,
+    headers,
+  );
 }
 async function proofForRoute(
   archive: D1Archive,
@@ -234,10 +237,13 @@ async function proofResponse(url: URL, env: Env, n: Namespace, headers: HeadersI
   const requestRoute = route(url.pathname);
   if (!requestRoute || !validRoute(requestRoute, n))
     return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
+  if (!requestRoute.drawId) {
+    const request = listRequest(url);
+    if (!request) return response({ outcome: "HISTORY_UNAVAILABLE" }, 400, headers);
+    return listDraws(new D1Archive(primary(env.PROOF_DB)), n, request, env, headers);
+  }
   const archive = new D1Archive(primary(env.PROOF_DB));
-  return requestRoute.drawId
-    ? proofForRoute(archive, n, requestRoute, env, headers)
-    : listDraws(archive, n, url, env, headers);
+  return proofForRoute(archive, n, requestRoute, env, headers);
 }
 
 export async function handle(request: Request, env: Env): Promise<Response> {

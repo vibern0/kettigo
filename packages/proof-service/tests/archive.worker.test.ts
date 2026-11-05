@@ -76,7 +76,8 @@ function fixture(depth = 32): { n: Namespace; logs: ArchiveLog[]; root: string }
 }
 
 describe("D1 proof archive", () => {
-  it("rejects immutable namespace differences", async () => {
+  it("rejects immutable namespace differences", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const a = new D1Archive(env.PROOF_DB);
     const n = ns();
     await a.initialize(n);
@@ -85,55 +86,66 @@ describe("D1 proof archive", () => {
       "namespace mismatch",
     );
   });
-  it("builds and verifies a genuine depth-32 historical proof in D1", async () => {
-    const a = new D1Archive(env.PROOF_DB);
-    const { namespace: n, logs, root, block } = depth32Fixture();
-    await a.initialize(n);
-    await a.ingest(n, await a.status(n), [...logs].reverse(), [block]);
-    const proof = await a.proof(n, "1", account);
-    expect(proof?.rootHash).toBe(root);
-    expect(proof?.siblingHashes).toHaveLength(32);
-    expect(proof?.generation).toBe("1");
-  });
-  it("keeps the close-time owner and generation through same-block release, reassignment, and rejoin", async () => {
-    const a = new D1Archive(env.PROOF_DB);
-    const { namespace: n, logs, block } = depth32Fixture();
-    logs.push(
-      {
-        blockNumber: 1,
-        blockHash: block.hash,
-        logIndex: 35,
-        name: "SlotReleased",
-        args: { account, index: "0", generation: "1" },
-      },
-      {
-        blockNumber: 1,
-        blockHash: block.hash,
-        logIndex: 36,
-        name: "SlotAssigned",
-        args: { account: otherAccount, index: "0", generation: "2" },
-      },
-      {
-        blockNumber: 1,
-        blockHash: block.hash,
-        logIndex: 37,
-        name: "SlotReleased",
-        args: { account: otherAccount, index: "0", generation: "2" },
-      },
-      {
-        blockNumber: 1,
-        blockHash: block.hash,
-        logIndex: 38,
-        name: "SlotAssigned",
-        args: { account, index: "0", generation: "3" },
-      },
-    );
-    await a.initialize(n);
-    await a.ingest(n, await a.status(n), logs, [block]);
-    expect(await a.proof(n, "1", account)).toMatchObject({ account, generation: "1" });
-    await expect(a.proof(n, "1", otherAccount)).resolves.toBeNull();
-  });
-  it("fails closed when a required historical node is missing", async () => {
+  it(
+    "builds and verifies a genuine depth-32 historical proof in D1",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const a = new D1Archive(env.PROOF_DB);
+      const { namespace: n, logs, root, block } = depth32Fixture();
+      await a.initialize(n);
+      await a.ingest(n, await a.status(n), [...logs].reverse(), [block]);
+      const proof = await a.proof(n, "1", account);
+      expect(proof?.rootHash).toBe(root);
+      expect(proof?.siblingHashes).toHaveLength(32);
+      expect(proof?.generation).toBe("1");
+    },
+  );
+  it(
+    "keeps the close-time owner and generation through same-block release, reassignment, and rejoin",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const a = new D1Archive(env.PROOF_DB);
+      const { namespace: n, logs, block } = depth32Fixture();
+      logs.push(
+        {
+          blockNumber: 1,
+          blockHash: block.hash,
+          logIndex: 35,
+          name: "SlotReleased",
+          args: { account, index: "0", generation: "1" },
+        },
+        {
+          blockNumber: 1,
+          blockHash: block.hash,
+          logIndex: 36,
+          name: "SlotAssigned",
+          args: { account: otherAccount, index: "0", generation: "2" },
+        },
+        {
+          blockNumber: 1,
+          blockHash: block.hash,
+          logIndex: 37,
+          name: "SlotReleased",
+          args: { account: otherAccount, index: "0", generation: "2" },
+        },
+        {
+          blockNumber: 1,
+          blockHash: block.hash,
+          logIndex: 38,
+          name: "SlotAssigned",
+          args: { account, index: "0", generation: "3" },
+        },
+      );
+      await a.initialize(n);
+      await a.ingest(n, await a.status(n), logs, [block]);
+      expect(await a.proof(n, "1", account)).toMatchObject({ account, generation: "1" });
+      await expect(a.proof(n, "1", otherAccount)).resolves.toBeNull();
+    },
+  );
+  it("fails closed when a required historical node is missing", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const a = new D1Archive(env.PROOF_DB);
     const { namespace: n, logs, block } = depth32Fixture();
     await a.initialize(n);
@@ -145,7 +157,8 @@ describe("D1 proof archive", () => {
     );
     await expect(a.proof(n, "1", account)).rejects.toThrow("node history unavailable");
   });
-  it("fails closed when an indexed historical node is corrupted", async () => {
+  it("fails closed when an indexed historical node is corrupted", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const a = new D1Archive(env.PROOF_DB);
     const { namespace: n, logs, block } = depth32Fixture();
     await a.initialize(n);
@@ -158,33 +171,44 @@ describe("D1 proof archive", () => {
     expect(mutation.meta.changes).toBe(1);
     await expect(a.proof(n, "1", account)).rejects.toThrow("parent mismatch");
   });
-  it("rejects a closed draw whose assigned range cannot contain its slot", async () => {
-    const a = new D1Archive(env.PROOF_DB);
-    const { n, logs } = fixture(1);
-    logs.at(-1)!.args.upperBound = "0";
-    await a.initialize(n);
-    await expect(a.ingest(n, await a.status(n), logs, [header()])).rejects.toThrow(
-      "invalid draw upper bound",
-    );
-  });
-  it("deduplicates exact logs and rejects conflicting payloads before writes", async () => {
-    const a = new D1Archive(env.PROOF_DB);
-    const { n, logs } = fixture(1);
-    await a.initialize(n);
-    await a.ingest(n, await a.status(n), [logs[0], logs[0], ...logs.slice(1)], [header()]);
-    const base = { ...logs[0], blockNumber: 2, logIndex: 0 };
-    const h2 = { number: 2, hash: `0x${"22".repeat(32)}`, parentHash: header().hash };
-    await expect(
-      a.ingest(
-        n,
-        await a.status(n),
-        [base, { ...base, args: { ...base.args, generation: "2" } }],
-        [h2],
-      ),
-    ).rejects.toThrow("conflicting log payload");
-    expect((await a.status(n)).nextBlock).toBe(2);
-  });
-  it("guards stale and unexpected revisions atomically", async () => {
+  it(
+    "rejects a closed draw whose assigned range cannot contain its slot",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const a = new D1Archive(env.PROOF_DB);
+      const { n, logs } = fixture(1);
+      logs.at(-1)!.args.upperBound = "0";
+      await a.initialize(n);
+      await expect(a.ingest(n, await a.status(n), logs, [header()])).rejects.toThrow(
+        "invalid draw upper bound",
+      );
+    },
+  );
+  it(
+    "deduplicates exact logs and rejects conflicting payloads before writes",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const a = new D1Archive(env.PROOF_DB);
+      const { n, logs } = fixture(1);
+      await a.initialize(n);
+      await a.ingest(n, await a.status(n), [logs[0], logs[0], ...logs.slice(1)], [header()]);
+      const base = { ...logs[0], blockNumber: 2, logIndex: 0 };
+      const h2 = { number: 2, hash: `0x${"22".repeat(32)}`, parentHash: header().hash };
+      await expect(
+        a.ingest(
+          n,
+          await a.status(n),
+          [base, { ...base, args: { ...base.args, generation: "2" } }],
+          [h2],
+        ),
+      ).rejects.toThrow("conflicting log payload");
+      expect((await a.status(n)).nextBlock).toBe(2);
+    },
+  );
+  it("guards stale and unexpected revisions atomically", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const a = new D1Archive(env.PROOF_DB);
     const n = ns();
     await a.initialize(n);
@@ -197,7 +221,8 @@ describe("D1 proof archive", () => {
     );
     expect(await a.status(n)).toMatchObject({ nextBlock: 2, revision: 1 });
   });
-  it("orders uint256 draw ids exactly", async () => {
+  it("orders uint256 draw ids exactly", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const a = new D1Archive(env.PROOF_DB);
     const n = ns();
     await a.initialize(n);
@@ -223,7 +248,8 @@ describe("D1 proof archive", () => {
     await a.ingest(n, await a.status(n), logs, [header()]);
     expect((await a.listDraws(n)).map((draw) => draw.drawId)).toEqual([...ids].reverse());
   });
-  it("rolls back and restores the preceding canonical hash", async () => {
+  it("rolls back and restores the preceding canonical hash", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const a = new D1Archive(env.PROOF_DB);
     const n = ns();
     await a.initialize(n);

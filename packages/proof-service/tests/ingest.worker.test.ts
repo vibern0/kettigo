@@ -67,67 +67,83 @@ class FixtureRpc implements RpcSource {
 }
 
 describe("finalized RPC ingestion", () => {
-  it("persists the real deployment-parent anchor for the first canonical header", async () => {
-    const n = namespace(),
-      archive = new D1Archive(env.PROOF_DB);
-    const anchor = `0x${"9".repeat(64)}`;
-    await archive.initialize(n, anchor);
-    const first = header(1, "1", anchor);
-    const state = await ingestOneSlice(archive, n, new FixtureRpc([first], [], n), 2);
-    expect(state.lastFinalizedHash).toBe(first.hash);
-    expect((await archive.canonicalBlock(n, 0))?.hash).toBe(anchor);
-  });
+  it(
+    "persists the real deployment-parent anchor for the first canonical header",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB);
+      const anchor = `0x${"9".repeat(64)}`;
+      await archive.initialize(n, anchor);
+      const first = header(1, "1", anchor);
+      const state = await ingestOneSlice(archive, n, new FixtureRpc([first], [], n), 2);
+      expect(state.lastFinalizedHash).toBe(first.hash);
+      expect((await archive.canonicalBlock(n, 0))?.hash).toBe(anchor);
+    },
+  );
 
-  it("checks the saved checkpoint before returning when the head has not advanced", async () => {
-    const n = namespace(),
-      archive = new D1Archive(env.PROOF_DB);
-    await archive.initialize(n);
-    const h1 = header(1, "1"),
-      h2 = header(2, "2", h1.hash),
-      h3 = header(3, "3", h2.hash);
-    await archive.ingest(n, await archive.status(n), [], [h1, h2, h3]);
-    const replacement2 = header(2, "a", h1.hash),
-      replacement3 = header(3, "b", replacement2.hash);
-    const state = await ingestOneSlice(
-      archive,
-      n,
-      new FixtureRpc([h1, replacement2, replacement3], [], n),
-      2,
-    );
-    expect(state).toMatchObject({
-      nextBlock: 2,
-      lastFinalizedBlock: 1,
-      lastFinalizedHash: h1.hash,
-    });
-  });
+  it(
+    "checks the saved checkpoint before returning when the head has not advanced",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB);
+      await archive.initialize(n);
+      const h1 = header(1, "1"),
+        h2 = header(2, "2", h1.hash),
+        h3 = header(3, "3", h2.hash);
+      await archive.ingest(n, await archive.status(n), [], [h1, h2, h3]);
+      const replacement2 = header(2, "a", h1.hash),
+        replacement3 = header(3, "b", replacement2.hash);
+      const state = await ingestOneSlice(
+        archive,
+        n,
+        new FixtureRpc([h1, replacement2, replacement3], [], n),
+        2,
+      );
+      expect(state).toMatchObject({
+        nextBlock: 2,
+        lastFinalizedBlock: 1,
+        lastFinalizedHash: h1.hash,
+      });
+    },
+  );
 
-  it("finds a multi-block common ancestor and atomically rolls back the orphaned suffix", async () => {
-    const n = namespace(),
-      archive = new D1Archive(env.PROOF_DB);
-    await archive.initialize(n);
-    const h1 = header(1, "1"),
-      h2 = header(2, "2", h1.hash),
-      h3 = header(3, "3", h2.hash),
-      h4 = header(4, "4", h3.hash);
-    await archive.ingest(n, await archive.status(n), [], [h1, h2, h3, h4]);
-    const canonical2 = header(2, "a", h1.hash),
-      canonical3 = header(3, "b", canonical2.hash),
-      canonical4 = header(4, "c", canonical3.hash);
-    const state = await ingestOneSlice(
-      archive,
-      n,
-      new FixtureRpc([h1, canonical2, canonical3, canonical4], [], n),
-      2,
-    );
-    expect(state).toMatchObject({
-      nextBlock: 2,
-      lastFinalizedBlock: 1,
-      lastFinalizedHash: h1.hash,
-    });
-    expect(await archive.canonicalBlock(n, 2)).toBeNull();
-  });
+  it(
+    "finds a multi-block common ancestor and atomically rolls back the orphaned suffix",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB);
+      await archive.initialize(n);
+      const h1 = header(1, "1"),
+        h2 = header(2, "2", h1.hash),
+        h3 = header(3, "3", h2.hash),
+        h4 = header(4, "4", h3.hash);
+      await archive.ingest(n, await archive.status(n), [], [h1, h2, h3, h4]);
+      const canonical2 = header(2, "a", h1.hash),
+        canonical3 = header(3, "b", canonical2.hash),
+        canonical4 = header(4, "c", canonical3.hash);
+      const state = await ingestOneSlice(
+        archive,
+        n,
+        new FixtureRpc([h1, canonical2, canonical3, canonical4], [], n),
+        2,
+      );
+      expect(state).toMatchObject({
+        nextBlock: 2,
+        lastFinalizedBlock: 1,
+        lastFinalizedHash: h1.hash,
+      });
+      expect(await archive.canonicalBlock(n, 2)).toBeNull();
+    },
+  );
 
-  it("keeps empty blocks in a complete bounded backfill", async () => {
+  it("keeps empty blocks in a complete bounded backfill", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const n = namespace(),
       archive = new D1Archive(env.PROOF_DB);
     await archive.initialize(n);
@@ -145,46 +161,66 @@ describe("finalized RPC ingestion", () => {
     expect((await archive.canonicalBlock(n, 2))?.hash).toBe(h2.hash);
   });
 
-  it("fails closed when the end-of-slice membership root proves an omitted transaction", async () => {
-    const n = namespace(),
-      archive = new D1Archive(env.PROOF_DB);
-    await archive.initialize(n);
-    const h1 = header(1, "1");
-    const rpc = new FixtureRpc([h1], [], n, { hash: `0x${"4".repeat(64)}`, sum: zero });
-    await expect(ingestOneSlice(archive, n, rpc, 2)).rejects.toThrow(
-      "onchain membership root mismatch",
-    );
-    expect((await archive.status(n)).nextBlock).toBe(1);
-  });
+  it(
+    "fails closed when the end-of-slice membership root proves an omitted transaction",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB);
+      await archive.initialize(n);
+      const h1 = header(1, "1");
+      const rpc = new FixtureRpc([h1], [], n, { hash: `0x${"4".repeat(64)}`, sum: zero });
+      await expect(ingestOneSlice(archive, n, rpc, 2)).rejects.toThrow(
+        "onchain membership root mismatch",
+      );
+      expect((await archive.status(n)).nextBlock).toBe(1);
+    },
+  );
 
-  it("does not mutate the archive when an operation is cancelled before ingestion", async () => {
-    const n = namespace(),
-      archive = new D1Archive(env.PROOF_DB),
-      controller = new AbortController();
-    await archive.initialize(n);
-    controller.abort(new Error("tick deadline exceeded"));
-    await expect(
-      ingestOneSlice(archive, n, new FixtureRpc([header(1, "1")], [], n), 2, controller.signal),
-    ).rejects.toThrow("tick deadline exceeded");
-    expect(await archive.status(n)).toMatchObject({ nextBlock: 1, lastFinalizedBlock: 0 });
-  });
+  it(
+    "does not mutate the archive when an operation is cancelled before ingestion",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB),
+        controller = new AbortController();
+      await archive.initialize(n);
+      controller.abort(new Error("tick deadline exceeded"));
+      await expect(
+        ingestOneSlice(archive, n, new FixtureRpc([header(1, "1")], [], n), 2, controller.signal),
+      ).rejects.toThrow("tick deadline exceeded");
+      expect(await archive.status(n)).toMatchObject({ nextBlock: 1, lastFinalizedBlock: 0 });
+    },
+  );
 
-  it("rejects conflicting duplicate receipt logs before archive mutation", async () => {
-    const n = namespace(),
-      archive = new D1Archive(env.PROOF_DB);
-    await archive.initialize(n);
-    const h1 = header(1, "1");
-    const event: ArchiveLog = {
-      blockNumber: 1,
-      blockHash: h1.hash,
-      logIndex: 0,
-      name: "NodeUpdated",
-      args: { level: "1", index: "0", hash: n.emptyHashes[1], sum: zero },
-    };
-    const conflict = { ...event, args: { ...event.args, sum: `0x${"5".repeat(64)}` } };
-    await expect(
-      ingestOneSlice(archive, n, new FixtureRpc([h1], [event], n, undefined, [event, conflict]), 2),
-    ).rejects.toThrow("conflicting receipt log payload");
-    expect((await archive.status(n)).nextBlock).toBe(1);
-  });
+  it(
+    "rejects conflicting duplicate receipt logs before archive mutation",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB);
+      await archive.initialize(n);
+      const h1 = header(1, "1");
+      const event: ArchiveLog = {
+        blockNumber: 1,
+        blockHash: h1.hash,
+        logIndex: 0,
+        name: "NodeUpdated",
+        args: { level: "1", index: "0", hash: n.emptyHashes[1], sum: zero },
+      };
+      const conflict = { ...event, args: { ...event.args, sum: `0x${"5".repeat(64)}` } };
+      await expect(
+        ingestOneSlice(
+          archive,
+          n,
+          new FixtureRpc([h1], [event], n, undefined, [event, conflict]),
+          2,
+        ),
+      ).rejects.toThrow("conflicting receipt log payload");
+      expect((await archive.status(n)).nextBlock).toBe(1);
+    },
+  );
 });

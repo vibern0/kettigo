@@ -23,28 +23,34 @@ const config = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("proof HTTP boundary", () => {
-  it("returns an allowlisted CORS preflight and keeps disallowed origins opaque", async () => {
-    const allowed = { ...config, ALLOWED_ORIGINS: "https://app.kettigo.test" };
-    const response = await handle(
-      new Request(`https://proof.test/v1/11155111/${pool}/draws`, {
-        method: "OPTIONS",
-        headers: { origin: "https://app.kettigo.test" },
-      }),
-      allowed,
-    );
-    expect(response.status).toBe(204);
-    expect(response.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
-    expect(response.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
-    const rejected = await handle(
-      new Request(`https://proof.test/v1/11155111/${pool}/draws`, {
-        method: "OPTIONS",
-        headers: { origin: "https://other.test" },
-      }),
-      allowed,
-    );
-    expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
-  });
-  it("does not initialize an archive from a GET request", async () => {
+  it(
+    "returns an allowlisted CORS preflight and keeps disallowed origins opaque",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const allowed = { ...config, ALLOWED_ORIGINS: "https://app.kettigo.test" };
+      const response = await handle(
+        new Request(`https://proof.test/v1/11155111/${pool}/draws`, {
+          method: "OPTIONS",
+          headers: { origin: "https://app.kettigo.test" },
+        }),
+        allowed,
+      );
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
+      expect(response.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
+      const rejected = await handle(
+        new Request(`https://proof.test/v1/11155111/${pool}/draws`, {
+          method: "OPTIONS",
+          headers: { origin: "https://other.test" },
+        }),
+        allowed,
+      );
+      expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
+    },
+  );
+  it("does not initialize an archive from a GET request", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const response = await handle(
       new Request(`https://proof.test/v1/11155111/${pool}/draws`, {
         headers: { origin: "https://app.kettigo.test" },
@@ -55,7 +61,17 @@ describe("proof HTTP boundary", () => {
     expect(response.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
     expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
   });
-  it("rejects non-canonical chain, draw, cursor and page values", async () => {
+  it("rejects malformed list queries before opening a D1 session", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
+    const response = await handle(
+      new Request(`https://proof.test/v1/11155111/${pool}/draws?limit=0`),
+      { ...config, PROOF_DB: undefined as unknown as D1Database },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
+  });
+  it("rejects non-canonical chain, draw, cursor and page values", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     for (const suffix of [
       `/v1/011155111/${pool}/draws`,
       `/v1/11155111/${pool}/draws/01/proof/${pool}`,
@@ -67,7 +83,8 @@ describe("proof HTTP boundary", () => {
       expect([400, 404, 409]).toContain(response.status);
     }
   });
-  it("only permits authenticated POST tick requests", async () => {
+  it("only permits authenticated POST tick requests", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
@@ -119,46 +136,51 @@ describe("proof HTTP boundary", () => {
     );
     expect(streamed.status).toBe(413);
   });
-  it("returns the actual post-tick checkpoint without storing the result", async () => {
-    const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init: RequestInit) => {
-        const method = JSON.parse(String(init.body)).method;
-        calls.push(method);
-        if (method === "eth_chainId")
-          return Response.json({ jsonrpc: "2.0", id: 1, result: "0xaa36a7" });
-        if (method === "eth_blockNumber")
-          return Response.json({ jsonrpc: "2.0", id: 1, result: "0x0" });
-        if (method === "eth_getBlockByNumber") {
-          const number = JSON.parse(String(init.body)).params[0];
-          return Response.json({
-            jsonrpc: "2.0",
-            id: 1,
-            result: { number, hash: zero, parentHash: zero },
-          });
-        }
-        throw new Error(`unexpected ${method}`);
-      }),
-    );
-    const response = await worker.fetch(
-      new Request("https://proof.test/internal/tick", {
-        method: "POST",
-        headers: { authorization: "Bearer x" },
-        body: "",
-      }),
-      {
-        ...config,
-        POOL_ADDRESS: "0x00000000000000000000000000000000000000A2",
-        OPERATOR_BEARER: "x",
-        PRIMARY_RPC_URL: "https://primary.test",
-        HISTORICAL_RPC_URL: "https://historical.test",
-      },
-      { waitUntil: () => undefined } as unknown as ExecutionContext,
-    );
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual({ nextBlock: 1, lastFinalizedBlock: 0 });
-    expect(calls).toContain("eth_chainId");
-  });
+  it(
+    "returns the actual post-tick checkpoint without storing the result",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const calls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const method = JSON.parse(String(init.body)).method;
+          calls.push(method);
+          if (method === "eth_chainId")
+            return Response.json({ jsonrpc: "2.0", id: 1, result: "0xaa36a7" });
+          if (method === "eth_blockNumber")
+            return Response.json({ jsonrpc: "2.0", id: 1, result: "0x0" });
+          if (method === "eth_getBlockByNumber") {
+            const number = JSON.parse(String(init.body)).params[0];
+            return Response.json({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { number, hash: zero, parentHash: zero },
+            });
+          }
+          throw new Error(`unexpected ${method}`);
+        }),
+      );
+      const response = await worker.fetch(
+        new Request("https://proof.test/internal/tick", {
+          method: "POST",
+          headers: { authorization: "Bearer x" },
+          body: "",
+        }),
+        {
+          ...config,
+          POOL_ADDRESS: "0x00000000000000000000000000000000000000A2",
+          OPERATOR_BEARER: "x",
+          PRIMARY_RPC_URL: "https://primary.test",
+          HISTORICAL_RPC_URL: "https://historical.test",
+        },
+        { waitUntil: () => undefined } as unknown as ExecutionContext,
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ nextBlock: 1, lastFinalizedBlock: 0 });
+      expect(calls).toContain("eth_chainId");
+    },
+  );
 });

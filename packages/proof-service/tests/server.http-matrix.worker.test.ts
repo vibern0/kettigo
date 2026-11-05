@@ -81,28 +81,34 @@ function rpc(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("native D1 HTTP proof matrix", () => {
-  it("returns an independently-authenticated depth-32 proof with identity, owner, and generation", async () => {
-    const fixture = await seeded();
-    rpc(fixture);
-    const response = await handle(
-      new Request(
-        `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws/1/proof/${account}`,
-        { headers: { origin: "https://app.kettigo.test" } },
-      ),
-      fixture.env,
-    );
-    const body = (await response.json()) as { proof: Record<string, unknown> };
-    expect(response.status).toBe(200);
-    expect(response.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
-    expect(body.proof.rootHash).toBe(fixture.root);
-    expect(body.proof.chainId).toBe(fixture.namespace.chainId);
-    expect(body.proof.pool).toBe(fixture.namespace.pool);
-    expect(body.proof.account).toBe(account);
-    expect(body.proof.generation).toBe("1");
-    expect(body.proof.siblingHashes).toHaveLength(32);
-  });
+  it(
+    "returns an independently-authenticated depth-32 proof with identity, owner, and generation",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const fixture = await seeded();
+      rpc(fixture);
+      const response = await handle(
+        new Request(
+          `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws/1/proof/${account}`,
+          { headers: { origin: "https://app.kettigo.test" } },
+        ),
+        fixture.env,
+      );
+      const body = (await response.json()) as { proof: Record<string, unknown> };
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
+      expect(body.proof.rootHash).toBe(fixture.root);
+      expect(body.proof.chainId).toBe(fixture.namespace.chainId);
+      expect(body.proof.pool).toBe(fixture.namespace.pool);
+      expect(body.proof.account).toBe(account);
+      expect(body.proof.generation).toBe("1");
+      expect(body.proof.siblingHashes).toHaveLength(32);
+    },
+  );
 
-  it("returns CORS-readable eligibility and indexing outcomes", async () => {
+  it("returns CORS-readable eligibility and indexing outcomes", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const fixture = await seeded();
     rpc(fixture, { close: 3n });
     const indexing = await handle(
@@ -146,29 +152,37 @@ describe("native D1 HTTP proof matrix", () => {
     expect(missing.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
   });
 
-  it("fails closed with CORS for canonical close/checkpoint mismatch, wrong chain, and provider outage", async () => {
-    const fixture = await seeded();
-    for (const options of [
-      { hash: `0x${"44".repeat(32)}` },
-      { root: `0x${"66".repeat(32)}` },
-      { chain: "1" },
-      { fail: true },
-    ]) {
-      rpc(fixture, options);
-      const response = await handle(
-        new Request(
-          `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws/1/proof/${account}`,
-          { headers: { origin: "https://app.kettigo.test" } },
-        ),
-        fixture.env,
-      );
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
-      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
-    }
-  });
+  it(
+    "fails closed with CORS for canonical close/checkpoint mismatch, wrong chain, and provider outage",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const fixture = await seeded();
+      for (const options of [
+        { hash: `0x${"44".repeat(32)}` },
+        { root: `0x${"66".repeat(32)}` },
+        { chain: "1" },
+        { fail: true },
+      ]) {
+        rpc(fixture, options);
+        const response = await handle(
+          new Request(
+            `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws/1/proof/${account}`,
+            { headers: { origin: "https://app.kettigo.test" } },
+          ),
+          fixture.env,
+        );
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
+        expect(response.headers.get("access-control-allow-origin")).toBe(
+          "https://app.kettigo.test",
+        );
+      }
+    },
+  );
 
-  it("refuses lists whose stored canonical checkpoint is orphaned", async () => {
+  it("refuses lists whose stored canonical checkpoint is orphaned", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const fixture = await seeded();
     rpc(fixture, { hash: `0x${"55".repeat(32)}` });
     const response = await handle(
@@ -182,7 +196,8 @@ describe("native D1 HTTP proof matrix", () => {
     expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
   });
 
-  it("rejects malformed and over-uint256 ids and preserves CORS", async () => {
+  it("rejects malformed and over-uint256 ids and preserves CORS", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
     const fixture = await seeded();
     rpc(fixture);
     for (const id of [
@@ -202,61 +217,71 @@ describe("native D1 HTTP proof matrix", () => {
     }
   });
 
-  it("refuses an immutable namespace change after genuine data has been stored", async () => {
-    const fixture = await seeded();
-    const response = await handle(
-      new Request(
-        `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws`,
-        { headers: { origin: "https://app.kettigo.test" } },
-      ),
-      { ...fixture.env, DEPLOYMENT_BLOCK: "2" },
-    );
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
-  });
+  it(
+    "refuses an immutable namespace change after genuine data has been stored",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const fixture = await seeded();
+      const response = await handle(
+        new Request(
+          `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws`,
+          { headers: { origin: "https://app.kettigo.test" } },
+        ),
+        { ...fixture.env, DEPLOYMENT_BLOCK: "2" },
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ outcome: "HISTORY_UNAVAILABLE" });
+    },
+  );
 
-  it("enforces the documented 60-request window and isolate-wide concurrency of eight", async () => {
-    const fixture = await seeded();
-    rpc(fixture);
-    const url = `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws`;
-    for (let index = 0; index < 60; index += 1)
-      expect(
-        (
-          await handle(
-            new Request(url, { headers: { "cf-connecting-ip": "rate-client" } }),
-            fixture.env,
-          )
-        ).status,
-      ).toBe(200);
-    const rateLimited = await handle(
-      new Request(url, { headers: { "cf-connecting-ip": "rate-client" } }),
-      fixture.env,
-    );
-    expect(rateLimited.status).toBe(429);
-
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    rpc(fixture, { hold: held });
-    const requests = Array.from({ length: 8 }, (_, index) =>
-      handle(
-        new Request(url, { headers: { "cf-connecting-ip": `concurrent-${index}` } }),
+  it(
+    "enforces the documented 60-request window and isolate-wide concurrency of eight",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const fixture = await seeded();
+      rpc(fixture);
+      const url = `https://proof.test/v1/${fixture.namespace.chainId}/${fixture.namespace.pool}/draws`;
+      for (let index = 0; index < 60; index += 1)
+        expect(
+          (
+            await handle(
+              new Request(url, { headers: { "cf-connecting-ip": "rate-client" } }),
+              fixture.env,
+            )
+          ).status,
+        ).toBe(200);
+      const rateLimited = await handle(
+        new Request(url, { headers: { "cf-connecting-ip": "rate-client" } }),
         fixture.env,
-      ),
-    );
-    await vi.waitFor(() =>
-      expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(8),
-    );
-    const crowded = await handle(
-      new Request(url, {
-        headers: { "cf-connecting-ip": "concurrent-9", origin: "https://app.kettigo.test" },
-      }),
-      fixture.env,
-    );
-    expect(crowded.status).toBe(429);
-    expect(crowded.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
-    release();
-    await Promise.all(requests);
-  });
+      );
+      expect(rateLimited.status).toBe(429);
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      rpc(fixture, { hold: held });
+      const requests = Array.from({ length: 8 }, (_, index) =>
+        handle(
+          new Request(url, { headers: { "cf-connecting-ip": `concurrent-${index}` } }),
+          fixture.env,
+        ),
+      );
+      await vi.waitFor(() =>
+        expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(8),
+      );
+      const crowded = await handle(
+        new Request(url, {
+          headers: { "cf-connecting-ip": "concurrent-9", origin: "https://app.kettigo.test" },
+        }),
+        fixture.env,
+      );
+      expect(crowded.status).toBe(429);
+      expect(crowded.headers.get("access-control-allow-origin")).toBe("https://app.kettigo.test");
+      release();
+      await Promise.all(requests);
+    },
+  );
 });
