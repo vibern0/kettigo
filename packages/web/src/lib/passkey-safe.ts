@@ -18,7 +18,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import { entryPoint07Address } from "viem/account-abstraction";
+import { entryPoint07Address, getUserOperationHash, type UserOperation } from "viem/account-abstraction";
 import { sepolia } from "viem/chains";
 
 import {
@@ -31,7 +31,48 @@ import {
 } from "./passkey-webauthn.ts";
 import { publicConfig } from "./runtime-config.ts";
 import { createPasskeyVerifierGasProbe, withPasskeyStage, type PasskeyGasDiagnostics } from "./passkey-gas.ts";
-import type { PasskeySmartSession, SmartAccountCall, SmartTransactionOptions } from "./smart-session.ts";
+import type { PasskeySmartSession, SafeUserOperationIdentity, SafeUserOperationReceipt, SmartAccountCall, SmartTransactionOptions } from "./smart-session.ts";
+export type { SafeUserOperationIdentity, SafeUserOperationReceipt } from "./smart-session.ts";
+
+export class SafeUserOperationPendingError extends Error {
+  readonly operation: SafeUserOperationIdentity;
+  constructor(operation: SafeUserOperationIdentity, cause?: unknown) {
+    super("The sponsored transaction is still pending. Please try again.", { cause });
+    this.name = "SafeUserOperationPendingError";
+    this.operation = operation;
+  }
+}
+
+export class SafeUserOperationFailedError extends Error {
+  readonly operation: SafeUserOperationIdentity;
+  readonly transactionHash?: Hex;
+  constructor(operation: SafeUserOperationIdentity, transactionHash?: Hex) {
+    super("The sponsored transaction failed.");
+    this.name = "SafeUserOperationFailedError";
+    this.operation = operation;
+    this.transactionHash = transactionHash;
+  }
+}
+
+export class SafeUserOperationRejectedError extends Error {
+  readonly operation: SafeUserOperationIdentity;
+  readonly code: number;
+  constructor(operation: SafeUserOperationIdentity, code: number, cause?: unknown) {
+    super("The sponsored transaction was rejected before submission.", { cause });
+    this.name = "SafeUserOperationRejectedError";
+    this.operation = operation;
+    this.code = code;
+  }
+}
+
+export class SafeUserOperationIntegrityError extends Error {
+  readonly operation: SafeUserOperationIdentity;
+  constructor(operation: SafeUserOperationIdentity, message: string) {
+    super(message);
+    this.name = "SafeUserOperationIntegrityError";
+    this.operation = operation;
+  }
+}
 
 const SAFE_VERSION = "1.4.1" as const;
 const SAFE_MODULES_VERSION = "0.3.0";
@@ -49,6 +90,52 @@ const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_
 const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
 const SHARED_SIGNER_ADDRESS = sharedSignerAddress();
+
+export function getSafeUserOperationIdentity(userOperation: UserOperation<"0.7">): SafeUserOperationIdentity {
+  const sender = getAddress(userOperation.sender);
+  return Object.freeze({
+    chainId: sepolia.id,
+    entryPoint: getAddress(entryPoint07Address),
+    sender,
+    userOperationHash: getUserOperationHash({
+      chainId: sepolia.id,
+      entryPointAddress: getAddress(entryPoint07Address),
+      entryPointVersion: "0.7",
+      userOperation: { ...userOperation, sender },
+    }),
+  });
+}
+
+function sameHash(left: string, right: string) {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function isBundlerRejection(error: unknown): error is { name: string; code: number } {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  return candidate.name === "RpcRequestError"
+    && typeof candidate.code === "number"
+    && candidate.code >= -32508
+    && candidate.code <= -32500;
+}
+
+async function lookupRelayReceipt(
+  relay: Pick<RelayLike, "getUserOperationReceipt">,
+  operation: SafeUserOperationIdentity,
+): Promise<SafeUserOperationReceipt> {
+  const receipt = await relay.getUserOperationReceipt(operation.userOperationHash);
+  if (!receipt) return { state: "pending", operation };
+  if (receipt.userOpHash && !sameHash(receipt.userOpHash, operation.userOperationHash)) {
+    throw new SafeUserOperationIntegrityError(operation, "The relay returned a different operation hash.");
+  }
+  if (receipt.sender && getAddress(receipt.sender) !== operation.sender) {
+    throw new SafeUserOperationIntegrityError(operation, "The relay returned a different operation sender.");
+  }
+  const transactionHash = receipt.receipt.transactionHash as Hex;
+  return receipt.success
+    ? { state: "confirmed", operation, transactionHash }
+    : { state: "failed", operation, transactionHash };
+}
 
 type PasskeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 type SafeSignature = Parameters<typeof buildSignatureBytes>[0][number];
@@ -68,11 +155,14 @@ type SafeProviderLike = {
 type SafeOperationLike = {
   signatures: Map<string, SafeSignature>;
   addSignature(signature: SafeSignature): void;
+  getUserOperation?(): UserOperation<"0.7">;
 };
 
 type UserOperationReceiptLike = {
   success: boolean;
   receipt: { transactionHash: string };
+  userOpHash?: string;
+  sender?: string;
 };
 
 type RelayLike = {
@@ -304,6 +394,20 @@ function createSession(
       await ensureDeployedRelay();
       return signSafeTypedData(relay.protocolKit, typedData);
     },
+    lookupUserOperation: async (operation) => {
+      if (operation.chainId !== sepolia.id || operation.entryPoint !== getAddress(entryPoint07Address)) {
+        throw new SafeUserOperationIntegrityError(operation, "The operation is not for this network.");
+      }
+      if (operation.sender !== getAddress(metadata.safeAddress)) {
+        throw new SafeUserOperationIntegrityError(operation, "The operation is not for this Safe.");
+      }
+      const outcome = await lookupRelayReceipt(relay, operation);
+      if (outcome.state !== "pending" && usingCounterfactualRelay) {
+        usingCounterfactualRelay = false;
+        refreshRequired = true;
+      }
+      return outcome;
+    },
     prepareTransaction: async (calls) => {
       // Each prepared approval owns its relay and WebAuthn gate. Other wallet
       // actions cannot consume this operation's challenge or assertion.
@@ -413,20 +517,45 @@ async function submitSignedOperation(
 ): Promise<Hex> {
   // Read the final signed gas fields only; never copy identity, calldata,
   // paymaster data, or credential/signature material into diagnostics.
-  const operation = signed as { getUserOperation?: () => Record<string, unknown> };
-  const gas = operation.getUserOperation?.();
+  const operation = signed as SafeOperationLike;
+  if (!operation.getUserOperation) throw new Error("Safe did not provide a final UserOperation.");
+  const userOperation = operation.getUserOperation();
+  const identity = getSafeUserOperationIdentity(userOperation);
+  const gas = userOperation;
   const fields = {
     verificationGasLimit: "submittedVerificationGas", callGasLimit: "submittedCallGas",
     preVerificationGas: "submittedPreVerificationGas", maxFeePerGas: "submittedMaxFeePerGas",
     maxPriorityFeePerGas: "submittedMaxPriorityFeePerGas",
   } as const;
   for (const [field, diagnostic] of Object.entries(fields)) {
-    const value = gas?.[field];
+    const value = (gas as Record<string, unknown>)[field];
     if (typeof value === "bigint") diagnostics[diagnostic] = value.toString();
   }
   options?.onSigned?.();
-  const hash = await withPasskeyStage(diagnostics, "submission", () => relay.executeTransaction({ executable: signed }));
-  return withPasskeyStage(diagnostics, "receipt", () => waitForUserOperationTransaction(relay, hash, { sleep: deps.sleep }));
+  await options?.onOperationPrepared?.(identity);
+  let hash: string;
+  try {
+    hash = await withPasskeyStage(diagnostics, "submission", () => relay.executeTransaction({ executable: signed }));
+  } catch (error) {
+    const wrapped = isBundlerRejection(error)
+      ? new SafeUserOperationRejectedError(identity, error.code, error)
+      : new SafeUserOperationPendingError(identity, error);
+    Object.assign(wrapped, { passkeyDiagnostics: (error as { passkeyDiagnostics?: unknown }).passkeyDiagnostics });
+    throw wrapped;
+  }
+  if (!sameHash(hash, identity.userOperationHash)) {
+    throw new SafeUserOperationIntegrityError(identity, "The relay returned a different operation hash.");
+  }
+  try {
+    const outcome = await withPasskeyStage(diagnostics, "receipt", () => lookupRelayReceipt(relay, identity));
+    if (outcome.state === "pending") throw new SafeUserOperationPendingError(identity);
+    if (outcome.state === "failed") throw new SafeUserOperationFailedError(identity, outcome.transactionHash);
+    return outcome.transactionHash;
+  } catch (error) {
+    if (error instanceof SafeUserOperationFailedError || error instanceof SafeUserOperationIntegrityError) throw error;
+    if (error instanceof SafeUserOperationPendingError) throw error;
+    throw new SafeUserOperationPendingError(identity, error);
+  }
 }
 
 function normalizePasskeySignature(operation: unknown): unknown {

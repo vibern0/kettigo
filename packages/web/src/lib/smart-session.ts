@@ -6,15 +6,29 @@ export type SmartAccountCall = {
   value?: bigint;
 };
 
+export type SafeUserOperationIdentity = Readonly<{
+  chainId: 11155111;
+  entryPoint: Address;
+  sender: Address;
+  userOperationHash: Hex;
+}>;
+
+export type SafeUserOperationReceipt =
+  | { state: "pending"; operation: SafeUserOperationIdentity }
+  | { state: "confirmed"; operation: SafeUserOperationIdentity; transactionHash: Hex }
+  | { state: "failed"; operation: SafeUserOperationIdentity; transactionHash?: Hex };
+
 export type PasskeySmartSession = {
   address: Address;
   signTypedData: (typedData: unknown) => Promise<Hex>;
   prepareTransaction: (calls: SmartAccountCall[]) => Promise<PreparedSmartTransaction>;
   sendTransaction: (calls: SmartAccountCall[], options?: SmartTransactionOptions) => Promise<Hex>;
+  lookupUserOperation?: (operation: SafeUserOperationIdentity) => Promise<SafeUserOperationReceipt>;
 };
 
 export type SmartTransactionOptions = {
   onSigned?: () => void;
+  onOperationPrepared?: (operation: SafeUserOperationIdentity) => void | Promise<void>;
 };
 
 export async function sendSmartTransaction(

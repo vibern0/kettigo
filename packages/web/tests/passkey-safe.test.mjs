@@ -9,6 +9,7 @@ import {
   buildPasskeySigner,
   createPasskeyFeeEstimator,
   createPasskeyAccount,
+  getSafeUserOperationIdentity,
   restorePasskeyAccount,
   signSafeTypedData,
   waitForUserOperationTransaction,
@@ -22,6 +23,34 @@ const COORDINATES = {
   x: `0x${"11".repeat(32)}`,
   y: `0x${"22".repeat(32)}`,
 };
+
+test("derives the canonical EntryPoint v0.7 hash from all final signed operation fields", () => {
+  const identity = getSafeUserOperationIdentity({
+    sender: SAFE_ADDRESS,
+    nonce: 7n,
+    factory: getAddress("0x00000000000000000000000000000000000000f1"),
+    factoryData: "0x1234",
+    callData: "0x5678",
+    callGasLimit: 55_555n,
+    verificationGasLimit: 66_666n,
+    preVerificationGas: 77_777n,
+    maxFeePerGas: 88_888n,
+    maxPriorityFeePerGas: 99_999n,
+    paymaster: getAddress("0x00000000000000000000000000000000000000f2"),
+    paymasterData: "0xabcd",
+    paymasterVerificationGasLimit: 12_345n,
+    paymasterPostOpGasLimit: 23_456n,
+    signature: "0xdeadbeef",
+  });
+
+  assert.deepEqual(identity, {
+    chainId: 11155111,
+    entryPoint: getAddress("0x0000000071727De22E5E9d8BAf0edAc6f37da032"),
+    sender: SAFE_ADDRESS,
+    userOperationHash: "0x2384393c9cca16213837b028ad53417f4787c3a323e8d82d534f7f2151d3d77b",
+  });
+  assert.equal(Object.isFrozen(identity), true);
+});
 
 function createStorage() {
   const values = new Map();
@@ -38,12 +67,19 @@ function createStorage() {
   };
 }
 
+function finalUserOperation(sender = SAFE_ADDRESS) {
+  return { sender, nonce: 0n, callData: "0x", callGasLimit: 1n, verificationGasLimit: 2n, preVerificationGas: 3n, maxFeePerGas: 4n, maxPriorityFeePerGas: 5n, signature: "0x" };
+}
+
 function relay(address = SAFE_ADDRESS, safeProvider) {
   const signatures = new Map();
   const operation = {
     signatures,
     addSignature(signature) {
       signatures.set(signature.signer, signature);
+    },
+    getUserOperation() {
+      return finalUserOperation(address);
     },
   };
   return {
@@ -61,11 +97,13 @@ function relay(address = SAFE_ADDRESS, safeProvider) {
       return operation;
     },
     async executeTransaction() {
-      return `0x${"33".repeat(32)}`;
+      return "0x60a9c26f9c932173953974fad9377bd05b94e7af3f01dfdb93482ac70b4265a5";
     },
     async getUserOperationReceipt() {
       return {
         success: true,
+        userOpHash: "0x60a9c26f9c932173953974fad9377bd05b94e7af3f01dfdb93482ac70b4265a5",
+        sender: address,
         receipt: { transactionHash: `0x${"44".repeat(32)}` },
       };
     },
@@ -337,7 +375,7 @@ test("reports signing before submission and receipt polling finish", async () =>
   instance.executeTransaction = async () => {
     assert.equal(signed, true);
     await submission;
-    return `0x${"33".repeat(32)}`;
+    return "0x60a9c26f9c932173953974fad9377bd05b94e7af3f01dfdb93482ac70b4265a5";
   };
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
@@ -493,7 +531,7 @@ test("does not retry a deployed relay after an AA24 signature rejection", async 
 
   await assert.rejects(
     session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
-    /AA24 signature error/,
+    /still pending/,
   );
   assert.equal(initCount, 3);
 });
@@ -503,9 +541,10 @@ test("submission failures retain gas diagnostics and request only one signature"
   let signatures = 0;
   let submissions = 0;
   instance.createTransaction = async () => ({ getUserOperation() { return {
+    ...finalUserOperation(),
     verificationGasLimit: 650_000n, callGasLimit: 1_000_000n, preVerificationGas: 60_000n,
     maxFeePerGas: 123n, maxPriorityFeePerGas: 100n,
-    sender: SAFE_ADDRESS, callData: "secret-calldata", signature: "secret-signature",
+    callData: "secret-calldata", signature: "secret-signature",
   }; } });
   instance.signSafeOperation = async (operation) => { signatures++; return operation; };
   instance.executeTransaction = async () => { submissions++; throw new Error("AA24 signature error"); };
@@ -550,13 +589,15 @@ test("immediate and prepared actions measure the configured verifier before sign
     instance.createTransaction = async ({ options }) => {
       const gas = await options.feeEstimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
       assert.equal(gas.verificationGasLimit, 912_500n);
-      return { getUserOperation() { return gas; } };
+      return { getUserOperation() { return { ...finalUserOperation(), ...gas }; } };
     };
     instance.signSafeOperation = async (operation) => {
       assert.equal(measured, true);
       signatures++;
       return operation;
     };
+    instance.executeTransaction = async ({ executable }) => getSafeUserOperationIdentity(executable.getUserOperation()).userOperationHash;
+    instance.getUserOperationReceipt = async (hash) => ({ success: true, userOpHash: hash, sender: SAFE_ADDRESS, receipt: { transactionHash: `0x${"44".repeat(32)}` } });
     const session = await createPasskeyAccount(
       { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
       dependencies({
@@ -627,7 +668,7 @@ test("wraps a deployed passkey signature as a shared-signer contract signature",
   let submitted;
   instance.executeTransaction = async ({ executable }) => {
     submitted = [...executable.signatures.values()][0];
-    return `0x${"33".repeat(32)}`;
+    return "0x60a9c26f9c932173953974fad9377bd05b94e7af3f01dfdb93482ac70b4265a5";
   };
 
   const session = await restorePasskeyAccount(
@@ -731,7 +772,7 @@ test("prepared transactions start the real passkey request synchronously after S
     dependencies({
       async initRelay(options) {
         const instance = relay();
-        instance.createTransaction = async () => { events.push("prepare"); return { operation: true }; };
+        instance.createTransaction = async () => { events.push("prepare"); return relay().createTransaction(); };
         instance.signSafeOperation = async (operation) => {
           events.push("rpc-checks");
           await options.signer.getFn({ publicKey: { challenge: new Uint8Array([1, 2, 3]) } });
