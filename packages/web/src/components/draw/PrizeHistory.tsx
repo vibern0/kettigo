@@ -67,6 +67,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
   const selectionEpoch = useRef(0);
   const listAbortRef = useRef<AbortController>();
   const selectionAbortRef = useRef<AbortController>();
+  const confirmingCheckRef = useRef<PreparedPrizeCheck>();
   const cancelList = useCallback(() => {
     listEpoch.current += 1;
     listAbortRef.current?.abort();
@@ -165,6 +166,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
 
   const startCheck = useCallback(async () => {
     if (!selection || selection.kind !== "unchecked") return;
+    confirmingCheckRef.current = undefined;
     cancelSelection();
     const controller = new AbortController();
     selectionAbortRef.current = controller;
@@ -221,6 +223,8 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
   const confirmCheck = () => {
     if (!selection || selection.kind !== "ready") return;
     const prepared = selection.prepared;
+    if (confirmingCheckRef.current === prepared) return;
+    confirmingCheckRef.current = prepared;
     runAction(
       { label: "Check prize", type: "check", account: session.address },
       async ({ update }) => {

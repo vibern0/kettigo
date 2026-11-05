@@ -1,0 +1,213 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, test, vi } from "vitest";
+import { entryPoint07Address } from "viem/account-abstraction";
+
+const fixture = vi.hoisted(() => {
+  const account = "0x1111111111111111111111111111111111111111" as const;
+  const pool = "0x3333333333333333333333333333333333333333" as const;
+  return {
+    account,
+    pool,
+    version: "2",
+    proofUrl: "https://proof.example",
+    prepare: vi.fn(),
+    confirm: vi.fn(),
+    send: vi.fn(),
+    recover: vi.fn(),
+    pending: vi.fn(),
+    coordinator: vi.fn(),
+    readerFactory: vi.fn(),
+    proofFactory: vi.fn(),
+    session: undefined as any,
+  };
+});
+
+vi.mock("viem", async (original) => ({
+  ...(await original<typeof import("viem")>()),
+  createPublicClient: () => ({
+    readContract: async ({ functionName }: { functionName: string }) => {
+      if (functionName === "encryptedWinningsOf") return `0x${"0".repeat(64)}`;
+      return 0n;
+    },
+    getBlockNumber: async () => 0n,
+    request: async () => [],
+    watchBlockNumber: () => () => {},
+  }),
+}));
+vi.mock("@/lib/contracts", async (original) => ({
+  ...(await original<typeof import("@/lib/contracts")>()),
+  CONTRACTS: {
+    usdc: fixture.account,
+    confidentialUsdc: "0x2222222222222222222222222222222222222222",
+    confidentialPrizePool: fixture.pool,
+  },
+}));
+vi.mock("@/lib/runtime-config", () => ({
+  publicConfig: (name: string, fallback?: string) =>
+    name === "NEXT_PUBLIC_POOL_VERSION"
+      ? fixture.version
+      : name === "NEXT_PUBLIC_PROOF_SERVICE_URL"
+        ? fixture.proofUrl
+        : (fallback ?? ""),
+}));
+vi.mock("@/lib/wallet-context", () => ({
+  useWallet: () => ({ session: fixture.session, refreshConfidentialBalances: vi.fn() }),
+}));
+vi.mock("@/lib/zama", async () => ({
+  asChecksumAddress: (await vi.importActual<typeof import("viem")>("viem")).getAddress,
+  decryptExistingSmartUint64: vi.fn(async () => 0n),
+  decryptSmartUint64: vi.fn(async () => 0n),
+  isZeroEncryptedHandle: (value: string) => value === `0x${"0".repeat(64)}`,
+}));
+vi.mock("@/lib/prize-check-coordinator", () => ({
+  createPrizeCheckCoordinator: fixture.coordinator,
+  createPrizeCheckIntentStore: vi.fn(),
+  createViemPrizeChainReader: fixture.readerFactory,
+  createViemPrizeProofClient: fixture.proofFactory,
+}));
+vi.mock("@/lib/morpho-yield", () => ({
+  createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
+  readProjectedMorphoYield: vi.fn(async () => ({ source: "stored", accruedYieldAssets: 0n })),
+}));
+vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn(), reportClientError: vi.fn() }));
+vi.mock("wagmi", () => ({ useBlockNumber: () => ({ data: undefined }) }));
+
+import DrawPage from "@/app/draw/page";
+import { ActionCenterProvider, useActionCenter } from "@/components/ActionCenter";
+import { ToastProvider } from "@/components/Toast";
+
+function ActionProbe() {
+  const { actions } = useActionCenter();
+  return <output data-testid="actions">{JSON.stringify(actions)}</output>;
+}
+
+function mount() {
+  return render(
+    <ToastProvider>
+      <ActionCenterProvider>
+        <DrawPage />
+        <ActionProbe />
+      </ActionCenterProvider>
+    </ToastProvider>,
+  );
+}
+
+async function prepareCheck() {
+  mount();
+  await screen.findByText("Your past results");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
+  return screen.findByRole("button", { name: "Confirm" });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  fixture.prepare.mockReset();
+  fixture.confirm.mockReset();
+  fixture.send.mockReset();
+  fixture.recover.mockReset();
+  fixture.pending.mockReset();
+  fixture.coordinator.mockReset();
+  fixture.readerFactory.mockReset();
+  fixture.proofFactory.mockReset();
+  fixture.pending.mockReturnValue(null);
+  fixture.recover.mockResolvedValue({ state: "pending" });
+  fixture.session = {
+    address: fixture.account,
+    prepareTransaction: fixture.prepare,
+    getPendingOperation: fixture.pending,
+    recoverPendingOperation: fixture.recover,
+  };
+  fixture.readerFactory.mockReturnValue({
+    readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+    readChecked: vi.fn(async () => false),
+    readAward: vi.fn(async () => `0x${"b".repeat(64)}`),
+  });
+  fixture.proofFactory.mockReturnValue({
+    listDraws: vi.fn(async () => ({ kind: "draws", draws: [] })),
+  });
+  fixture.coordinator.mockReturnValue({
+    review: vi.fn(async () => ({ state: "ready", drawId: 12n, proof: {} })),
+    prepare: fixture.prepare,
+  });
+});
+
+test("a failed attempted prize check keeps its observed operation checkable when pending lookup fails", async () => {
+  const operation = {
+    chainId: 11155111 as const,
+    entryPoint: entryPoint07Address,
+    sender: fixture.account,
+    userOperationHash: `0x${"c".repeat(64)}` as const,
+  };
+  fixture.prepare.mockResolvedValue({
+    cancel: vi.fn(),
+    confirm: async ({
+      onOperationPrepared,
+    }: {
+      onOperationPrepared: (value: typeof operation) => void;
+    }) => {
+      onOperationPrepared(operation);
+      throw new Error("original prize check failure");
+    },
+  });
+  fixture.pending.mockImplementation(() => {
+    throw new Error("pending lookup failed");
+  });
+  fixture.recover.mockImplementation(() => {
+    throw new Error("status lookup failed");
+  });
+
+  fireEvent.click(await prepareCheck());
+  await waitFor(() =>
+    expect(screen.getByTestId("actions").textContent).toContain(operation.userOperationHash),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Activity/ }));
+  expect(await screen.findByRole("button", { name: "Check status" })).toBeTruthy();
+  expect(screen.getByText("Still processing")).toBeTruthy();
+  expect(screen.queryByText("Failed")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(screen.getByTestId("actions").textContent).toContain(operation.userOperationHash);
+
+  fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+  await waitFor(() => expect(fixture.recover).toHaveBeenCalledTimes(1));
+  expect(fixture.prepare).toHaveBeenCalledTimes(1);
+  expect(fixture.send).not.toHaveBeenCalled();
+  expect(screen.getByTestId("actions").textContent).toContain(operation.userOperationHash);
+});
+
+test("double Confirm creates one Activity action and sends one prepared prize check", async () => {
+  const operation = {
+    chainId: 11155111 as const,
+    entryPoint: entryPoint07Address,
+    sender: fixture.account,
+    userOperationHash: `0x${"d".repeat(64)}` as const,
+  };
+  let resolveConfirm!: () => void;
+  fixture.confirm.mockImplementation(
+    ({ onOperationPrepared }: { onOperationPrepared: (value: typeof operation) => void }) => {
+      onOperationPrepared(operation);
+      return new Promise<void>((resolve) => {
+        resolveConfirm = resolve;
+      });
+    },
+  );
+  fixture.prepare.mockResolvedValue({
+    cancel: vi.fn(),
+    confirm: fixture.confirm,
+  });
+
+  const confirm = await prepareCheck();
+  fireEvent.click(confirm);
+  fireEvent.click(confirm);
+
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  expect(fixture.confirm).toHaveBeenCalledTimes(1);
+  await waitFor(() =>
+    expect(screen.getByTestId("actions").textContent).toContain(operation.userOperationHash),
+  );
+  expect(JSON.parse(screen.getByTestId("actions").textContent ?? "[]")).toHaveLength(1);
+  resolveConfirm();
+});
