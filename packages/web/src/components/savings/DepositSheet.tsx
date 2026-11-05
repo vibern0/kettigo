@@ -92,30 +92,100 @@ function DepositConfirmation(props: DepositConfirmationProps) {
   );
 }
 
+type DepositSheetDialogProps = DepositSheetProps & { max: bigint };
+
+function DepositSheetHeader({ onClose }: Pick<DepositSheetProps, "onClose">) {
+  return (
+    <>
+      <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="label">Deposit</p>
+          <h2 id="deposit-sheet-title" className="font-display text-xl font-bold">
+            Add to savings
+          </h2>
+        </div>
+        <button
+          type="button"
+          aria-label="Close deposit sheet"
+          onClick={onClose}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/40 text-muted transition-colors hover:bg-white/60 hover:text-text"
+        >
+          <svg
+            aria-hidden="true"
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+          >
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      </div>
+    </>
+  );
+}
+
+function DepositSheetForm(props: DepositSheetDialogProps) {
+  return (
+    <>
+      <AmountInput
+        label="Amount"
+        maxLabel={`${formatUSDC(props.max)} USDC`}
+        value={props.amount}
+        onChange={props.onAmountChange}
+        onMax={props.onMax}
+        disabled={props.step === "confirm" || props.preparing}
+      />
+      <p className="rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
+        Current account limit: 1,000.00 USDC.
+      </p>
+      {props.step === "entry" ? (
+        <button
+          onClick={props.onReview}
+          disabled={!props.canReview || props.preparing}
+          className="btn-primary w-full"
+        >
+          {props.preparing ? "Preparing deposit..." : "Review deposit"}
+        </button>
+      ) : (
+        <DepositConfirmation
+          parsedAmount={props.parsedAmount}
+          walletAfter={props.walletAfter}
+          poolAfter={props.poolAfter}
+          confirming={props.confirming}
+          canConfirm={props.canConfirm}
+          onBack={props.onBack}
+          onConfirm={props.onConfirm}
+        />
+      )}
+    </>
+  );
+}
+
+function DepositSheetDialog(props: DepositSheetDialogProps) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="deposit-sheet-title"
+      className="glass-surface relative max-h-[min(86dvh,100%)] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
+    >
+      <DepositSheetHeader onClose={props.onClose} />
+      <DepositSheetForm {...props} />
+    </div>
+  );
+}
+
 export function DepositSheet(props: DepositSheetProps) {
-  const {
-    step,
-    amount,
-    parsedAmount,
-    walletBalance,
-    remainingDeposit,
-    walletAfter,
-    poolAfter,
-    preparing,
-    confirming,
-    canReview,
-    canConfirm,
-    onAmountChange,
-    onMax,
-    onReview,
-    onBack,
-    onConfirm,
-    onClose,
-  } = props;
   const max =
-    walletBalance !== undefined && walletBalance < remainingDeposit
-      ? walletBalance
-      : remainingDeposit;
+    props.walletBalance !== undefined && props.walletBalance < props.remainingDeposit
+      ? props.walletBalance
+      : props.remainingDeposit;
 
   return createPortal(
     <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 backdrop-blur-sm sm:px-4 sm:pb-4">
@@ -123,74 +193,9 @@ export function DepositSheet(props: DepositSheetProps) {
         type="button"
         aria-label="Close deposit sheet"
         className="absolute inset-0 h-full w-full cursor-default"
-        onClick={onClose}
+        onClick={props.onClose}
       />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="deposit-sheet-title"
-        className="glass-surface relative max-h-[min(86dvh,100%)] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
-      >
-        <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="label">Deposit</p>
-            <h2 id="deposit-sheet-title" className="font-display text-xl font-bold">
-              Add to savings
-            </h2>
-          </div>
-          <button
-            type="button"
-            aria-label="Close deposit sheet"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/40 text-muted transition-colors hover:bg-white/60 hover:text-text"
-          >
-            <svg
-              aria-hidden="true"
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-            >
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
-            </svg>
-          </button>
-        </div>
-        <AmountInput
-          label="Amount"
-          maxLabel={`${formatUSDC(max)} USDC`}
-          value={amount}
-          onChange={onAmountChange}
-          onMax={onMax}
-          disabled={step === "confirm" || preparing}
-        />
-        <p className="rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
-          Current account limit: 1,000.00 USDC.
-        </p>
-        {step === "entry" ? (
-          <button
-            onClick={onReview}
-            disabled={!canReview || preparing}
-            className="btn-primary w-full"
-          >
-            {preparing ? "Preparing deposit..." : "Review deposit"}
-          </button>
-        ) : (
-          <DepositConfirmation
-            parsedAmount={parsedAmount}
-            walletAfter={walletAfter}
-            poolAfter={poolAfter}
-            confirming={confirming}
-            canConfirm={canConfirm}
-            onBack={onBack}
-            onConfirm={onConfirm}
-          />
-        )}
-      </div>
+      <DepositSheetDialog {...props} max={max} />
     </SheetViewport>,
     document.body,
   );
