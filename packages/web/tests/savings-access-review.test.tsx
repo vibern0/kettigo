@@ -263,3 +263,28 @@ test("an expired access Ready review cancels without sending and a fresh review 
     now.mockRestore();
   }
 });
+
+test("zero-call access review only refreshes the existing read and never prepares or sends", async () => {
+  fixture.readCalls.mockResolvedValue([]);
+  mount();
+  await new Promise((done) => setTimeout(done, 0));
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  await waitFor(() => expect(fixture.refresh).toHaveBeenCalledTimes(1));
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(fixture.send).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
+
+test("an unavailable displayed balance still permits a contract-capped withdrawal review without archive work", async () => {
+  fixture.principal = undefined;
+  mount();
+  await screen.findByText("100.00 USDC");
+  expect((screen.getByRole("button", { name: "Withdraw" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review withdrawal" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  expect(fixture.prepare).toHaveBeenCalledTimes(1);
+});

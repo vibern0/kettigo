@@ -40,7 +40,10 @@ test("balance access review prepares before Confirm and Confirm sends once witho
       state.refreshed += 1;
     },
     preparedAccess: { current: undefined },
-    runAction: (_input, runner) => { void runner({ update() {} }); return "access"; },
+    runAction: (_input, runner) => {
+      void runner({ update() {} });
+      return "access";
+    },
     Date,
     toast: () => {},
     reportClientToast: () => {},

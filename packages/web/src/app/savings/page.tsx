@@ -251,7 +251,9 @@ export default function SavingsPage() {
   const usdcReady = isAddress(addresses.usdc);
   const wrapperReady = usdcReady && isAddress(addresses.confidentialUsdc);
   const poolReady = wrapperReady && isAddress(addresses.pool);
-  const hasWithdrawablePrincipal = principal !== undefined && principal > 0n;
+  // The pool caps the encrypted request, so a user can still request a known
+  // amount while the optional balance display is unavailable.
+  const hasWithdrawablePrincipal = principal === undefined ? Boolean(session && poolReady) : principal > 0n;
   const withdrawalUnwrapIds = new Set(
     pendingWithdrawals
       .map((request) => request.unwrapRequestId?.toLowerCase())
