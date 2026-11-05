@@ -122,25 +122,7 @@ describe("ConfidentialPrizePool snapshot claims", function () {
     await f.pool.setMorphoYieldAdapter(await adapter.getAddress(), 1n);
   }
 
-  it("closeDoesNotScanPopulation", async function () {
-    const f = await fixture();
-    for (const user of [f.alice, f.bob, f.carol]) {
-      await deposit(f.token, f.pool, user, 1n);
-      await admit(f.pool, user.address);
-    }
-    await fund(f.token, f.pool, f.owner, 7n);
-    await close(f.pool);
-    expect(await f.pool.checked(1n, f.alice.address)).to.equal(false);
-    expect((await f.pool.draws(1n)).upperBound).to.equal(3n);
-  });
-
-  it("oldClaimSurvivesExitReuseAndRejoin", async function () {
-    const f = await fixture();
-    await deposit(f.token, f.pool, f.alice, 3n);
-    await admit(f.pool, f.alice.address);
-    const p = await proof(f.pool, f.alice.address);
-    await fund(f.token, f.pool, f.owner, 5n);
-    await close(f.pool);
+  async function exitAndReuseHistoricalSlot(f: any, p: any) {
     await configureWithdrawalAdapter(f);
     await f.pool.connect(f.alice).exitMembership();
     expect(await f.pool.membershipIndexOf(f.alice.address)).to.equal(0n);
@@ -151,6 +133,9 @@ describe("ConfidentialPrizePool snapshot claims", function () {
     await deposit(f.token, f.pool, f.alice, 1n);
     await admit(f.pool, f.alice.address);
     expect(await f.pool.membershipIndexOf(f.alice.address)).to.not.equal(p.index + 1n);
+  }
+
+  async function assertHistoricalClaimOwnerAndReplayProtection(f: any, p: any) {
     await expect(
       f.pool.checkPrize(
         1n,
@@ -194,25 +179,19 @@ describe("ConfidentialPrizePool snapshot claims", function () {
         p.parentSums,
       ),
     ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
-  });
+  }
 
-  it("rejects a stale zero leaf before it can consume a rejoined account's draw check", async function () {
-    const f = await fixture();
-    await configureWithdrawalAdapter(f);
-    for (const user of [f.alice, f.bob]) {
-      await deposit(f.token, f.pool, user, 1n);
-      await admit(f.pool, user.address);
-    }
+  async function exitBothAndRejoinAlice(f: any) {
     const staleGeneration = await f.pool.generationOf(0n);
     await f.pool.connect(f.alice).exitMembership();
     await f.pool.connect(f.bob).exitMembership();
     await deposit(f.token, f.pool, f.alice, 1n);
     await admit(f.pool, f.alice.address);
     expect(await f.pool.membershipIndexOf(f.alice.address)).to.equal(2n);
-    const stale = await proofAt(f.pool, f.alice.address, 0n, staleGeneration);
-    const active = await proof(f.pool, f.alice.address);
-    await fund(f.token, f.pool, f.owner, 5n);
-    await close(f.pool);
+    return staleGeneration;
+  }
+
+  async function assertStaleProofRejected(f: any, stale: any) {
     await expect(
       f.pool
         .connect(f.carol)
@@ -227,6 +206,9 @@ describe("ConfidentialPrizePool snapshot claims", function () {
           stale.parentSums,
         ),
     ).to.be.revertedWithCustomError(f.pool, "InvalidDrawProof");
+  }
+
+  async function checkActivePrizeAndRejectReplay(f: any, active: any) {
     await f.pool.checkPrize(
       1n,
       f.alice.address,
@@ -250,6 +232,45 @@ describe("ConfidentialPrizePool snapshot claims", function () {
         active.parentSums,
       ),
     ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
+  }
+
+  it("closeDoesNotScanPopulation", async function () {
+    const f = await fixture();
+    for (const user of [f.alice, f.bob, f.carol]) {
+      await deposit(f.token, f.pool, user, 1n);
+      await admit(f.pool, user.address);
+    }
+    await fund(f.token, f.pool, f.owner, 7n);
+    await close(f.pool);
+    expect(await f.pool.checked(1n, f.alice.address)).to.equal(false);
+    expect((await f.pool.draws(1n)).upperBound).to.equal(3n);
+  });
+
+  it("oldClaimSurvivesExitReuseAndRejoin", async function () {
+    const f = await fixture();
+    await deposit(f.token, f.pool, f.alice, 3n);
+    await admit(f.pool, f.alice.address);
+    const p = await proof(f.pool, f.alice.address);
+    await fund(f.token, f.pool, f.owner, 5n);
+    await close(f.pool);
+    await exitAndReuseHistoricalSlot(f, p);
+    await assertHistoricalClaimOwnerAndReplayProtection(f, p);
+  });
+
+  it("rejects a stale zero leaf before it can consume a rejoined account's draw check", async function () {
+    const f = await fixture();
+    await configureWithdrawalAdapter(f);
+    for (const user of [f.alice, f.bob]) {
+      await deposit(f.token, f.pool, user, 1n);
+      await admit(f.pool, user.address);
+    }
+    const staleGeneration = await exitBothAndRejoinAlice(f);
+    const stale = await proofAt(f.pool, f.alice.address, 0n, staleGeneration);
+    const active = await proof(f.pool, f.alice.address);
+    await fund(f.token, f.pool, f.owner, 5n);
+    await close(f.pool);
+    await assertStaleProofRejected(f, stale);
+    await checkActivePrizeAndRejectReplay(f, active);
   });
 
   it("rejectsWrongOwnerGenerationPathAndDraw", async function () {

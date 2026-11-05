@@ -118,6 +118,76 @@ describe("MorphoYieldAdapter", function () {
       .requestWithdrawal(encryptedAmount.handles[0], encryptedAmount.inputProof);
   }
 
+  async function prepareYieldingDraw(firstDrawIsLazy: boolean) {
+    const f = await deployFixture();
+    const poolAddress = await f.pool.getAddress();
+    const confidentialUsdcAddress = await f.confidentialUsdc.getAddress();
+    await f.usdc.approve(confidentialUsdcAddress, USDC(1));
+    await f.confidentialUsdc.wrap(f.owner.address, USDC(1));
+    await encryptedDeposit(
+      f.confidentialUsdc,
+      confidentialUsdcAddress,
+      poolAddress,
+      f.owner,
+      USDC(1),
+    );
+    await finalizeAdmission(f.pool, f.owner.address);
+    const ownerProof = await captureMembershipProof(f.pool, f.owner.address);
+    await f.usdc.transfer(await f.adapter.getAddress(), USDC(1_000));
+    await f.pool.supplyFinalizedMorphoPrincipal(USDC(1_000));
+    await f.usdc.connect(f.keeper).approve(await f.morpho.getAddress(), USDC(50));
+    if (firstDrawIsLazy) {
+      await f.morpho.connect(f.keeper).queueYield(f.marketParams, USDC(25));
+    } else {
+      await f.morpho.connect(f.keeper).accrueYield(f.marketParams, USDC(25));
+    }
+    expect(await f.adapter.accruedYieldAssets()).to.equal(firstDrawIsLazy ? 0n : USDC(25) - 1n);
+    return { ...f, poolAddress, ownerProof };
+  }
+
+  async function assertFirstDrawHarvest(f: any) {
+    const firstClose = await closeAndCheck(f.pool, 1n, f.owner.address, f.ownerProof);
+    const encryptedWinnings = await f.pool.encryptedWinningsOf(f.owner.address);
+    const firstDrawWinnings = await fhevm.userDecryptEuint(
+      FhevmType.euint64,
+      encryptedWinnings,
+      f.poolAddress,
+      f.owner,
+    );
+    expect(firstDrawWinnings).to.equal(USDC(25) - 1n);
+    await expect(firstClose)
+      .to.emit(f.pool, "MorphoYieldHarvested")
+      .withArgs(USDC(25) - 1n);
+    expect(await f.adapter.suppliedPrincipal()).to.equal(USDC(1_000));
+    expect(await f.adapter.suppliedAssets()).to.equal(USDC(1_000));
+    expect(await f.pool.publicPrizeReserve()).to.equal(0n);
+    expect(await f.pool.morphoAccruedYieldAssets()).to.equal(0n);
+    return firstDrawWinnings;
+  }
+
+  async function assertSecondDrawHarvest(f: any, firstDrawWinnings: bigint) {
+    await f.morpho.connect(f.keeper).accrueYield(f.marketParams, USDC(7));
+    const observableYield = await f.adapter.accruedYieldAssets();
+    expect(observableYield).to.be.greaterThan(0n);
+    await f.morpho.connect(f.keeper).queueYield(f.marketParams, USDC(10));
+    expect(await f.adapter.accruedYieldAssets()).to.equal(observableYield);
+    const secondClose = await closeAndCheck(f.pool, 2n, f.owner.address, f.ownerProof);
+    const updatedEncryptedWinnings = await f.pool.encryptedWinningsOf(f.owner.address);
+    const secondDrawWinnings = await fhevm.userDecryptEuint(
+      FhevmType.euint64,
+      updatedEncryptedWinnings,
+      f.poolAddress,
+      f.owner,
+    );
+    expect(secondDrawWinnings).to.equal(USDC(42) - 1n);
+    expect(secondDrawWinnings - firstDrawWinnings).to.equal(USDC(17));
+    await expect(secondClose).to.emit(f.pool, "MorphoYieldHarvested").withArgs(USDC(17));
+    expect(await f.adapter.suppliedPrincipal()).to.equal(USDC(1_000));
+    expect(await f.adapter.suppliedAssets()).to.equal(USDC(1_000));
+    expect(await f.pool.publicPrizeReserve()).to.equal(0n);
+    expect(await f.pool.morphoAccruedYieldAssets()).to.equal(0n);
+  }
+
   it("lets a keeper request one timed principal unwrap", async function () {
     const { owner, keeper, usdc, confidentialUsdc, pool, adapter } = await deployFixture();
     const users = [owner, keeper];
@@ -274,72 +344,9 @@ describe("MorphoYieldAdapter", function () {
 
   for (const firstDrawIsLazy of [true, false]) {
     it(`accrues lazy interest at each draw close with ${firstDrawIsLazy ? "zero" : "recorded"} initial surplus`, async function () {
-      const { owner, keeper, usdc, confidentialUsdc, pool, morpho, adapter, marketParams } =
-        await deployFixture();
-      const confidentialUsdcAddress = await confidentialUsdc.getAddress();
-      const poolAddress = await pool.getAddress();
-
-      await usdc.approve(confidentialUsdcAddress, USDC(1));
-      await confidentialUsdc.wrap(owner.address, USDC(1));
-      await encryptedDeposit(
-        confidentialUsdc,
-        confidentialUsdcAddress,
-        poolAddress,
-        owner,
-        USDC(1),
-      );
-      await finalizeAdmission(pool, owner.address);
-      const ownerProof = await captureMembershipProof(pool, owner.address);
-
-      await usdc.transfer(await adapter.getAddress(), USDC(1_000));
-      await pool.supplyFinalizedMorphoPrincipal(USDC(1_000));
-      await usdc.connect(keeper).approve(await morpho.getAddress(), USDC(50));
-      if (firstDrawIsLazy) {
-        await morpho.connect(keeper).queueYield(marketParams, USDC(25));
-      } else {
-        await morpho.connect(keeper).accrueYield(marketParams, USDC(25));
-      }
-      expect(await adapter.accruedYieldAssets()).to.equal(firstDrawIsLazy ? 0n : USDC(25) - 1n);
-
-      const firstClose = await closeAndCheck(pool, 1n, owner.address, ownerProof);
-
-      const encryptedWinnings = await pool.encryptedWinningsOf(owner.address);
-      const firstDrawWinnings = await fhevm.userDecryptEuint(
-        FhevmType.euint64,
-        encryptedWinnings,
-        poolAddress,
-        owner,
-      );
-      expect(firstDrawWinnings).to.equal(USDC(25) - 1n);
-      await expect(firstClose)
-        .to.emit(pool, "MorphoYieldHarvested")
-        .withArgs(USDC(25) - 1n);
-      expect(await adapter.suppliedPrincipal()).to.equal(USDC(1_000));
-      expect(await adapter.suppliedAssets()).to.equal(USDC(1_000));
-      expect(await pool.publicPrizeReserve()).to.equal(0n);
-      expect(await pool.morphoAccruedYieldAssets()).to.equal(0n);
-
-      await morpho.connect(keeper).accrueYield(marketParams, USDC(7));
-      const observableYield = await adapter.accruedYieldAssets();
-      expect(observableYield).to.be.greaterThan(0n);
-      await morpho.connect(keeper).queueYield(marketParams, USDC(10));
-      expect(await adapter.accruedYieldAssets()).to.equal(observableYield);
-      const secondClose = await closeAndCheck(pool, 2n, owner.address, ownerProof);
-
-      const updatedEncryptedWinnings = await pool.encryptedWinningsOf(owner.address);
-      const secondDrawWinnings = await fhevm.userDecryptEuint(
-        FhevmType.euint64,
-        updatedEncryptedWinnings,
-        poolAddress,
-        owner,
-      );
-      expect(secondDrawWinnings).to.equal(USDC(42) - 1n);
-      expect(secondDrawWinnings - firstDrawWinnings).to.equal(USDC(17));
-      await expect(secondClose).to.emit(pool, "MorphoYieldHarvested").withArgs(USDC(17));
-      expect(await adapter.suppliedPrincipal()).to.equal(USDC(1_000));
-      expect(await adapter.suppliedAssets()).to.equal(USDC(1_000));
-      expect(await pool.publicPrizeReserve()).to.equal(0n);
-      expect(await pool.morphoAccruedYieldAssets()).to.equal(0n);
+      const f = await prepareYieldingDraw(firstDrawIsLazy);
+      const firstDrawWinnings = await assertFirstDrawHarvest(f);
+      await assertSecondDrawHarvest(f, firstDrawWinnings);
     });
   }
 

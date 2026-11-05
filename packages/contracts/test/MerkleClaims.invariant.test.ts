@@ -118,57 +118,56 @@ describe("ConfidentialPrizePool historical-draw invariants", function () {
     }
   }
 
-  it("conserves each funded draw across out-of-order checks, replay attempts, and a later claim", async function () {
-    const f = await fixture();
-    const weights = new Map([
-      [f.alice.address, 2n],
-      [f.bob.address, 3n],
-      [f.carol.address, 5n],
-    ]);
+  async function admitWeightedParticipants(f: any, users: any[], weights: Map<string, bigint>) {
     for (const [account, amount] of weights) {
-      const signer = [f.alice, f.bob, f.carol].find((candidate) => candidate.address === account)!;
+      const signer = users.find((candidate) => candidate.address === account)!;
       await deposit(f.token, f.pool, signer, amount);
       await admit(f.pool, account);
     }
-    const proofs = await Promise.all(
-      [f.alice, f.bob, f.carol].map((user) => captureMembershipProof(f.pool, user.address)),
-    );
+  }
+
+  async function fundAndCloseTwoDraws(f: any) {
     await fund(f.token, f.pool, f.owner, 7n);
     await close(f.pool);
     await fund(f.token, f.pool, f.owner, 11n);
     await close(f.pool);
+  }
 
-    // Draw two is settled before draw one; the reference model only uses the checked awards.
-    for (const [draw, positions] of [
-      [2n, [2, 0, 1]],
-      [1n, [1, 2, 0]],
-    ] as const) {
-      let awards = 0n;
-      for (const position of positions) {
-        const user = [f.alice, f.bob, f.carol][position];
-        await checkCapturedPrize(f.pool, draw, user.address, proofs[position]);
-        const award = await clear(await f.pool.encryptedAwardOf(draw, user.address));
-        if (user.address === f.bob.address) {
-          await expect(
-            fhevm.userDecryptEuint(
-              FhevmType.euint64,
-              await f.pool.encryptedAwardOf(draw, user.address),
-              await f.pool.getAddress(),
-              f.alice,
-            ),
-          ).to.be.rejected;
-        }
-        awards += award;
+  async function settleDrawInOrder(
+    f: any,
+    draw: bigint,
+    positions: readonly number[],
+    proofs: any[],
+  ) {
+    const users = [f.alice, f.bob, f.carol];
+    let awards = 0n;
+    for (const position of positions) {
+      const user = users[position];
+      await checkCapturedPrize(f.pool, draw, user.address, proofs[position]);
+      const award = await clear(await f.pool.encryptedAwardOf(draw, user.address));
+      if (user.address === f.bob.address) {
         await expect(
-          checkCapturedPrize(f.pool, draw, user.address, proofs[position]),
-        ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
+          fhevm.userDecryptEuint(
+            FhevmType.euint64,
+            await f.pool.encryptedAwardOf(draw, user.address),
+            await f.pool.getAddress(),
+            f.alice,
+          ),
+        ).to.be.rejected;
       }
-      const snapshot = await f.pool.draws(draw);
-      expect(awards + (await clear(snapshot.remaining))).to.equal(await clear(snapshot.prize));
+      awards += award;
+      await expect(
+        checkCapturedPrize(f.pool, draw, user.address, proofs[position]),
+      ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
     }
+    const snapshot = await f.pool.draws(draw);
+    expect(awards + (await clear(snapshot.remaining))).to.equal(await clear(snapshot.prize));
+  }
 
+  async function claimAndVerifyWinnerWinningsAreCleared(f: any) {
+    const users = [f.alice, f.bob, f.carol];
     const balances = await Promise.all(
-      [f.alice, f.bob, f.carol].map(async (user) =>
+      users.map(async (user) =>
         fhevm.userDecryptEuint(
           FhevmType.euint64,
           await f.pool.encryptedWinningsOf(user.address),
@@ -179,15 +178,41 @@ describe("ConfidentialPrizePool historical-draw invariants", function () {
     );
     const winnerIndex = balances.findIndex((balance) => balance > 0n);
     expect(winnerIndex).to.be.at.least(0);
-    await f.pool.connect([f.alice, f.bob, f.carol][winnerIndex]).claimPrize();
+    const winner = users[winnerIndex];
+    await f.pool.connect(winner).claimPrize();
     expect(
       await fhevm.userDecryptEuint(
         FhevmType.euint64,
-        await f.pool.encryptedWinningsOf([f.alice, f.bob, f.carol][winnerIndex].address),
+        await f.pool.encryptedWinningsOf(winner.address),
         await f.pool.getAddress(),
-        [f.alice, f.bob, f.carol][winnerIndex],
+        winner,
       ),
     ).to.equal(0n);
+  }
+
+  it("conserves each funded draw across out-of-order checks, replay attempts, and a later claim", async function () {
+    const f = await fixture();
+    const users = [f.alice, f.bob, f.carol];
+    const weights = new Map([
+      [f.alice.address, 2n],
+      [f.bob.address, 3n],
+      [f.carol.address, 5n],
+    ]);
+    await admitWeightedParticipants(f, users, weights);
+    const proofs = await Promise.all(
+      users.map((user) => captureMembershipProof(f.pool, user.address)),
+    );
+    await fundAndCloseTwoDraws(f);
+
+    // Draw two is settled before draw one; the reference model only uses the checked awards.
+    for (const [draw, positions] of [
+      [2n, [2, 0, 1]],
+      [1n, [1, 2, 0]],
+    ] as const) {
+      await settleDrawInOrder(f, draw, positions, proofs);
+    }
+
+    await claimAndVerifyWinnerWinningsAreCleared(f);
   });
 
   it("keeps an empty draw's encrypted reserve for a future draw while its public mirror reports only new funding", async function () {
