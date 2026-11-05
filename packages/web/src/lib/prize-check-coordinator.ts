@@ -17,6 +17,7 @@ import type {
   SafeUserOperationIdentity,
   SafeUserOperationReceipt,
   SmartAccountCall,
+  SmartTransactionOptions,
 } from "./smart-session.ts";
 
 export type PrizeCheckIntent = Readonly<{
@@ -68,7 +69,7 @@ export type PrizeCheckCoordinatorDependencies = Readonly<{
 type ReadyReview = Extract<PrizeCheckState, { state: "ready" }>;
 export type PreparedPrizeCheck = Readonly<{
   cancel(): void;
-  confirm(): Promise<PrizeCheckState>;
+  confirm(options?: SmartTransactionOptions): Promise<PrizeCheckState>;
 }>;
 
 const ACTION = "checkPrize" as const;
@@ -378,7 +379,7 @@ function ready(
   signal?.addEventListener("abort", cancel, { once: true });
   return Object.freeze({
     cancel,
-    confirm: () => {
+    confirm: (options = {}) => {
       if (confirmation) return confirmation;
       try {
         aborted(signal);
@@ -398,6 +399,7 @@ function ready(
             await dependencies.intentStore.save(captured);
             aborted(signal);
             observed = captured;
+            await options.onOperationPrepared?.(operation);
           },
         });
         confirmation = sent.then(

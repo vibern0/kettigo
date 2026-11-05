@@ -226,7 +226,9 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
       async ({ update }) => {
         update({ status: "waiting-wallet" });
         try {
-          const checked = await prepared.confirm();
+          const checked = await prepared.confirm({
+            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+          });
           update({ status: "completed" });
           await viewRound(checked.drawId);
         } catch (error) {

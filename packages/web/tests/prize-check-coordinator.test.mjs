@@ -449,6 +449,19 @@ test("prepares only the accepted proof and sends once from confirm", async () =>
   await first;
 });
 
+test("forwards the prepared public operation before confirmation settles", async () => {
+  const { coordinator } = fixture();
+  const review = await coordinator.review(4n);
+  const ready = await coordinator.prepare(review);
+  let observed;
+  await ready.confirm({
+    onOperationPrepared: (operation) => {
+      observed = operation;
+    },
+  });
+  assert.equal(observed.sender, ACCOUNT);
+});
+
 test("viem reader pins calls to canonical EIP-1898 block hashes", async () => {
   const requests = [];
   const reader = createViemPrizeChainReader(
