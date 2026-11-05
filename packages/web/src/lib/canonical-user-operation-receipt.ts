@@ -16,6 +16,17 @@ export type SafeUserOperationReceipt =
       blockNumber: bigint;
       blockHash: Hex;
     }>;
+export type CanonicalUserOperationReceipt =
+  | Extract<SafeUserOperationReceipt, { state: "pending" }>
+  | Readonly<{
+      state: "confirmed" | "failed";
+      operation: SafeUserOperationIdentity;
+      transactionHash: Hex;
+      blockNumber: bigint;
+      blockHash: Hex;
+      nonce: bigint;
+      actualGasCost: bigint;
+    }>;
 export class SafeUserOperationIntegrityError extends Error {
   readonly operation: SafeUserOperationIdentity;
   constructor(operation: SafeUserOperationIdentity, message: string) {
@@ -72,7 +83,9 @@ const timedOut = Symbol("timed-out");
 function sameHex(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
 }
-function pending(operation: SafeUserOperationIdentity): SafeUserOperationReceipt {
+function pending(
+  operation: SafeUserOperationIdentity,
+): Extract<SafeUserOperationReceipt, { state: "pending" }> {
   return Object.freeze({ state: "pending" as const, operation });
 }
 function integrity(operation: SafeUserOperationIdentity, message: string): never {
@@ -215,13 +228,13 @@ function validateEventLocation(
   if (log.blockNumber !== undefined && log.blockNumber !== blockNumber)
     integrity(operation, "The operation event has a different block number.");
 }
-function eventSuccess(
+function eventResult(
   log: EthereumLog,
   operation: SafeUserOperationIdentity,
   transactionHash: Hex,
   blockHash: Hex,
   blockNumber: bigint,
-): boolean | undefined {
+): Readonly<{ success: boolean; nonce: bigint; actualGasCost: bigint }> | undefined {
   if (
     !expectedEmitter(log, operation) ||
     !Array.isArray(log.topics) ||
@@ -230,7 +243,13 @@ function eventSuccess(
     return undefined;
   const decoded = decodedEvent(log, operation);
   if (decoded.eventName !== "UserOperationEvent") return undefined;
-  const args = decoded.args as { userOpHash?: string; sender?: string; success?: boolean };
+  const args = decoded.args as {
+    userOpHash?: string;
+    sender?: string;
+    nonce?: bigint;
+    success?: boolean;
+    actualGasCost?: bigint;
+  };
   if (!args.userOpHash || !sameHex(args.userOpHash, operation.userOperationHash)) return undefined;
   if (
     address(args.sender, operation, "The operation event has an invalid sender.") !==
@@ -240,7 +259,13 @@ function eventSuccess(
   validateEventLocation(log, operation, transactionHash, blockHash, blockNumber);
   if (typeof args.success !== "boolean")
     return integrity(operation, "The chain returned an invalid operation event.");
-  return args.success;
+  if (typeof args.nonce !== "bigint" || typeof args.actualGasCost !== "bigint")
+    return integrity(operation, "The chain returned an invalid operation event.");
+  return Object.freeze({
+    success: args.success,
+    nonce: args.nonce,
+    actualGasCost: args.actualGasCost,
+  });
 }
 function transactionHashFromBundler(
   bundler: BundlerReceipt,
@@ -310,15 +335,15 @@ function selectEvent(
   operation: SafeUserOperationIdentity,
   transactionHash: Hex,
   blockHash: Hex,
-): boolean | undefined {
-  let selected: boolean | undefined;
+): Readonly<{ success: boolean; nonce: bigint; actualGasCost: bigint }> | undefined {
+  let selected: Readonly<{ success: boolean; nonce: bigint; actualGasCost: bigint }> | undefined;
   for (const log of receipt.logs) {
     if (!log || typeof log !== "object") continue;
-    const success = eventSuccess(log, operation, transactionHash, blockHash, receipt.blockNumber);
-    if (success === undefined) continue;
+    const result = eventResult(log, operation, transactionHash, blockHash, receipt.blockNumber);
+    if (result === undefined) continue;
     if (selected !== undefined)
       integrity(operation, "The chain returned duplicate operation events.");
-    selected = success;
+    selected = result;
   }
   return selected;
 }
@@ -328,7 +353,7 @@ export async function lookupCanonicalUserOperationReceipt(
   dependencies: CanonicalReceiptDependencies,
   rawOperation: SafeUserOperationIdentity,
   options: CanonicalReceiptOptions = {},
-): Promise<SafeUserOperationReceipt> {
+): Promise<CanonicalUserOperationReceipt> {
   const operation = canonicalOperation(rawOperation);
   if (options.signal?.aborted) abortError(options.signal);
   const controller = new AbortController();
@@ -353,16 +378,18 @@ export async function lookupCanonicalUserOperationReceipt(
       dependencies.getBlock({ blockNumber: receipt.blockNumber }, { signal: controller.signal }),
     );
     if (!canonicalBlock(block, receipt, blockHash, operation)) return pending(operation);
-    const success = selectEvent(receipt, operation, transactionHash, blockHash);
-    if (success === undefined) return pending(operation);
-    if (success !== bundler.success)
+    const selected = selectEvent(receipt, operation, transactionHash, blockHash);
+    if (selected === undefined) return pending(operation);
+    if (selected.success !== bundler.success)
       integrity(operation, "The relay and chain disagree about operation success.");
     return Object.freeze({
-      state: success ? ("confirmed" as const) : ("failed" as const),
+      state: selected.success ? ("confirmed" as const) : ("failed" as const),
       operation,
       transactionHash,
       blockNumber: receipt.blockNumber,
       blockHash,
+      nonce: selected.nonce,
+      actualGasCost: selected.actualGasCost,
     });
   } finally {
     controller.abort();

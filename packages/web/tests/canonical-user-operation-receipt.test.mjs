@@ -23,15 +23,18 @@ const operation = Object.freeze({
   userOperationHash: OPERATION_HASH,
 });
 
-function userOperationLog({
-  address = ENTRY_POINT,
-  sender = SENDER,
-  hash = OPERATION_HASH,
-  success = true,
-  transactionHash = TRANSACTION_HASH,
-  blockHash = BLOCK_HASH,
-  blockNumber = 42n,
-} = {}) {
+function userOperationLog(overrides = {}) {
+  const {
+    address = ENTRY_POINT,
+    sender = SENDER,
+    hash = OPERATION_HASH,
+    nonce = 0n,
+    success = true,
+    actualGasCost = 1n,
+    transactionHash = TRANSACTION_HASH,
+    blockHash = BLOCK_HASH,
+    blockNumber = 42n,
+  } = overrides;
   return {
     address,
     topics: encodeEventTopics({
@@ -41,15 +44,15 @@ function userOperationLog({
         userOpHash: hash,
         sender,
         paymaster: "0x0000000000000000000000000000000000000000",
-        nonce: 0n,
+        nonce,
         success,
-        actualGasCost: 1n,
+        actualGasCost,
         actualGasUsed: 1n,
       },
     }),
     data: encodeAbiParameters(
       [{ type: "uint256" }, { type: "bool" }, { type: "uint256" }, { type: "uint256" }],
-      [0n, success, 1n, 1n],
+      [nonce, success, actualGasCost, 1n],
     ),
     transactionHash,
     blockHash,
@@ -120,10 +123,43 @@ test("confirms its real EntryPoint event while ignoring malformed lookalikes fro
     transactionHash: TRANSACTION_HASH,
     blockNumber: 42n,
     blockHash: BLOCK_HASH,
+    nonce: 0n,
+    actualGasCost: 1n,
   });
 });
 
+test("retains the matched event's full nonce and gas cost instead of a foreign bundled event", async () => {
+  const nonce = 9007199254740993n;
+  const actualGasCost = 123456789012345678901234567890n;
+  const { dependencies: rpc } = dependencies({
+    async getTransactionReceipt() {
+      return {
+        transactionHash: TRANSACTION_HASH,
+        status: "success",
+        blockHash: BLOCK_HASH,
+        blockNumber: 42n,
+        logs: [
+          userOperationLog({
+            hash: `0x${"44".repeat(32)}`,
+            sender: OTHER,
+            nonce: 7n,
+            actualGasCost: 9n,
+          }),
+          userOperationLog({ nonce, actualGasCost }),
+        ],
+      };
+    },
+  });
+
+  const receipt = await lookupCanonicalUserOperationReceipt(rpc, operation);
+  assert.equal(receipt.state, "confirmed");
+  assert.equal(receipt.nonce, nonce);
+  assert.equal(receipt.actualGasCost, actualGasCost);
+});
+
 test("marks a canonical event with inner false as failed despite outer receipt success", async () => {
+  const nonce = 12345678901234567890n;
+  const actualGasCost = 98765432109876543210n;
   const { dependencies: rpc } = dependencies({
     async getUserOperationReceipt() {
       return {
@@ -139,11 +175,22 @@ test("marks a canonical event with inner false as failed despite outer receipt s
         status: "success",
         blockHash: BLOCK_HASH,
         blockNumber: 42n,
-        logs: [userOperationLog({ success: false })],
+        logs: [
+          userOperationLog({
+            hash: `0x${"44".repeat(32)}`,
+            sender: OTHER,
+            nonce: 7n,
+            actualGasCost: 9n,
+          }),
+          userOperationLog({ success: false, nonce, actualGasCost }),
+        ],
       };
     },
   });
-  assert.equal((await lookupCanonicalUserOperationReceipt(rpc, operation)).state, "failed");
+  const receipt = await lookupCanonicalUserOperationReceipt(rpc, operation);
+  assert.equal(receipt.state, "failed");
+  assert.equal(receipt.nonce, nonce);
+  assert.equal(receipt.actualGasCost, actualGasCost);
 });
 
 test("rejects malformed identity before any RPC read", async () => {
@@ -208,6 +255,8 @@ test("returns pending for unavailable canonical evidence", async () => {
     const { dependencies: rpc } = dependencies(variant);
     const receipt = await lookupCanonicalUserOperationReceipt(rpc, operation);
     assert.equal(receipt.state, "pending", variant.name);
+    assert.equal("nonce" in receipt, false, variant.name);
+    assert.equal("actualGasCost" in receipt, false, variant.name);
   }
 });
 
