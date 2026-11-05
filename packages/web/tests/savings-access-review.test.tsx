@@ -7,13 +7,17 @@ const fixture = vi.hoisted(() => ({
   send: vi.fn(),
   refresh: vi.fn(),
   readCalls: vi.fn(),
+  encrypt: vi.fn(),
+  walletBalance: 100_000_000n,
+  principal: undefined as bigint | undefined,
   session: undefined as { address: `0x${string}`; prepareTransaction: typeof vi.fn } | undefined,
 }));
 
 vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
-    readContract: async () => 0n,
+    readContract: async ({ functionName }: { functionName: string }) =>
+      functionName === "balanceOf" ? fixture.walletBalance : 0n,
     getBlockNumber: async () => 0n,
     request: async () => [],
     watchBlockNumber: () => () => {},
@@ -30,7 +34,7 @@ vi.mock("@/lib/contracts", async (original) => ({
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
     session: fixture.session,
-    principal: undefined,
+    principal: fixture.principal,
     confidentialBalancesLoading: false,
     confidentialBalancesError: null,
     confidentialBalancesReadState: "access-required",
@@ -45,11 +49,18 @@ vi.mock("@/lib/zama", async () => ({
   asChecksumAddress: (await vi.importActual<typeof import("viem")>("viem")).getAddress,
   createPublicZamaSDK: vi.fn(),
   decryptPublicUint64: vi.fn(),
-  encryptUint64: vi.fn(),
-  withSmartZamaSDK: vi.fn(),
+  encryptUint64: fixture.encrypt,
+  withSmartZamaSDK: async (_session: unknown, action: (sdk: unknown) => unknown) => action({}),
   prepareSmartReadSessionCalls: fixture.readCalls,
 }));
-vi.mock("@/components/ActionCenter", () => ({ useActionCenter: () => ({ runAction: (_input: unknown, runner: (controls: { update: () => void }) => Promise<void>) => { void runner({ update() {} }); return "access"; } }) }));
+vi.mock("@/components/ActionCenter", () => ({
+  useActionCenter: () => ({
+    runAction: (_input: unknown, runner: (controls: { update: () => void }) => Promise<void>) => {
+      void runner({ update() {} });
+      return "access";
+    },
+  }),
+}));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn() }));
 
 import SavingsPage from "@/app/savings/page";
@@ -68,8 +79,12 @@ beforeEach(() => {
   fixture.send.mockReset();
   fixture.refresh.mockReset();
   fixture.readCalls.mockReset();
+  fixture.encrypt.mockReset();
+  fixture.walletBalance = 100_000_000n;
+  fixture.principal = undefined;
   fixture.session = { address: fixture.account, prepareTransaction: fixture.prepare };
   fixture.readCalls.mockResolvedValue([{ to: fixture.account, data: "0x" }]);
+  fixture.encrypt.mockResolvedValue({ handle: `0x${"1".repeat(64)}`, inputProof: "0x" });
   fixture.prepare.mockResolvedValue({ cancel() {}, send: fixture.send });
   fixture.send.mockResolvedValue(`0x${"4".repeat(64)}`);
   fixture.refresh.mockResolvedValue(undefined);
@@ -97,4 +112,55 @@ test("switching from a ready access review to Deposit cancels its prepared opera
   await screen.findByRole("button", { name: "Confirm" });
   fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
   expect(cancel).toHaveBeenCalledTimes(1);
+});
+
+test("deposit Ready then withdrawal review cancels the unused deposit before preparing withdrawal", async () => {
+  const events: string[] = [];
+  const deposit = { cancel: vi.fn(() => events.push("deposit-cancel")), send: fixture.send };
+  const withdrawal = { cancel: vi.fn(), send: fixture.send };
+  fixture.principal = 50_000_000n;
+  fixture.prepare.mockImplementation(async () => {
+    events.push(`prepare-${fixture.prepare.mock.calls.length}`);
+    return fixture.prepare.mock.calls.length === 1 ? deposit : withdrawal;
+  });
+  mount();
+  await screen.findByText("100.00 USDC");
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Close deposit sheet" }).at(-1)!);
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review withdrawal" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(2));
+  expect(deposit.cancel).toHaveBeenCalledTimes(1);
+  expect(events.indexOf("deposit-cancel")).toBeLessThan(events.indexOf("prepare-2"));
+});
+
+test("an in-flight deposit preparation is aborted and its late prepared transaction is cancelled before access review", async () => {
+  let resolveDeposit!: (value: { cancel: () => void; send: typeof fixture.send }) => void;
+  const lateCancel = vi.fn();
+  const pendingDeposit = new Promise<{ cancel: () => void; send: typeof fixture.send }>(
+    (resolve) => {
+      resolveDeposit = resolve;
+    },
+  );
+  fixture.prepare
+    .mockImplementationOnce(() => pendingDeposit)
+    .mockResolvedValueOnce({ cancel() {}, send: fixture.send });
+  mount();
+  await screen.findByText("100.00 USDC");
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  const signal = fixture.prepare.mock.calls[0]?.[1]?.signal as AbortSignal;
+  fireEvent.click(screen.getAllByRole("button", { name: "Close deposit sheet" }).at(-1)!);
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  await waitFor(() => expect(signal.aborted).toBe(true));
+  resolveDeposit({ cancel: lateCancel, send: fixture.send });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
+  await screen.findByRole("button", { name: "Confirm" });
 });
