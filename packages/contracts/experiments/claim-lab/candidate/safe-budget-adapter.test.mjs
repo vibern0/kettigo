@@ -55,21 +55,25 @@ function packedCall({ operation = 0, to, value = 0n, data }) {
   ]);
 }
 
-function fixedCallFixture() {
+function fixedCallFixture({
+  pool = POOL,
+  delegatedContract = WRAPPER,
+  spender = WRAPPER,
+  proof = "0x1234",
+} = {}) {
   const handle = "0x" + "11".repeat(32);
-  const proof = "0x1234";
   const wrapData = WRAPPER_ABI.encodeFunctionData("wrap", [SAFE, 7n]);
   const transferData = WRAPPER_ABI.encodeFunctionData("confidentialTransferAndCall", [
-    POOL,
+    pool,
     handle,
     proof,
     "0x",
   ]);
   const wrapperData = WRAPPER_ABI.encodeFunctionData("multicall", [[wrapData, transferData]]);
   const aclData = encodeFunctionData(
-    delegateForUserDecryptionContract(ACL, DELEGATE, WRAPPER, 123n),
+    delegateForUserDecryptionContract(ACL, DELEGATE, delegatedContract, 123n),
   );
-  const approveData = ERC20_ABI.encodeFunctionData("approve", [WRAPPER, 7n]);
+  const approveData = ERC20_ABI.encodeFunctionData("approve", [spender, 7n]);
   const calls = [
     { to: USDC, value: 0n, data: approveData },
     { to: ACL, value: 0n, data: aclData },
@@ -80,7 +84,18 @@ function fixedCallFixture() {
   ]);
   const callData = EXECUTE.encodeFunctionData("executeUserOp", [MULTISEND, 0n, multiSendData, 1]);
   const directCallData = EXECUTE.encodeFunctionData("executeUserOp", [WRAPPER, 0n, wrapperData, 0]);
-  return { handle, proof, calls, callData, directCallData, wrapperData, aclData };
+  return {
+    handle,
+    proof,
+    pool,
+    delegatedContract,
+    spender,
+    calls,
+    callData,
+    directCallData,
+    wrapperData,
+    aclData,
+  };
 }
 
 function policyFor(fixture) {
@@ -93,12 +108,15 @@ function policyFor(fixture) {
       deposit: {
         token: WRAPPER,
         user: SAFE,
-        pool: POOL,
+        pool: fixture.pool,
         amount: 7n,
         handle: fixture.handle,
         proof: fixture.proof,
       },
-      delegations: [{ acl: ACL, delegate: DELEGATE, contract: WRAPPER, expiration: 123n }],
+      delegations: [
+        { acl: ACL, delegate: DELEGATE, contract: fixture.delegatedContract, expiration: 123n },
+      ],
+      approvals: [{ token: USDC, spender: fixture.spender, amount: 7n }],
     },
   });
 }
@@ -243,6 +261,43 @@ test("fixed Safe policy binds real wrapper/ACL roles for direct, batch, deployed
   assert.throws(
     () => policy.assert({ factory: FACTORY, factoryData: "0xaabb", callData: altered }),
     /roles|expected/,
+  );
+});
+
+test("denies forbidden decoded wrapper, ACL, and approval roles even when expected roles agree", () => {
+  for (const forbidden of [
+    "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b",
+    "0x9c23E5f7143612dc1232FC643A57300291e0d719",
+    "0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27",
+  ]) {
+    for (const override of [
+      { pool: forbidden },
+      { delegatedContract: forbidden },
+      { spender: forbidden },
+    ]) {
+      const fixture = fixedCallFixture(override);
+      assert.throws(
+        () =>
+          policyFor(fixture).assert({
+            factory: FACTORY,
+            factoryData: "0xaabb",
+            callData: fixture.callData,
+          }),
+        /forbidden/,
+      );
+    }
+  }
+});
+
+test("accepts opaque proof bytes that merely contain a forbidden address", () => {
+  const proof = "0x" + "AdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27".slice(2).toLowerCase() + "00";
+  const fixture = fixedCallFixture({ proof });
+  assert.doesNotThrow(() =>
+    policyFor(fixture).assert({
+      factory: FACTORY,
+      factoryData: "0xaabb",
+      callData: fixture.callData,
+    }),
   );
 });
 

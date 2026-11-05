@@ -12,6 +12,7 @@ const WRAPPER = new Interface([
 const ACL = new Interface([
   "function delegateForUserDecryption(address delegate,address contractAddress,uint64 expirationDate)",
 ]);
+const ERC20 = new Interface(["function approve(address spender,uint256 amount)"]);
 const FORBIDDEN = new Set(
   [
     "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b",
@@ -99,6 +100,9 @@ function sameCall(left, right) {
 function noForbidden(calls) {
   for (const call of calls) if (FORBIDDEN.has(call.to)) fail("forbidden nested recipient");
 }
+function denyForbidden(value, label) {
+  if (FORBIDDEN.has(value)) fail(`forbidden ${label}`);
+}
 function assertDeposit(call, expected) {
   if (!expected || call.to !== expected.token) return;
   const [parts] = decode(WRAPPER, "multicall", call.data, "wrapper multicall");
@@ -110,6 +114,8 @@ function assertDeposit(call, expected) {
     parts[1],
     "wrapper transfer",
   );
+  denyForbidden(getAddress(recipient), "wrapper recipient");
+  denyForbidden(getAddress(pool), "wrapper callback recipient");
   if (
     getAddress(recipient) !== expected.user ||
     BigInt(amount) !== expected.amount ||
@@ -128,6 +134,8 @@ function assertDelegation(call, expected) {
     call.data,
     "ACL delegation",
   );
+  denyForbidden(getAddress(delegate), "ACL delegate");
+  denyForbidden(getAddress(contractAddress), "ACL delegated contract");
   if (
     getAddress(delegate) !== expected.delegate ||
     getAddress(contractAddress) !== expected.contract ||
@@ -135,10 +143,18 @@ function assertDelegation(call, expected) {
   )
     fail("unexpected ACL delegation roles");
 }
+function assertApproval(call, expected) {
+  if (!expected || call.to !== expected.token) return;
+  const [spender, amount] = decode(ERC20, "approve", call.data, "ERC-20 approval");
+  denyForbidden(getAddress(spender), "approval spender");
+  if (getAddress(spender) !== expected.spender || BigInt(amount) !== expected.amount)
+    fail("unexpected approval roles");
+}
 function bindRoles(calls, roles) {
   for (const call of calls) {
     assertDeposit(call, roles.deposit);
     for (const delegation of roles.delegations) assertDelegation(call, delegation);
+    for (const approval of roles.approvals) assertApproval(call, approval);
   }
 }
 
@@ -180,10 +196,20 @@ export function createFixedSafeCallPolicy({
             expiration: BigInt(entry.expiration),
           }))
         : [],
+      approvals: Array.isArray(roles.approvals)
+        ? roles.approvals.map((entry) => ({
+            token: address(entry.token, "approval token"),
+            spender: address(entry.spender, "approval spender"),
+            amount: BigInt(entry.amount),
+          }))
+        : [],
     },
   };
   noForbidden(fixed.deployedCalls);
+  denyForbidden(fixed.module, "module");
+  denyForbidden(fixed.multiSend, "MultiSend");
   if (fixed.counterfactual) noForbidden(fixed.counterfactual.calls);
+  if (fixed.counterfactual) denyForbidden(fixed.counterfactual.factory, "factory");
   function selected(operation) {
     if (operation.factory === "0x" && operation.factoryData === "0x") return fixed.deployedCalls;
     if (
