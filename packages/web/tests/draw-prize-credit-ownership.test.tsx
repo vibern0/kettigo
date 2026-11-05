@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { entryPoint07Address } from "viem/account-abstraction";
+import { SafeUserOperationPendingError } from "@/lib/passkey-operation";
 import { ZamaReadSessionAccessRequiredError } from "@/lib/zama-session-manager";
 
 const fixture = vi.hoisted(() => {
@@ -202,7 +203,7 @@ test("parent confirmation refuses repeated parent confirmation and child review 
 
   fixture.getPendingOperation.mockReturnValue(parentOperation);
   observe(parentOperation);
-  rejectSend(new Error("native signing interrupted"));
+  rejectSend(new SafeUserOperationPendingError(parentOperation));
   await waitFor(() => expect(actions()).toHaveLength(1));
   expect(screen.getByTestId("actions").textContent).toContain(parentOperation.userOperationHash);
   expect(fixture.prepareTransaction).toHaveBeenCalledTimes(1);

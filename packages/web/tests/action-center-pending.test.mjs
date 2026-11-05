@@ -9,7 +9,9 @@ import {
   patchForRunnerError,
 } from "../src/lib/action-center-pending.ts";
 import {
+  SafeUserOperationFailedError,
   SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
   SafeUserOperationRejectedError,
 } from "../src/lib/passkey-operation.ts";
 import { SafeUserOperationIntegrityError } from "../src/lib/canonical-user-operation-receipt.ts";
@@ -75,6 +77,18 @@ test("classifies typed terminal Safe runner errors after the guard clears", () =
     patchForRunnerError(action, null, new SafeUserOperationNotSubmittedError(operation)).status,
     "not-submitted",
   );
+  assert.equal(
+    patchForRunnerError(
+      action,
+      null,
+      new SafeUserOperationFailedError(operation, `0x${"cd".repeat(32)}`),
+    ).status,
+    "failed",
+  );
+  assert.equal(
+    patchForRunnerError(action, null, new SafeUserOperationPendingError(operation)).status,
+    "confirming",
+  );
 });
 
 test("reader failure keeps an action non-final and unavailable", () => {
@@ -90,6 +104,44 @@ test("reader failure keeps an action non-final and unavailable", () => {
 
   assert.equal(updated.status, "confirming");
   assert.equal(updated.error, "Status is unavailable right now. Check status later.");
+});
+
+test("reader failure preserves a certain typed terminal outcome and its operation", () => {
+  const action = actionForPendingOperation({ ...operation, phase: "prepared" }, 2_000);
+  const [updated] = applyRunnerErrorFromPendingReader(
+    [action],
+    action.id,
+    () => {
+      throw new Error("storage failure");
+    },
+    new SafeUserOperationRejectedError(operation, 4001),
+  );
+
+  assert.equal(updated.status, "rejected");
+  assert.equal(updated.error, "Approval was not completed.");
+  assert.equal(updated.operation?.userOperationHash, operation.userOperationHash);
+});
+
+test("reader failure preserves every other certain typed terminal outcome", () => {
+  const action = actionForPendingOperation({ ...operation, phase: "prepared" }, 2_000);
+  for (const error of [
+    new SafeUserOperationNotSubmittedError(operation),
+    new SafeUserOperationFailedError(operation, `0x${"cd".repeat(32)}`),
+  ]) {
+    const [updated] = applyRunnerErrorFromPendingReader(
+      [action],
+      action.id,
+      () => {
+        throw new Error("storage failure");
+      },
+      error,
+    );
+    assert.equal(
+      updated.status,
+      error instanceof SafeUserOperationFailedError ? "failed" : "not-submitted",
+    );
+    assert.equal(updated.operation?.userOperationHash, operation.userOperationHash);
+  }
 });
 
 test("distinguishes integrity failure before staging from an attempted operation", () => {

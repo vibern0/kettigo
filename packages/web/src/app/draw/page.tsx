@@ -19,6 +19,11 @@ import { DrawPoolSummary } from "@/components/draw/DrawPoolSummary";
 import { PrizeCreditPanel } from "@/components/draw/PrizeCreditPanel";
 import { useActionCenter } from "@/components/ActionCenter";
 import { createReviewLease } from "@/components/draw/review-lease";
+import {
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "@/lib/passkey-operation";
 
 type Status = "idle" | "working" | "success" | "error";
 type WorkingAction = PrizeActionId | undefined;
@@ -155,7 +160,7 @@ async function readDrawSnapshot(
 // Draw page for checking prizes, claiming winnings, and viewing round timing.
 export default function DrawPage() {
   const { session, refreshConfidentialBalances } = useWallet();
-  const { runAction } = useActionCenter();
+  const { actions = [], runAction } = useActionCenter();
   const toast = useToast();
   const [hydrated, setHydrated] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
@@ -170,6 +175,7 @@ export default function DrawPage() {
   const [creditReview, setCreditReview] = useState<CreditReview>();
   const winningsRequestId = useRef(0);
   const reviewLeaseRef = useRef(createReviewLease());
+  const pendingCreditOwnersRef = useRef(new Map<string, symbol>());
   const winningsSessionRef = useRef(session?.address);
   winningsSessionRef.current = session?.address;
   const refreshRef = useRef<(blockNumber?: bigint) => Promise<void>>(async () => undefined);
@@ -216,8 +222,24 @@ export default function DrawPage() {
 
   useEffect(() => {
     reviewLeaseRef.current.dispose();
+    pendingCreditOwnersRef.current.clear();
     setCreditReview(undefined);
   }, [session?.address, addresses.pool, runtime.mode2]);
+
+  useEffect(() => {
+    for (const action of actions) {
+      if (
+        !action.operation ||
+        !["completed", "failed", "rejected", "not-submitted"].includes(action.status)
+      )
+        continue;
+      const key = creditOperationKey(action.operation);
+      const owner = pendingCreditOwnersRef.current.get(key);
+      if (!owner) continue;
+      reviewLeaseRef.current.complete(owner);
+      pendingCreditOwnersRef.current.delete(key);
+    }
+  }, [actions]);
 
   useEffect(() => {
     if (!ready) return;
@@ -345,7 +367,10 @@ export default function DrawPage() {
         update({ status: "waiting-wallet" });
         try {
           const tx = await review.prepared.send({
-            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+            onOperationPrepared: (operation) => {
+              pendingCreditOwnersRef.current.set(creditOperationKey(operation), review.owner);
+              update({ status: "confirming", operation });
+            },
           });
           update({ status: "confirming" });
           const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
@@ -358,6 +383,16 @@ export default function DrawPage() {
           await refreshConfidentialBalances();
           update({ status: "completed" });
           reviewLeaseRef.current.complete(review.owner);
+        } catch (error) {
+          if (
+            error instanceof SafeUserOperationFailedError ||
+            error instanceof SafeUserOperationNotSubmittedError ||
+            error instanceof SafeUserOperationRejectedError
+          ) {
+            pendingCreditOwnersRef.current.delete(creditOperationKey(error.operation));
+            reviewLeaseRef.current.complete(review.owner);
+          }
+          throw error;
         } finally {
           setCreditReview((current) => (current === review ? undefined : current));
         }
@@ -469,4 +504,13 @@ export default function DrawPage() {
       />
     </div>
   );
+}
+
+function creditOperationKey(operation: {
+  chainId: number;
+  entryPoint: string;
+  sender: string;
+  userOperationHash: string;
+}) {
+  return `${operation.chainId}:${operation.entryPoint.toLowerCase()}:${operation.sender.toLowerCase()}:${operation.userOperationHash.toLowerCase()}`;
 }

@@ -11,6 +11,7 @@ import type { PendingOperationRecoveryResult, PendingOperationRecord } from "./s
 import {
   SafeUserOperationFailedError,
   SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
   SafeUserOperationRejectedError,
 } from "./passkey-operation.ts";
 
@@ -88,6 +89,11 @@ export function patchForRunnerError(
       txHash: error.transactionHash,
       error: "This action did not go through.",
     };
+  if (error instanceof SafeUserOperationPendingError)
+    return {
+      status: "confirming",
+      error: "Still processing. Check status to see the latest update.",
+    };
   if (
     action.status === "submitted" ||
     action.status === "confirming" ||
@@ -133,7 +139,14 @@ export function applyRunnerErrorFromPendingReader(
     return applyRunnerError(actions, id, readPending(), error);
   } catch {
     const action = actions.find((item) => item.id === id);
-    return action ? updateAction(actions, id, unavailableStatusPatch()) : actions;
+    if (!action) return actions;
+    if (
+      error instanceof SafeUserOperationRejectedError ||
+      error instanceof SafeUserOperationNotSubmittedError ||
+      error instanceof SafeUserOperationFailedError
+    )
+      return updateAction(actions, id, patchForRunnerError(action, undefined, error));
+    return updateAction(actions, id, unavailableStatusPatch());
   }
 }
 
