@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { decryptConfidentialBalances } from "./confidential-balances";
-import { PIMLICO_API_KEY } from "./contracts";
+import { CONTRACTS, PIMLICO_API_KEY } from "./contracts";
 import { readPasskeyMetadata } from "./passkey-metadata";
 import { createPasskeyAccount, restorePasskeyAccount } from "./passkey-safe";
 import { isPasskeySupported } from "./passkey-webauthn";
@@ -20,14 +20,10 @@ import { publicConfig } from "./runtime-config";
 import type { PasskeySmartSession } from "./smart-session";
 import { getWalletError, type WalletFailureStatus } from "./wallet-errors";
 import { clearSmartZamaSession } from "./zama";
+import { ZamaReadSessionAccessRequiredError } from "./zama-session-manager";
 
 export type WalletStatus =
-  | "checking"
-  | "no-account"
-  | "creating"
-  | "awaiting-verification"
-  | "ready"
-  | WalletFailureStatus;
+  "checking" | "no-account" | "creating" | "awaiting-verification" | "ready" | WalletFailureStatus;
 
 type WalletState = {
   session: PasskeySmartSession | null;
@@ -36,12 +32,16 @@ type WalletState = {
   hasSavedAccount: boolean;
 };
 
+export type ConfidentialBalancesReadState =
+  "idle" | "loading" | "ready" | "access-required" | "error";
+
 type WalletContextValue = WalletState & {
   connecting: boolean;
   confidentialBalance: bigint | undefined;
   principal: bigint | undefined;
   confidentialBalancesLoading: boolean;
   confidentialBalancesError: string | null;
+  confidentialBalancesReadState: ConfidentialBalancesReadState;
   connect: () => Promise<void>;
   disconnect: () => Promise<boolean>;
   refreshConfidentialBalances: () => Promise<void>;
@@ -62,22 +62,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [principal, setPrincipal] = useState<bigint | undefined>();
   const [confidentialBalancesLoading, setConfidentialBalancesLoading] = useState(false);
   const [confidentialBalancesError, setConfidentialBalancesError] = useState<string | null>(null);
+  const [confidentialBalancesReadState, setConfidentialBalancesReadState] =
+    useState<ConfidentialBalancesReadState>("idle");
   const balanceLoadId = useRef(0);
+  const balanceLoadScope = useRef<string | null>(null);
 
   const loadConfidentialBalances = useCallback(async (currentSession: PasskeySmartSession) => {
     const loadId = balanceLoadId.current + 1;
+    const scope = `${currentSession.address}:${CONTRACTS.confidentialPrizePool}`;
     balanceLoadId.current = loadId;
+    balanceLoadScope.current = scope;
     setConfidentialBalancesLoading(true);
+    setConfidentialBalancesReadState("loading");
     setConfidentialBalancesError(null);
     try {
       const balances = await decryptConfidentialBalances(currentSession);
-      if (balanceLoadId.current !== loadId) return;
+      if (balanceLoadId.current !== loadId || balanceLoadScope.current !== scope) return;
       setConfidentialBalance(balances.confidentialBalance);
       setPrincipal(balances.principal);
+      setConfidentialBalancesReadState("ready");
     } catch (error) {
       console.error("Could not load account balances", error);
-      if (balanceLoadId.current !== loadId) return;
-      setConfidentialBalancesError("Could not load your savings balance.");
+      if (balanceLoadId.current !== loadId || balanceLoadScope.current !== scope) return;
+      if (error instanceof ZamaReadSessionAccessRequiredError) {
+        setConfidentialBalancesReadState("access-required");
+      } else {
+        setConfidentialBalancesReadState("error");
+        setConfidentialBalancesError("Could not load your savings balance.");
+      }
     } finally {
       if (balanceLoadId.current === loadId) setConfidentialBalancesLoading(false);
     }
@@ -106,7 +118,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         setState({
           session: null,
           status: "invalid-metadata",
-          error: "Saved account details cannot be used. Creating another account will give you a different address.",
+          error:
+            "Saved account details cannot be used. Creating another account will give you a different address.",
           hasSavedAccount: true,
         });
         return;
@@ -142,7 +155,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     void restoreSession();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const connect = useCallback(async () => {
@@ -169,7 +184,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     try {
       let session: PasskeySmartSession;
       if (stored.status === "valid") {
-        session = await restorePasskeyAccount({ metadata: stored.metadata, rpId: passkeyConfig().rpId });
+        session = await restorePasskeyAccount({
+          metadata: stored.metadata,
+          rpId: passkeyConfig().rpId,
+        });
       } else {
         setState((current) => ({ ...current, status: "awaiting-verification", error: null }));
         session = await createPasskeyAccount(passkeyConfig());
@@ -206,6 +224,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setPrincipal(undefined);
     setConfidentialBalancesError(null);
     setConfidentialBalancesLoading(false);
+    setConfidentialBalancesReadState("idle");
     setState({ session: null, status: "no-account", error: null, hasSavedAccount: true });
     return true;
   }, [state.session]);
@@ -217,6 +236,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setPrincipal(undefined);
       setConfidentialBalancesError(null);
       setConfidentialBalancesLoading(false);
+      setConfidentialBalancesReadState("idle");
       return;
     }
     void loadConfidentialBalances(state.session);
@@ -229,31 +249,36 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const connecting = ["checking", "creating", "awaiting-verification"].includes(state.status);
   const passkeyReady = isPasskeySupported();
   const pimlicoReady = Boolean(PIMLICO_API_KEY);
-  const value = useMemo<WalletContextValue>(() => ({
-    ...state,
-    connecting,
-    confidentialBalance,
-    principal,
-    confidentialBalancesLoading,
-    confidentialBalancesError,
-    connect,
-    disconnect,
-    refreshConfidentialBalances,
-    passkeyReady,
-    pimlicoReady,
-  }), [
-    state,
-    connecting,
-    confidentialBalance,
-    principal,
-    confidentialBalancesLoading,
-    confidentialBalancesError,
-    connect,
-    disconnect,
-    refreshConfidentialBalances,
-    passkeyReady,
-    pimlicoReady,
-  ]);
+  const value = useMemo<WalletContextValue>(
+    () => ({
+      ...state,
+      connecting,
+      confidentialBalance,
+      principal,
+      confidentialBalancesLoading,
+      confidentialBalancesError,
+      confidentialBalancesReadState,
+      connect,
+      disconnect,
+      refreshConfidentialBalances,
+      passkeyReady,
+      pimlicoReady,
+    }),
+    [
+      state,
+      connecting,
+      confidentialBalance,
+      principal,
+      confidentialBalancesLoading,
+      confidentialBalancesError,
+      confidentialBalancesReadState,
+      connect,
+      disconnect,
+      refreshConfidentialBalances,
+      passkeyReady,
+      pimlicoReady,
+    ],
+  );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }
@@ -265,9 +290,14 @@ export function useWallet() {
 }
 
 function passkeyConfig() {
-  const configuredRpId = publicConfig("NEXT_PUBLIC_PASSKEY_RP_ID", process.env.NEXT_PUBLIC_PASSKEY_RP_ID);
+  const configuredRpId = publicConfig(
+    "NEXT_PUBLIC_PASSKEY_RP_ID",
+    process.env.NEXT_PUBLIC_PASSKEY_RP_ID,
+  );
   return {
     rpId: configuredRpId || window.location.hostname,
-    rpName: publicConfig("NEXT_PUBLIC_PASSKEY_RP_NAME", process.env.NEXT_PUBLIC_PASSKEY_RP_NAME) || "Kettigo",
+    rpName:
+      publicConfig("NEXT_PUBLIC_PASSKEY_RP_NAME", process.env.NEXT_PUBLIC_PASSKEY_RP_NAME) ||
+      "Kettigo",
   };
 }
