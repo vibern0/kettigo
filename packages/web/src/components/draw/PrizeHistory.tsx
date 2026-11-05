@@ -17,6 +17,7 @@ import type { PasskeySmartSession, PreparedSmartTransaction } from "@/lib/smart-
 import { decryptExistingSmartUint64, prepareSmartReadSessionCalls } from "@/lib/zama";
 import { useActionCenter } from "@/components/ActionCenter";
 import { PrizeHistorySelection } from "./PrizeHistorySelection";
+import type { ReviewLease } from "./review-lease";
 
 const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
 const requestClient = {
@@ -63,6 +64,7 @@ type PrizeHistoryProps = Readonly<{
   pool: Address;
   session: PasskeySmartSession;
   proofUrl: string;
+  reviewLease: ReviewLease;
 }>;
 
 function validRound(value: string): bigint | undefined {
@@ -75,7 +77,7 @@ function validRound(value: string): bigint | undefined {
   }
 }
 
-export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryProps) {
+export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: PrizeHistoryProps) {
   const { actions, runAction } = useActionCenter();
   const [draws, setDraws] = useState<readonly ListedDraw[]>([]);
   const [nextCursor, setNextCursor] = useState<bigint>();
@@ -90,6 +92,8 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
   const confirmingCheckRef = useRef<PreparedPrizeCheck>();
   const preparedAccessRef = useRef<PreparedSmartTransaction>();
   const confirmingAccessRef = useRef<PreparedSmartTransaction>();
+  const checkOwnerRef = useRef<symbol>();
+  const accessOwnerRef = useRef<symbol>();
   const recoveredActionRef = useRef<string>();
   const cancelList = useCallback(() => {
     listEpoch.current += 1;
@@ -297,6 +301,9 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
 
   const startCheck = useCallback(async () => {
     if (!selection || selection.kind !== "unchecked") return;
+    const owner = Symbol("check");
+    if (!reviewLease.begin(owner, cancelSelection)) return;
+    checkOwnerRef.current = owner;
     confirmingCheckRef.current = undefined;
     cancelSelection();
     const controller = new AbortController();
@@ -318,6 +325,11 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
       const prepared = await coordinator.prepare(reviewed, controller.signal);
       if (request !== selectionEpoch.current || controller.signal.aborted) {
         prepared.cancel();
+        reviewLease.release(owner);
+        return;
+      }
+      if (!reviewLease.ready(owner, prepared.cancel)) {
+        prepared.cancel();
         return;
       }
       preparedCheckRef.current = prepared;
@@ -328,15 +340,17 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         pending: coordinator.pending,
       });
     } catch {
+      reviewLease.release(owner);
       if (request === selectionEpoch.current && !controller.signal.aborted)
         setSelection({ kind: "unavailable", drawId: selection.drawId });
     }
-  }, [cancelSelection, createCoordinator, selection, viewRound]);
+  }, [cancelSelection, createCoordinator, reviewLease, selection, viewRound]);
 
   const confirmCheck = () => {
     if (!selection || selection.kind !== "ready") return;
     const prepared = selection.prepared;
     if (confirmingCheckRef.current === prepared) return;
+    if (!checkOwnerRef.current || !reviewLease.confirm(checkOwnerRef.current)) return;
     confirmingCheckRef.current = prepared;
     runAction(
       { label: "Check prize", type: "check", account: session.address },
@@ -347,6 +361,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
             onOperationPrepared: (operation) => update({ status: "confirming", operation }),
           });
           update({ status: "completed" });
+          if (checkOwnerRef.current) reviewLease.complete(checkOwnerRef.current);
           await viewRound(checked.drawId);
         } catch (error) {
           const saved = selection.pending(selection.drawId);
@@ -367,6 +382,9 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
 
   const reviewAccess = async () => {
     if (!selection || selection.kind !== "checked" || !selection.access) return;
+    const owner = Symbol("access");
+    if (!reviewLease.begin(owner, cancelSelection)) return;
+    accessOwnerRef.current = owner;
     cancelSelection();
     const request = ++selectionEpoch.current;
     const controller = new AbortController();
@@ -376,11 +394,17 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
       const prepared = await session.prepareTransaction([...calls], { signal: controller.signal });
       if (request !== selectionEpoch.current || controller.signal.aborted) {
         prepared.cancel();
+        reviewLease.release(owner);
+        return;
+      }
+      if (!reviewLease.ready(owner, prepared.cancel)) {
+        prepared.cancel();
         return;
       }
       preparedAccessRef.current = prepared;
       setSelection({ kind: "access-ready", drawId: selection.drawId, prepared });
     } catch {
+      reviewLease.release(owner);
       if (request === selectionEpoch.current && !controller.signal.aborted)
         setSelection({ ...selection });
     }
@@ -391,6 +415,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
     const prepared = selection.prepared;
     const drawId = selection.drawId;
     if (confirmingAccessRef.current === prepared) return;
+    if (!accessOwnerRef.current || !reviewLease.confirm(accessOwnerRef.current)) return;
     confirmingAccessRef.current = prepared;
     runAction(
       { label: "Review account access", type: "approval", account: session.address },
@@ -399,6 +424,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         try {
           await prepared.send();
           update({ status: "completed" });
+          if (accessOwnerRef.current) reviewLease.complete(accessOwnerRef.current);
           await viewRound(drawId);
         } finally {
           if (confirmingAccessRef.current === prepared) confirmingAccessRef.current = undefined;

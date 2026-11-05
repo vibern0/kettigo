@@ -24,6 +24,7 @@ const fixture = vi.hoisted(() => {
     readerFactory: vi.fn(),
     proofFactory: vi.fn(),
     decrypt: vi.fn(),
+    winningsHandle: `0x${"1".repeat(64)}` as `0x${string}`,
     readCalls: vi.fn(),
     session: undefined as any,
   };
@@ -33,12 +34,13 @@ vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     readContract: async ({ functionName }: { functionName: string }) => {
-      if (functionName === "encryptedWinningsOf") return `0x${"0".repeat(64)}`;
+      if (functionName === "encryptedWinningsOf") return fixture.winningsHandle;
       return 0n;
     },
     getBlockNumber: async () => 0n,
     request: async () => [],
     watchBlockNumber: () => () => {},
+    waitForTransactionReceipt: async () => ({ status: "success" }),
   }),
 }));
 vi.mock("@/lib/contracts", async (original) => ({
@@ -81,6 +83,9 @@ vi.mock("@/lib/morpho-yield", () => ({
 }));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn(), reportClientError: vi.fn() }));
 vi.mock("wagmi", () => ({ useBlockNumber: () => ({ data: undefined }) }));
+vi.mock("canvas-confetti", () => ({
+  default: { create: () => Object.assign(() => {}, { reset() {} }) },
+}));
 
 import DrawPage from "@/app/draw/page";
 import { ActionCenterProvider, useActionCenter } from "@/components/ActionCenter";
@@ -150,6 +155,7 @@ beforeEach(() => {
   fixture.decrypt.mockReset();
   fixture.readCalls.mockReset();
   fixture.decrypt.mockResolvedValue(5_000_000n);
+  fixture.winningsHandle = `0x${"1".repeat(64)}`;
   fixture.readCalls.mockResolvedValue([]);
   fixture.pending.mockReturnValue(null);
   fixture.recover.mockResolvedValue({ state: "pending" });

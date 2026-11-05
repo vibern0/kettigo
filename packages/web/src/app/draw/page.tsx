@@ -7,7 +7,7 @@ import { CONTRACTS, RPC_URL, confidentialPrizePoolAbi } from "@/lib/contracts";
 import { Countdown } from "@/components/Countdown";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useWallet } from "@/lib/wallet-context";
-import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
+import { type PreparedSmartTransaction } from "@/lib/smart-session";
 import { asChecksumAddress, decryptExistingSmartUint64, isZeroEncryptedHandle } from "@/lib/zama";
 import { reportClientToast } from "@/lib/client-errors";
 import { useToast, type ToastInput } from "@/components/Toast";
@@ -17,9 +17,16 @@ import { publicConfig } from "@/lib/runtime-config";
 import { PrizeHistory } from "@/components/draw/PrizeHistory";
 import { DrawPoolSummary } from "@/components/draw/DrawPoolSummary";
 import { PrizeCreditPanel } from "@/components/draw/PrizeCreditPanel";
+import { useActionCenter } from "@/components/ActionCenter";
+import { createReviewLease } from "@/components/draw/review-lease";
 
 type Status = "idle" | "working" | "success" | "error";
 type WorkingAction = PrizeActionId | undefined;
+type CreditReview = Readonly<{
+  action: "claimPrize" | "addPrizeToSavings";
+  owner: symbol;
+  prepared: PreparedSmartTransaction;
+}>;
 
 type DrawSnapshot = {
   blockNumber: bigint;
@@ -148,6 +155,7 @@ async function readDrawSnapshot(
 // Draw page for checking prizes, claiming winnings, and viewing round timing.
 export default function DrawPage() {
   const { session, refreshConfidentialBalances } = useWallet();
+  const { runAction } = useActionCenter();
   const toast = useToast();
   const [hydrated, setHydrated] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
@@ -159,7 +167,9 @@ export default function DrawPage() {
   const [publicPrizeReserve, setPublicPrizeReserve] = useState<bigint | undefined>();
   const [winnings, setWinnings] = useState<bigint | undefined>();
   const [winningsOwner, setWinningsOwner] = useState<`0x${string}` | undefined>();
+  const [creditReview, setCreditReview] = useState<CreditReview>();
   const winningsRequestId = useRef(0);
+  const reviewLeaseRef = useRef(createReviewLease());
   const winningsSessionRef = useRef(session?.address);
   winningsSessionRef.current = session?.address;
   const refreshRef = useRef<(blockNumber?: bigint) => Promise<void>>(async () => undefined);
@@ -183,8 +193,31 @@ export default function DrawPage() {
     hasPrizeToClaim,
     workingAction,
   });
+  const displayedPrizeActions = creditReview
+    ? [
+        {
+          id: creditReview.action,
+          label: "Confirm",
+          busyLabel: "Confirm",
+          disabled: false,
+          variant: "primary" as const,
+        },
+      ]
+    : prizeActions;
 
   useEffect(() => setHydrated(true), []);
+
+  useEffect(
+    () => () => {
+      reviewLeaseRef.current.dispose();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    reviewLeaseRef.current.dispose();
+    setCreditReview(undefined);
+  }, [session?.address, addresses.pool, runtime.mode2]);
 
   useEffect(() => {
     if (!ready) return;
@@ -225,15 +258,6 @@ export default function DrawPage() {
   function activeSession() {
     if (!session) throw new Error("Connect your smart account first.");
     return session;
-  }
-
-  async function sendTx(
-    currentSession: PasskeySmartSession,
-    to: `0x${string}`,
-    data: `0x${string}`,
-  ) {
-    const tx = await sendSmartTransaction(currentSession, to, data);
-    await publicClient.waitForTransactionReceipt({ hash: tx });
   }
 
   async function refresh() {
@@ -282,44 +306,89 @@ export default function DrawPage() {
     return getPrizeRevealFeedback(revealedWinnings);
   }
 
-  async function claimPrize() {
+  async function reviewCreditAction(action: "claimPrize" | "addPrizeToSavings") {
     const currentSession = activeSession();
     if (!ready) throw new Error("Prize claims are unavailable right now.");
-
+    const owner = Symbol(action);
+    const controller = new AbortController();
+    if (!reviewLeaseRef.current.begin(owner, () => controller.abort())) return;
     const data = encodeFunctionData({
       abi: confidentialPrizePoolAbi,
-      functionName: "claimPrize",
+      functionName: action === "claimPrize" ? "claimPrize" : "claimPrizeToSavings",
       args: [],
     });
-    await sendTx(currentSession, asAddress(addresses.pool, "Prize pool"), data);
-    setWinnings(undefined);
-    setWinningsOwner(undefined);
-    await refresh();
-    await refreshConfidentialBalances();
+    try {
+      const prepared = await currentSession.prepareTransaction(
+        [{ to: asAddress(addresses.pool, "Prize pool"), data }],
+        { signal: controller.signal },
+      );
+      if (!reviewLeaseRef.current.ready(owner, prepared.cancel)) {
+        prepared.cancel();
+        return;
+      }
+      setCreditReview({ action, owner, prepared });
+    } catch (error) {
+      reviewLeaseRef.current.release(owner);
+      if (!controller.signal.aborted) throw error;
+    }
   }
 
-  async function claimPrizeToSavings() {
-    const currentSession = activeSession();
-    if (!ready) throw new Error("Prize claims are unavailable right now.");
-
-    const data = encodeFunctionData({
-      abi: confidentialPrizePoolAbi,
-      functionName: "claimPrizeToSavings",
-      args: [],
-    });
-    await sendTx(currentSession, asAddress(addresses.pool, "Prize pool"), data);
-    setWinnings(undefined);
-    setWinningsOwner(undefined);
-    await refresh();
-    await refreshConfidentialBalances();
+  function confirmCreditAction(review: CreditReview) {
+    if (!reviewLeaseRef.current.confirm(review.owner)) return;
+    runAction(
+      {
+        label: review.action === "claimPrize" ? "Claim prize" : "Add prize to savings",
+        type: "claim",
+        account: session?.address,
+      },
+      async ({ update }) => {
+        update({ status: "waiting-wallet" });
+        try {
+          const tx = await review.prepared.send({
+            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+          });
+          update({ status: "confirming" });
+          const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+          if (receipt.status !== "success") throw new Error("The transaction did not complete.");
+          if (winningsSessionRef.current === session?.address) {
+            setWinnings(undefined);
+            setWinningsOwner(undefined);
+          }
+          await refresh();
+          await refreshConfidentialBalances();
+          update({ status: "completed" });
+          reviewLeaseRef.current.complete(review.owner);
+        } finally {
+          setCreditReview((current) => (current === review ? undefined : current));
+        }
+      },
+    );
   }
 
   function runPrizeAction(action: PrizeActionId) {
+    if (creditReview) {
+      confirmCreditAction(creditReview);
+      return;
+    }
     if (action === "addPrizeToSavings") {
-      return run(claimPrizeToSavings, "Prize added to savings.", "addPrizeToSavings");
+      return void reviewCreditAction(action).catch((error) => {
+        reportClientToast(
+          { title: "Unable to prepare", description: getErrorMessage(error) },
+          { action, stage: "preparing" },
+          error,
+        );
+        toast({ tone: "error", title: "Unable to prepare", description: getErrorMessage(error) });
+      });
     }
     if (action === "claimPrize") {
-      return run(claimPrize, "Prize claimed.", "claimPrize");
+      return void reviewCreditAction(action).catch((error) => {
+        reportClientToast(
+          { title: "Unable to prepare", description: getErrorMessage(error) },
+          { action, stage: "preparing" },
+          error,
+        );
+        toast({ tone: "error", title: "Unable to prepare", description: getErrorMessage(error) });
+      });
     }
     return run(decryptWinnings, "Winnings revealed.", "checkPrize");
   }
@@ -386,15 +455,15 @@ export default function DrawPage() {
       {mode2 && session && ready && isAddress(addresses.pool) && (
         <PrizeHistory
           account={getAddress(session.address)}
-          key={`${session.address}:${addresses.pool}:${runtime.proofUrl}`}
           pool={getAddress(addresses.pool)}
           proofUrl={runtime.proofUrl}
+          reviewLease={reviewLeaseRef.current}
           session={session}
         />
       )}
 
       <PrizeCreditPanel
-        actions={prizeActions}
+        actions={displayedPrizeActions}
         onAction={(action) => void runPrizeAction(action)}
         winnings={visibleWinnings}
       />
