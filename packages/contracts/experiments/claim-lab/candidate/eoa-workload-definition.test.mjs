@@ -203,6 +203,20 @@ test("uses concrete native targets, nested deposits, funding tags, and ABI ariti
   assert.equal(action("prize-fund-A").operation.args[3].tag, "0x506aab00");
   assert.equal(action("prize-fund-A").operation.args[3].length, 36);
   assert.equal(action("prize-fund-A").operation.args[3].encoded.bytes, 32);
+  assert.equal(action("prize-fund-A").operation.args[3].data.length, 74);
+  assert.ok(action("prize-fund-A").operation.args[3].data.startsWith("0x506aab00"));
+  assert.equal(BigInt(`0x${action("prize-fund-A").operation.args[3].data.slice(10)}`), 5000000n);
+  for (const [id, amount] of [
+    ["A", 5000000n],
+    ["B", 5000000n],
+    ["8", 1000000n],
+    ["33", 1000000n],
+  ]) {
+    const funding = action(`prize-fund-${id}`).operation.args[3].data;
+    assert.equal(funding.length, 74);
+    assert.ok(funding.startsWith("0x506aab00"));
+    assert.equal(BigInt(`0x${funding.slice(10)}`), amount);
+  }
   assert.equal(action("initial-batch-settle").operation.args.length, 4);
   assert.equal(action("initial-batch-process-safe").operation.args.length, 2);
   assert.equal(action("initial-batch-finalize-safe").operation.args.length, 3);
@@ -251,6 +265,106 @@ test("pins concrete funding, receipt scopes, and immutable historical proof inpu
   }
   assert.equal(action("initial-batch-close").operation.args[0].event, "WithdrawalRequested");
   assert.equal(action("final-batch-close").operation.args[0].event, "WithdrawalRequested");
+});
+
+test("routes every principal and prize allocation through its immutable source", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  for (let index = 0; index < 32; index += 1) {
+    const id = String(index).padStart(2, "0");
+    assert.equal(
+      action(`fund-usdc-eoa-${id}`).allocation.provenance,
+      `bootstrap-usdc-78/principal-eoa-${id}`,
+    );
+  }
+  assert.equal(action("safe-initial-deposit").allocation.suballocationMicro, "2000000");
+  assert.equal(action("safe-rejoin-deposit").allocation.suballocationMicro, "2000000");
+  assert.equal(action("safe-reinvest").allocation.suballocationMicro, "5000000");
+  assert.equal(action("safe-reinvest").allocation.provenance, "bootstrap-usdc-78/prize-B");
+});
+
+test("uses whole admission barriers, a topological sponsor tail, and receipt-backed unwraps", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  for (let index = 0; index < 7; index += 1)
+    assert.ok(
+      action("prize-fund-8").dependencies.includes(`eoa-${String(index).padStart(2, "0")}-admit`),
+    );
+  for (let index = 7; index < 32; index += 1)
+    assert.ok(
+      action("prize-fund-33").dependencies.includes(`eoa-${String(index).padStart(2, "0")}-admit`),
+    );
+  const sponsorActions = workload.actions.filter((entry) => entry.actorRole === "sponsor");
+  const sponsorIds = new Set(sponsorActions.map((entry) => entry.id));
+  assert.equal(
+    sponsorActions.filter(
+      (entry) => !entry.dependencies.some((dependency) => sponsorIds.has(dependency)),
+    ).length,
+    1,
+  );
+  const morpho = action("morpho-finalize-initial").operation.args;
+  assert.equal(morpho[0].kind, "receiptEvent");
+  assert.equal(morpho[0].event, "MorphoPrincipalUnwrapRequested");
+  assert.equal(morpho[1].receiver, workload.definition.contracts.adapter);
+  assert.ok(morpho[1].constraints.includes("same-unwrap-request"));
+  const finalUnwrap = action("final-finalize-eoa-00").operation.args;
+  assert.equal(finalUnwrap[0].event, "WithdrawalClaimedToUsdc");
+  assert.equal(finalUnwrap[1].receiver, workload.definition.actors.eoaParticipants[0]);
+  assert.equal(action("check-stage8-eoa-00").operation.args[0].beneficiary, undefined);
+  assert.ok(
+    !action("check-stage8-eoa-00").operation.args[0].constraints.includes("indexed-beneficiary"),
+  );
+});
+
+test("rejects regenerated mutations to required immutable workload fields", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const cases = [
+    (value) =>
+      (value.actions.find((entry) => entry.id === "check-stage8-eoa-00").operation.args[0].event =
+        "Wrong"),
+    (value) =>
+      (value.actions.find(
+        (entry) => entry.id === "check-stage8-eoa-00",
+      ).operation.args[0].contractRole = "wrapper"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "check-stage8-eoa-00").operation.args[0].field =
+        "wrongId"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "check-stage8-eoa-00").operation.args[0].abiType =
+        "bytes32"),
+    (value) =>
+      (value.actions.find(
+        (entry) => entry.id === "check-stage8-eoa-00",
+      ).operation.args[0].producer = "close-draw-A"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "prize-fund-A").operation.args[3].data = "0x"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "fund-eth-eoa-00").operation.value = "1"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "fund-eth-eoa-00").operation.data = "0x01"),
+    (value) => (value.actions.find((entry) => entry.id === "fund-eth-eoa-00").target = hex(99)),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "safe-reinvest").allocation.provenance = "wrong"),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "check-stage8-eoa-01").concurrency.width = 99),
+    (value) => value.actions.find((entry) => entry.id === "prize-fund-8").dependencies.pop(),
+    (value) => (value.definition.manifest.creations[0].constructor.args[0] = hex(99)),
+    (value) => (value.definition.manifest.creations[1].sourceId = "contracts/Wrong.sol:Wrong"),
+    (value) => (value.definition.manifest.creations[2].role = "pool"),
+    (value) =>
+      (value.actions.find(
+        (entry) => entry.id === "check-stage8-eoa-00",
+      ).operation.args[2].beneficiary = hex(99)),
+    (value) =>
+      (value.actions.find((entry) => entry.id === "check-stage8-eoa-00").operation.args[2].field =
+        "wrongLeaf"),
+  ];
+  for (const mutate of cases) {
+    const changed = JSON.parse(JSON.stringify(workload));
+    mutate(changed);
+    changed.fingerprint = workloadFingerprint(changed);
+    assert.throws(() => validateCompiledCandidateWorkload(changed), /differs|invalid|wrong/i);
+  }
 });
 
 test("rejects arbitrary StaticA bootstrap IDs and a caller-recomputed fingerprint", () => {

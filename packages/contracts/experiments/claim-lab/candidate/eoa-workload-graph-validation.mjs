@@ -36,7 +36,7 @@ export function validateActions(actions) {
 }
 function validateRef(ref, entry, byId) {
   const staticKinds = ["sdkInput", "sdkProof", "delegateData", "abiBytes"];
-  const kinds = ["result", "receiptEvent", "publicDecrypt", "historicalProof", ...staticKinds];
+  const kinds = ["receiptEvent", "publicDecrypt", "historicalProof", ...staticKinds];
   if (!kinds.includes(ref.kind)) fail("untyped reference");
   if (staticKinds.includes(ref.kind)) return;
   if (
@@ -47,7 +47,7 @@ function validateRef(ref, entry, byId) {
     fail(`unscoped reference producer ${entry.id}:${ref.producer}`);
   if (
     ["receiptEvent", "publicDecrypt", "historicalProof"].includes(ref.kind) &&
-    (!ref.contractRole || !ref.event || !ref.beneficiary)
+    (!ref.contractRole || !ref.event || (ref.kind === "historicalProof" && !ref.beneficiary))
   )
     fail(`incomplete scoped reference ${entry.id}:${ref.producer}`);
 }

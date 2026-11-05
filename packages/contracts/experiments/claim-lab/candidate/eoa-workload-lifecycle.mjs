@@ -4,7 +4,6 @@ import {
   initialQueueArgs,
   prizeAllocation,
   prizeFundingData,
-  resultRef,
   safeDepositTemplate,
   sdkProofRef,
   sdkRef,
@@ -177,42 +176,66 @@ export function addInitialDraws(add, call, definition) {
 }
 
 export function addInitialMorpho(add, call, definition) {
-  [
-    "requestMorphoPrincipalUnwrap()",
-    "finalizeUnwrap(bytes32,uint64,bytes)",
-    "supplyAvailableMorphoPrincipal()",
-  ].forEach((signature, index) =>
-    add(
-      ["morpho-request-initial", "morpho-finalize-initial", "morpho-supply-initial"][index],
-      "queue",
-      "sponsor",
-      index === 1 ? "wrapper" : "candidatePool",
-      call(
-        signature,
-        index === 1
-          ? [
-              resultRef("morpho-request-initial", "unwrapRequestId", "bytes32"),
-              publicDecryptRef(
-                "morpho-request-initial",
-                "wrapper",
-                "UnwrapRequested",
-                definition.actors.safeParticipant,
-                "clearAmount",
-                "uint64",
-              ),
-              publicDecryptRef(
-                "morpho-request-initial",
-                "wrapper",
-                "UnwrapRequested",
-                definition.actors.safeParticipant,
-                "proof",
-                "bytes",
-              ),
-            ]
-          : [],
-      ),
-      [index ? ["morpho-request-initial", "morpho-finalize-initial"][index - 1] : "close-draw-B"],
+  addMorphoRequest(add, call, definition);
+  addMorphoFinalize(add, call, definition);
+  addMorphoSupply(add, call);
+}
+
+function addMorphoRequest(add, call, definition) {
+  add(
+    "morpho-request-initial",
+    "queue",
+    "sponsor",
+    "candidatePool",
+    call("requestMorphoPrincipalUnwrap()", []),
+    ["close-draw-B"],
+  );
+}
+
+function addMorphoFinalize(add, call, definition) {
+  add(
+    "morpho-finalize-initial",
+    "queue",
+    "sponsor",
+    "wrapper",
+    call("finalizeUnwrap(bytes32,uint64,bytes)", morphoFinalizeArgs(definition)),
+    ["morpho-request-initial"],
+  );
+}
+
+function morphoFinalizeArgs(definition) {
+  const unwrap = (field, abiType) =>
+    publicDecryptRef(
+      "morpho-request-initial",
+      "wrapper",
+      "UnwrapRequested",
+      undefined,
+      field,
+      abiType,
+      { receiver: definition.contracts.adapter, unwrapRequestProducer: "morpho-request-initial" },
+    );
+  return [
+    discoveryRef(
+      "morpho-request-initial",
+      "candidatePool",
+      "MorphoPrincipalUnwrapRequested",
+      undefined,
+      "unwrapRequestId",
+      "bytes32",
     ),
+    unwrap("clearAmount", "uint64"),
+    unwrap("proof", "bytes"),
+  ];
+}
+
+function addMorphoSupply(add, call) {
+  add(
+    "morpho-supply-initial",
+    "queue",
+    "sponsor",
+    "candidatePool",
+    call("supplyAvailableMorphoPrincipal()", []),
+    ["morpho-finalize-initial"],
   );
   add(
     "safe-exit-membership",
@@ -334,8 +357,8 @@ function addSafeReinvest(add, call, definition) {
         id: "bootstrap-usdc-78",
         usdcMicro: "0",
         valueWei: "0",
-        provenance: "bootstrap-usdc-78/safe-reinvest",
-        suballocationMicro: "2000000",
+        provenance: "bootstrap-usdc-78/prize-B",
+        suballocationMicro: "5000000",
       },
     },
   );

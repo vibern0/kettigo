@@ -13,31 +13,43 @@ export function resolveTarget(definition, role, participantIndex) {
   if (!Object.hasOwn(definition.contracts, role)) fail("unknown target role");
   return definition.contracts[role];
 }
-export function resultRef(producer, field, abiType) {
-  return { kind: "result", producer, field, abiType, constraints: ["producer-complete"] };
-}
 export function discoveryRef(producer, contractRole, event, beneficiary, field, abiType) {
   return {
     kind: "receiptEvent",
     producer,
     contractRole,
     event,
-    beneficiary,
+    ...(beneficiary ? { beneficiary } : {}),
     field,
     abiType,
-    constraints: ["confirmed-receipt", "indexed-beneficiary"],
+    constraints: ["confirmed-receipt", ...(beneficiary ? ["indexed-beneficiary"] : [])],
   };
 }
-export function publicDecryptRef(producer, contractRole, event, beneficiary, field, abiType) {
+export function publicDecryptRef(
+  producer,
+  contractRole,
+  event,
+  beneficiary,
+  field,
+  abiType,
+  scope = {},
+) {
   return {
     kind: "publicDecrypt",
     producer,
     contractRole,
     event,
-    beneficiary,
+    ...(beneficiary ? { beneficiary } : {}),
     field,
     abiType,
-    constraints: ["confirmed-receipt", "public-handle", "decryption-proof"],
+    ...scope,
+    constraints: [
+      "confirmed-receipt",
+      ...(beneficiary ? ["indexed-beneficiary"] : []),
+      ...(scope.receiver ? ["receiver-match", "same-unwrap-request"] : []),
+      "public-handle",
+      "decryption-proof",
+    ],
   };
 }
 export function proofRef(draw, beneficiary, field, abiType = "bytes32[]") {
@@ -74,10 +86,12 @@ export function sdkProofRef(producer) {
   };
 }
 export function prizeFundingData(amount) {
+  const encodedAmount = BigInt(amount).toString(16).padStart(64, "0");
   return {
     kind: "abiBytes",
     tag: "0x506aab00",
     encoded: { abiType: "uint64", value: amount, bytes: 32 },
+    data: `0x506aab00${encodedAmount}`,
     length: 36,
   };
 }
@@ -151,7 +165,7 @@ function initialSettlementArgs(batch, definition) {
       "initial-batch-close",
       "candidatePool",
       "WithdrawalBatchClosed",
-      definition.actors.safeParticipant,
+      undefined,
       field,
       abiType,
     );
@@ -165,22 +179,37 @@ function initialSettlementArgs(batch, definition) {
 
 function initialFinalizeArgs(definition) {
   return [
-    resultRef("initial-batch-process-safe", "unwrapRequestId", "bytes32"),
-    publicDecryptRef(
+    discoveryRef(
       "initial-batch-process-safe",
-      "wrapper",
-      "UnwrapRequested",
+      "candidatePool",
+      "WithdrawalClaimedToUsdc",
       definition.actors.safeParticipant,
-      "clearAmount",
-      "uint64",
+      "unwrapRequestId",
+      "bytes32",
     ),
     publicDecryptRef(
       "initial-batch-process-safe",
       "wrapper",
       "UnwrapRequested",
-      definition.actors.safeParticipant,
+      undefined,
+      "clearAmount",
+      "uint64",
+      {
+        receiver: definition.actors.safeParticipant,
+        unwrapRequestProducer: "initial-batch-process-safe",
+      },
+    ),
+    publicDecryptRef(
+      "initial-batch-process-safe",
+      "wrapper",
+      "UnwrapRequested",
+      undefined,
       "proof",
       "bytes",
+      {
+        receiver: definition.actors.safeParticipant,
+        unwrapRequestProducer: "initial-batch-process-safe",
+      },
     ),
   ];
 }
@@ -188,7 +217,7 @@ export function checkTemplate(draw, actor) {
   return {
     signature: "checkPrize(uint256,address,uint256,uint64,bytes32,bytes32[],bytes32[],bytes32[])",
     args: Object.freeze([
-      discoveryRef(draw, "candidatePool", "DrawClosed", actor, "drawId", "uint256"),
+      discoveryRef(draw, "candidatePool", "DrawClosed", undefined, "drawId", "uint256"),
       actor,
       proofRef(draw, actor, "index", "uint256"),
       proofRef(draw, actor, "generation", "uint64"),

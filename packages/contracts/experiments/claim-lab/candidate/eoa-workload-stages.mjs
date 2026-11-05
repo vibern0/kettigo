@@ -5,7 +5,6 @@ import {
   publicDecryptRef,
   prizeAllocation,
   prizeFundingData,
-  resultRef,
   safeDepositTemplate,
   sdkProofRef,
   sdkRef,
@@ -174,6 +173,7 @@ function addPrizeStages(add, call, definition) {
       [
         "reserve-wrap",
         before,
+        ...admissionBarrier(stage),
         ...(stage === "8"
           ? ["safe-reinvest"]
           : [
@@ -190,6 +190,15 @@ function addPrizeStages(add, call, definition) {
       `prize-fund-${stage}`,
     ]);
   }
+}
+
+function admissionBarrier(stage) {
+  const start = stage === "8" ? 0 : 7;
+  const end = stage === "8" ? 7 : 32;
+  return Array.from(
+    { length: end - start },
+    (_, index) => `eoa-${String(start + index).padStart(2, "0")}-admit`,
+  );
 }
 
 export function addFinal(add, call, definition) {
@@ -317,7 +326,7 @@ function finalSettlementArgs(batch, definition) {
       "final-batch-close",
       "candidatePool",
       "WithdrawalBatchClosed",
-      definition.actors.sponsor,
+      undefined,
       field,
       abiType,
     );
@@ -358,22 +367,31 @@ function addFinalFinalize(add, call, id, account) {
     "sponsor",
     "wrapper",
     call("finalizeUnwrap(bytes32,uint64,bytes)", [
-      resultRef(`final-process-${id}`, "unwrapRequestId", "bytes32"),
-      publicDecryptRef(
+      discoveryRef(
         `final-process-${id}`,
-        "wrapper",
-        "UnwrapRequested",
+        "candidatePool",
+        "WithdrawalClaimedToUsdc",
         account,
-        "clearAmount",
-        "uint64",
+        "unwrapRequestId",
+        "bytes32",
       ),
       publicDecryptRef(
         `final-process-${id}`,
         "wrapper",
         "UnwrapRequested",
-        account,
+        undefined,
+        "clearAmount",
+        "uint64",
+        { receiver: account, unwrapRequestProducer: `final-process-${id}` },
+      ),
+      publicDecryptRef(
+        `final-process-${id}`,
+        "wrapper",
+        "UnwrapRequested",
+        undefined,
         "proof",
         "bytes",
+        { receiver: account, unwrapRequestProducer: `final-process-${id}` },
       ),
     ]),
     [`final-process-${id}`],
