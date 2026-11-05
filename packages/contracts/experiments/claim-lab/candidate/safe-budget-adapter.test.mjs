@@ -1,32 +1,32 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
-import { getAddress } from "ethers";
 import { Interface, concat, toBeHex } from "ethers";
 
-import { CandidateRunJournal, ORIGINAL_ENVELOPE } from "./journal.mjs";
 import {
-  SafeBudgetAdapter,
   canonicalizeUserOperation,
   deterministicUserOperationRecord,
   mergePinnedRelayEstimations,
 } from "./safe-budget-adapter.mjs";
 import { createFixedSafeCallPolicy } from "./safe-call-policy.mjs";
+import {
+  ENTRY_POINT,
+  HASH,
+  ORIGINAL_ENVELOPE,
+  POOL,
+  SAFE,
+  SIGNATURE,
+  adapter,
+  createJournal,
+  operation,
+} from "./safe-budget-adapter-test-fixture.mjs";
 
 const requireWeb = createRequire(new URL("../../../../web/package.json", import.meta.url));
 const { SafeOperationV07, getRelayKitVersion } = requireWeb("@safe-global/relay-kit");
 const { delegateForUserDecryptionContract } = requireWeb("@zama-fhe/sdk");
 const { encodeFunctionData } = requireWeb("viem");
 
-const SAFE = "0x1111111111111111111111111111111111111111";
-const ENTRY_POINT = getAddress("0x0000000071727de22e5e9d8baf0edac6f37da032");
-const POOL = "0x2222222222222222222222222222222222222222";
-const SIGNATURE = "0x1234";
-const HASH = "0x" + "ab".repeat(32);
 const MODULE = "0x4444444444444444444444444444444444444444";
 const MULTISEND = "0x5555555555555555555555555555555555555555";
 const WRAPPER = "0x6666666666666666666666666666666666666666";
@@ -144,56 +144,6 @@ function wrongWrapperDeposit(fixture) {
   ]);
 }
 
-function operation(overrides = {}) {
-  return {
-    sender: SAFE,
-    nonce: 0n,
-    factory: "0x",
-    factoryData: "0x",
-    callData: "0x1234",
-    callGasLimit: 1n,
-    verificationGasLimit: 2n,
-    preVerificationGas: 3n,
-    maxFeePerGas: 4n,
-    maxPriorityFeePerGas: 1n,
-    paymaster: "0x",
-    paymasterVerificationGasLimit: 0n,
-    paymasterPostOpGasLimit: 0n,
-    paymasterData: "0x",
-    signature: "0x",
-    ...overrides,
-  };
-}
-
-async function journal(options = {}) {
-  return CandidateRunJournal.open({
-    directory: await mkdtemp(join(tmpdir(), "kettigo-safe-budget-")),
-    envelope: ORIGINAL_ENVELOPE,
-    now: () => 1000,
-    ...options,
-  });
-}
-
-function adapter(journal, options = {}) {
-  return new SafeBudgetAdapter({
-    journal,
-    expected: { chainId: 11155111, entryPoint: ENTRY_POINT, safe: SAFE, journalTarget: POOL },
-    callPolicy: {
-      assert: ({ callData }) => {
-        if (callData !== "0x1234") throw new Error("unapproved nested call target");
-      },
-    },
-    identity: () => ({
-      chainId: 11155111,
-      entryPoint: ENTRY_POINT,
-      sender: SAFE,
-      userOperationHash: HASH,
-    }),
-    now: () => 1000,
-    ...options,
-  });
-}
-
 test("canonicalizes every v0.7 field and refuses unknown or incoherent optional fields", () => {
   const result = canonicalizeUserOperation(operation());
   assert.equal(result.maxFeePerGas, "4");
@@ -302,7 +252,7 @@ test("accepts opaque proof bytes that merely contain a forbidden address", () =>
 });
 
 test("reserves the complete unsigned operation before any credential and binds signature persistence", async () => {
-  const j = await journal();
+  const j = await createJournal();
   const events = [];
   const fence = adapter(j, { marker: (stage) => events.push(stage) });
   const reservation = await fence.reserve({
@@ -319,7 +269,7 @@ test("reserves the complete unsigned operation before any credential and binds s
 });
 
 test("rejects every unsigned mutation after reservation and never replaces a signature", async () => {
-  const j = await journal();
+  const j = await createJournal();
   const fence = adapter(j);
   const reservation = await fence.reserve({
     intentId: "safe-2",
@@ -352,7 +302,7 @@ test("rejects every unsigned mutation after reservation and never replaces a sig
 });
 
 test("route fence accepts exactly one persisted SDK wire operation and records attempt before continuation", async () => {
-  const j = await journal();
+  const j = await createJournal();
   const fence = adapter(j);
   const reservation = await fence.reserve({
     intentId: "safe-3",
@@ -382,7 +332,7 @@ test("route fence accepts exactly one persisted SDK wire operation and records a
 });
 
 test("original policy rejects the known high fee before a credential boundary", async () => {
-  const j = await journal();
+  const j = await createJournal();
   const fence = adapter(j);
   await assert.rejects(
     fence.reserve({
@@ -397,7 +347,7 @@ test("original policy rejects the known high fee before a credential boundary", 
 });
 
 test("rejects keyed or unsafe UserOperation nonces before reserving", async () => {
-  const j = await journal();
+  const j = await createJournal();
   const fence = adapter(j);
   for (const nonce of [9007199254740992n, 1n << 64n]) {
     await assert.rejects(
@@ -413,121 +363,8 @@ test("rejects keyed or unsafe UserOperation nonces before reserving", async () =
   await j.close();
 });
 
-test("reconciles a persisted Safe operation using only its own canonical event cost", async () => {
-  const j = await journal();
-  const fence = adapter(j);
-  const reservation = await fence.reserve({
-    intentId: "safe-reconcile",
-    operation: operation(),
-    offeredAt: 1000,
-  });
-  await fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
-  await j.recordAttempt("safe-reconcile");
-  const result = await fence.reconcile("safe-reconcile", {
-    lookup: async (identity) => ({
-      state: "failed",
-      operation: identity,
-      transactionHash: `0x${"22".repeat(32)}`,
-      blockNumber: 42n,
-      blockHash: `0x${"33".repeat(32)}`,
-      nonce: 0n,
-      actualGasCost: 7n,
-    }),
-  });
-  assert.deepEqual(result, { state: "reverted" });
-  assert.equal(j.intent("safe-reconcile").terminal.feeWei, "7");
-  await fence.reconcile("safe-reconcile", {
-    lookup: async (identity) => ({
-      state: "failed",
-      operation: identity,
-      transactionHash: `0x${"22".repeat(32)}`,
-      blockNumber: 42n,
-      blockHash: `0x${"33".repeat(32)}`,
-      nonce: 0n,
-      actualGasCost: 7n,
-    }),
-  });
-  assert.equal(j.snapshot().budget.feeActualWei, "7");
-  await j.close();
-});
-
-test("reconciles a restarted Safe journal without signing or sending again", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "kettigo-safe-restart-"));
-  const j = await CandidateRunJournal.open({
-    directory: dir,
-    envelope: ORIGINAL_ENVELOPE,
-    now: () => 1000,
-  });
-  const first = adapter(j);
-  const reservation = await first.reserve({
-    intentId: "safe-restart",
-    operation: operation(),
-    offeredAt: 1000,
-  });
-  await first.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
-  await j.recordAttempt("safe-restart");
-  await j.close();
-  const restarted = await CandidateRunJournal.open({
-    directory: dir,
-    envelope: ORIGINAL_ENVELOPE,
-    now: () => 1000,
-  });
-  let lookups = 0;
-  const result = await adapter(restarted).reconcile("safe-restart", {
-    lookup: async (identity) => {
-      lookups += 1;
-      return {
-        state: "confirmed",
-        operation: identity,
-        transactionHash: `0x${"22".repeat(32)}`,
-        blockNumber: 42n,
-        blockHash: `0x${"33".repeat(32)}`,
-        nonce: 0n,
-        actualGasCost: 8n,
-      };
-    },
-  });
-  assert.deepEqual(result, { state: "success" });
-  assert.equal(lookups, 1);
-  assert.equal(restarted.actualSendCount("safe-restart"), 1);
-  assert.equal(restarted.snapshot().budget.feeActualWei, "8");
-  await restarted.close();
-});
-
-test("leaves pending evidence unresolved and rejects altered canonical identity", async () => {
-  const j = await journal();
-  const fence = adapter(j);
-  const reservation = await fence.reserve({
-    intentId: "safe-pending",
-    operation: operation(),
-    offeredAt: 1000,
-  });
-  await fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) });
-  await j.recordAttempt("safe-pending");
-  assert.deepEqual(
-    await fence.reconcile("safe-pending", { lookup: async () => ({ state: "pending" }) }),
-    { state: "unresolved" },
-  );
-  await assert.rejects(
-    fence.reconcile("safe-pending", {
-      lookup: async (identity) => ({
-        state: "confirmed",
-        operation: { ...identity, sender: POOL },
-        transactionHash: `0x${"22".repeat(32)}`,
-        blockNumber: 42n,
-        blockHash: `0x${"33".repeat(32)}`,
-        nonce: 0n,
-        actualGasCost: 7n,
-      }),
-    }),
-    /evidence mismatch/,
-  );
-  assert.equal(j.intent("safe-pending").terminal, null);
-  await j.close();
-});
-
 test("signed persistence failure and an expired reservation prevent route continuation", async () => {
-  const j = await journal();
+  const j = await createJournal();
   const fence = adapter(j);
   const reservation = await fence.reserve({
     intentId: "safe-failure",
@@ -542,7 +379,7 @@ test("signed persistence failure and an expired reservation prevent route contin
   assert.equal(j.actualSendCount("safe-failure"), 0);
   await j.close();
   let time = 1000;
-  const expiredJournal = await journal({ now: () => time });
+  const expiredJournal = await createJournal({ now: () => time });
   const expiredFence = adapter(expiredJournal);
   const expiredReservation = await expiredFence.reserve({
     intentId: "safe-expired",

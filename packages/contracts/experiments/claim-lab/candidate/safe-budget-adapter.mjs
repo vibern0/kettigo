@@ -336,6 +336,23 @@ export class SafeBudgetAdapter {
     const intent = this.journal.intent(intentId);
     if (!intent?.signed || intent.kind !== "user-operation" || !intent.userOperation)
       fail("unknown signed UserOperation intent");
+    try {
+      return await this.#reconcile(intentId, intent, lookup);
+    } catch (error) {
+      try {
+        await this.journal.recordObservation(intentId, {
+          stage: "safe-reconcile",
+          error: error instanceof Error ? error.message : "canonical reconciliation failed",
+          unrecoverable: true,
+        });
+      } catch {
+        // Preserve the original reconciliation failure even if its audit record cannot persist.
+      }
+      throw error;
+    }
+  }
+
+  async #reconcile(intentId, intent, lookup) {
     const metadata = intent.userOperation;
     if (
       intent.signed.hash !== metadata.userOperationHash ||
@@ -344,14 +361,23 @@ export class SafeBudgetAdapter {
     )
       fail("persisted UserOperation wire mismatch");
     const signed = decodedRecord(intent.signed.raw);
-    if (signed.sender !== metadata.sender || signed.nonce !== metadata.nonce)
+    const canonical = this.#validate(signed, true);
+    const identity = this.#identity(signed);
+    const unsigned = fixedRecord({ ...canonical, signature: "0x" });
+    if (
+      digest(unsigned) !== intent.unsignedDigest ||
+      metadata.entryPoint !== this.expected.entryPoint ||
+      metadata.sender !== this.expected.safe ||
+      metadata.chainId !== this.expected.chainId ||
+      metadata.sender !== signed.sender ||
+      metadata.nonce !== signed.nonce ||
+      metadata.chainId !== identity.chainId ||
+      metadata.entryPoint !== identity.entryPoint ||
+      metadata.sender !== identity.sender ||
+      metadata.userOperationHash !== identity.userOperationHash
+    )
       fail("persisted UserOperation payload mismatch");
-    const evidence = await lookup({
-      chainId: metadata.chainId,
-      entryPoint: metadata.entryPoint,
-      sender: metadata.sender,
-      userOperationHash: metadata.userOperationHash,
-    });
+    const evidence = await lookup(identity);
     if (!evidence || evidence.state === "pending") return { state: "unresolved" };
     if (
       evidence.operation?.chainId !== metadata.chainId ||
@@ -368,13 +394,7 @@ export class SafeBudgetAdapter {
       kind: "user-operation",
       status: evidence.state === "confirmed" ? "success" : "reverted",
       feeWei: evidence.actualGasCost,
-      operation: {
-        chainId: metadata.chainId,
-        entryPoint: metadata.entryPoint,
-        sender: metadata.sender,
-        userOperationHash: metadata.userOperationHash,
-        nonce: metadata.nonce,
-      },
+      operation: { ...identity, nonce: signed.nonce },
       outer: {
         transactionHash: evidence.transactionHash,
         blockNumber: evidence.blockNumber.toString(),

@@ -31,6 +31,7 @@ import {
 import { loadState } from "./state-storage.mjs";
 import { assertOpen, assertSigningAllowed } from "./journal-guards.mjs";
 import { validPersistedIntentFields as validFields, validRequest } from "./intent-validation.mjs";
+import { canonical, clone, decimalMicro, envelopeIdentity } from "./journal-values.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -59,30 +60,11 @@ const MAX_JOURNAL_BYTES = 2_000_000;
 const fail = (message) => {
   throw new Error(`candidate journal: ${message}`);
 };
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-function canonical(value) {
-  return JSON.stringify(value, Object.keys(value).sort());
-}
-function envelopeIdentity(envelope) {
-  return createHash("sha256").update(canonical(envelope)).digest("hex");
-}
 function validAddress(value) {
   return typeof value === "string" && ADDRESS.test(value);
 }
 function validHash(value) {
   return typeof value === "string" && HASH.test(value);
-}
-function decimalMicro(value) {
-  if (
-    typeof value !== "string" ||
-    value.length > 80 ||
-    !/^(0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/.test(value)
-  )
-    fail("invalid USDC commitment");
-  const [whole, fraction = ""] = value.split(".");
-  return BigInt(whole) * 1_000_000n + BigInt(`${fraction}000000`.slice(0, 6));
 }
 function natural(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) fail(`invalid ${label}`);
@@ -165,6 +147,7 @@ function validPersistedIntentFields(intent) {
     validTarget,
     validIntentBudget,
     uint: UINT,
+    maxIntentId: MAX_INTENT_ID,
   });
 }
 function validTarget(to, input) {
@@ -450,7 +433,16 @@ export class CandidateRunJournal {
 }
 
 function validateRequest(request) {
-  if (!validRequest(request, { validAddress, validHash, isNatural, validTarget, uint: UINT }))
+  if (
+    !validRequest(request, {
+      validAddress,
+      validHash,
+      isNatural,
+      validTarget,
+      uint: UINT,
+      maxIntentId: MAX_INTENT_ID,
+    })
+  )
     fail("invalid intent");
 }
 function sameRequest(intent, request) {
@@ -464,7 +456,7 @@ function sameRequest(intent, request) {
     intent.maxFeeWei === request.maxFeeWei.toString() &&
     intent.maxGasPriceWei === request.maxGasPriceWei.toString() &&
     intent.fundingWei === request.fundingWei.toString() &&
-    intent.usdcCommitmentMicro === decimalMicro(request.usdcCommitment).toString()
+    intent.usdcCommitmentMicro === decimalMicro(request.usdcCommitment, fail).toString()
   );
 }
 function addReservation(state, request, envelope, now, assertBudget) {
@@ -474,7 +466,7 @@ function addReservation(state, request, envelope, now, assertBudget) {
   const fee = unsigned(request.maxFeeWei, "fee reservation");
   const gasPrice = unsigned(request.maxGasPriceWei, "gas price");
   const funding = unsigned(request.fundingWei, "funding reservation");
-  const usdc = decimalMicro(request.usdcCommitment);
+  const usdc = decimalMicro(request.usdcCommitment, fail);
   if (gasPrice > BigInt(envelope.maxGasPriceWei)) fail("gas price exceeds approved cap");
   assertBudget(state.budget, fee, funding, usdc);
   state.startedAt = startedAt;
