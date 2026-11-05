@@ -25,6 +25,14 @@ import {
 import { SheetViewport } from "@/components/SheetViewport";
 import { reportClientError } from "@/lib/client-errors";
 import { cn } from "@/lib/cn";
+import {
+  actionForPendingOperation,
+  applyRunnerErrorFromPendingReader,
+  matchesPendingOperation,
+  patchForPendingRecovery,
+} from "@/lib/action-center-pending";
+import { useWallet } from "@/lib/wallet-context";
+import type { PendingOperationRecord } from "@/lib/smart-session";
 
 const STORAGE_KEY = "kettigo:actions";
 
@@ -35,7 +43,10 @@ type ActionRunnerControls = {
 
 type ActionCenterContextValue = {
   actions: AsyncAction[];
-  runAction: (input: NewAsyncAction, runner: (controls: ActionRunnerControls) => Promise<void>) => string;
+  runAction: (
+    input: NewAsyncAction,
+    runner: (controls: ActionRunnerControls) => Promise<void>,
+  ) => string;
   updateTrackedAction: (id: string, patch: ActionPatch) => void;
   dismissTrackedAction: (id: string) => void;
   retryTrackedAction: (id: string) => void;
@@ -47,10 +58,12 @@ const statusLabel: Record<AsyncActionStatus, string> = {
   preparing: "Preparing",
   "waiting-wallet": "Waiting for approval",
   submitted: "Sent",
-  confirming: "Confirming",
+  confirming: "Still processing",
   updating: "Updating",
   completed: "Complete",
   failed: "Failed",
+  rejected: "Not approved",
+  "not-submitted": "Not sent",
   dismissed: "Dismissed",
 };
 
@@ -62,6 +75,8 @@ const statusClass: Record<AsyncActionStatus, string> = {
   updating: "bg-brand/10 text-brand",
   completed: "bg-success/10 text-success",
   failed: "bg-danger/10 text-danger",
+  rejected: "bg-danger/10 text-danger",
+  "not-submitted": "bg-white/45 text-muted",
   dismissed: "bg-white/45 text-muted",
 };
 
@@ -105,12 +120,14 @@ function formatTime(timestamp: number) {
 }
 
 export function ActionCenterProvider({ children }: { children: ReactNode }) {
+  const { session } = useWallet();
   const [actions, setActions] = useState<AsyncAction[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
-  const runnersRef = useRef(
-    new Map<string, (controls: ActionRunnerControls) => Promise<void>>(),
-  );
+  const [statusUnavailable, setStatusUnavailable] = useState(false);
+  const sessionRef = useRef(session);
+  const sessionEpochRef = useRef(0);
+  const runnersRef = useRef(new Map<string, (controls: ActionRunnerControls) => Promise<void>>());
 
   useEffect(() => {
     setActions(readStoredActions());
@@ -118,8 +135,52 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    sessionRef.current = session;
+    sessionEpochRef.current += 1;
+    if (!session?.getPendingOperation) return;
+
+    let record: PendingOperationRecord | null;
+    try {
+      record = session.getPendingOperation();
+    } catch (error) {
+      reportClientError(error, { action: "pending-operation", stage: "read" });
+      setStatusUnavailable(true);
+      return;
+    }
+    if (!record) return;
+    try {
+      const pendingAction = actionForPendingOperation(record);
+      setActions((current) => {
+        const match = current.find((action) => matchesPendingOperation(action, record!));
+        if (!match)
+          return addAction(current, {
+            ...pendingAction,
+            id: pendingAction.id,
+            createdAt: pendingAction.createdAt,
+          });
+        return updateAction(current, match.id, {
+          status: pendingAction.status,
+          operation: pendingAction.operation,
+          error:
+            pendingAction.status === "confirming"
+              ? "Still processing. Check status to see the latest update."
+              : undefined,
+        });
+      });
+    } catch (error) {
+      reportClientError(error, { action: "pending-operation", stage: "display" });
+      setStatusUnavailable(true);
+    }
+  }, [session]);
+
+  useEffect(() => {
     if (!hydrated) return;
-    writeStoredActions(actions);
+    try {
+      writeStoredActions(actions);
+    } catch (error) {
+      reportClientError(error, { action: "activity", stage: "storage" });
+      setStatusUnavailable(true);
+    }
   }, [actions, hydrated]);
 
   const updateTrackedAction = useCallback((id: string, patch: ActionPatch) => {
@@ -131,17 +192,25 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const executeRunner = useCallback(
-    (id: string, runner: (controls: ActionRunnerControls) => Promise<void>) => {
+    (
+      id: string,
+      runner: (controls: ActionRunnerControls) => Promise<void>,
+      sessionEpoch: number,
+    ) => {
       void runner({
         id,
         update: (patch) => updateTrackedAction(id, patch),
       }).catch((error) => {
+        if (sessionEpoch !== sessionEpochRef.current) return;
         reportClientError(error, { action: "background-action", stage: "execution" });
-        const message = error instanceof Error ? error.message : String(error);
-        updateTrackedAction(id, {
-          status: "failed",
-          error: message,
-        });
+        setActions((current) =>
+          applyRunnerErrorFromPendingReader(
+            current,
+            id,
+            () => sessionRef.current?.getPendingOperation?.(),
+            error,
+          ),
+        );
       });
     },
     [updateTrackedAction],
@@ -154,7 +223,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
       const actionInput = { ...input, id, createdAt };
       runnersRef.current.set(id, runner);
       setActions((current) => addAction(current, actionInput));
-      executeRunner(id, runner);
+      executeRunner(id, runner, sessionEpochRef.current);
 
       return id;
     },
@@ -166,6 +235,9 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
       const existing = runnersRef.current.get(id);
       if (!existing) return;
 
+      const action = actions.find((item) => item.id === id);
+      if (!action || action.status === "submitted" || action.status === "confirming") return;
+
       setActions((current) =>
         updateAction(current, id, {
           status: "preparing",
@@ -174,9 +246,46 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
           requestId: undefined,
         }),
       );
-      executeRunner(id, existing);
+      executeRunner(id, existing, sessionEpochRef.current);
     },
-    [executeRunner],
+    [actions, executeRunner],
+  );
+
+  const checkPendingStatus = useCallback(
+    async (action: AsyncAction) => {
+      const currentSession = sessionRef.current;
+      if (!currentSession?.recoverPendingOperation || !action.operation) {
+        updateTrackedAction(action.id, {
+          status: "failed",
+          error: "Status is unavailable right now.",
+        });
+        return;
+      }
+      const epoch = sessionEpochRef.current;
+      try {
+        const result = await currentSession.recoverPendingOperation();
+        if (epoch !== sessionEpochRef.current) return;
+        const operation = "operation" in result ? result.operation : undefined;
+        if (
+          !operation ||
+          !matchesPendingOperation(action, {
+            ...operation,
+            createdAt: action.createdAt,
+            phase: "attempted",
+          })
+        )
+          return;
+        updateTrackedAction(action.id, patchForPendingRecovery(result));
+      } catch (error) {
+        if (epoch !== sessionEpochRef.current) return;
+        reportClientError(error, { action: "pending-operation", stage: "recovery" });
+        updateTrackedAction(action.id, {
+          status: "confirming",
+          error: "Still processing. Check status to see the latest update.",
+        });
+      }
+    },
+    [updateTrackedAction],
   );
 
   const value = useMemo(
@@ -194,7 +303,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   return (
     <ActionCenterContext.Provider value={value}>
       {children}
-      {liveCount > 0 && (
+      {(liveCount > 0 || statusUnavailable) && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 mx-auto flex w-full max-w-[480px] justify-end px-5">
           <button
             type="button"
@@ -204,8 +313,15 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
             aria-expanded={sheetOpen}
           >
             <span className="relative inline-flex h-2.5 w-2.5">
-              {liveCount > 0 && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/55" />}
-              <span className={cn("relative inline-flex h-2.5 w-2.5 rounded-full", liveCount > 0 ? "bg-brand" : "bg-success")} />
+              {liveCount > 0 && (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/55" />
+              )}
+              <span
+                className={cn(
+                  "relative inline-flex h-2.5 w-2.5 rounded-full",
+                  liveCount > 0 ? "bg-brand" : "bg-success",
+                )}
+              />
             </span>
             Activity
             {liveCount > 0 && (
@@ -217,7 +333,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {sheetOpen && liveCount > 0 && (
+      {sheetOpen && (liveCount > 0 || statusUnavailable) && (
         <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/30 px-4 pb-4 backdrop-blur-sm">
           <button
             type="button"
@@ -250,29 +366,56 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
             </div>
 
             {pendingActions.length === 0 ? (
-              <p className="text-sm text-muted">No pending actions.</p>
+              <p className="text-sm text-muted">
+                {statusUnavailable
+                  ? "Activity status is unavailable right now."
+                  : "No pending actions."}
+              </p>
             ) : (
               <div className="space-y-2">
                 {pendingActions.map((action) => (
-                  <div key={action.id} className="rounded-3xl border border-white/55 bg-white/35 p-4">
+                  <div
+                    key={action.id}
+                    className="rounded-3xl border border-white/55 bg-white/35 p-4"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="font-display text-sm font-semibold text-text">{action.label}</p>
+                        <p className="font-display text-sm font-semibold text-text">
+                          {action.label}
+                        </p>
                         <p className="mt-1 text-xs text-muted">{formatTime(action.updatedAt)}</p>
                       </div>
-                      <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", statusClass[action.status])}>
+                      <span
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-xs font-semibold",
+                          statusClass[action.status],
+                        )}
+                      >
                         {statusLabel[action.status]}
                       </span>
                     </div>
 
                     {(action.txHash || action.requestId || action.error) && (
                       <div className="mt-3 space-y-1 text-xs text-muted">
-                        {action.txHash && <p className="font-mono">Tx {shortHash(action.txHash)}</p>}
-                        {action.requestId && <p className="font-mono">ID {shortHash(action.requestId)}</p>}
+                        {action.txHash && (
+                          <p className="font-mono">Tx {shortHash(action.txHash)}</p>
+                        )}
+                        {action.requestId && (
+                          <p className="font-mono">ID {shortHash(action.requestId)}</p>
+                        )}
                         {action.error && <p className="text-danger">{action.error}</p>}
                       </div>
                     )}
 
+                    {action.status === "confirming" && action.operation && (
+                      <button
+                        type="button"
+                        onClick={() => void checkPendingStatus(action)}
+                        className="mt-3 rounded-full bg-brand px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+                      >
+                        Check status
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

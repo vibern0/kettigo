@@ -1,15 +1,7 @@
 export const ACTION_HISTORY_LIMIT = 12;
 
 export type AsyncActionType =
-  | "deposit"
-  | "withdraw"
-  | "claim"
-  | "faucet"
-  | "approval"
-  | "wrap"
-  | "draw"
-  | "check"
-  | "pending";
+  "deposit" | "withdraw" | "claim" | "faucet" | "approval" | "wrap" | "draw" | "check" | "pending";
 
 export type AsyncActionStatus =
   | "preparing"
@@ -19,7 +11,16 @@ export type AsyncActionStatus =
   | "updating"
   | "completed"
   | "failed"
+  | "rejected"
+  | "not-submitted"
   | "dismissed";
+
+export type PendingActionOperation = Readonly<{
+  chainId: 11155111;
+  entryPoint: string;
+  sender: string;
+  userOperationHash: string;
+}>;
 
 export type AsyncAction = {
   id: string;
@@ -29,6 +30,7 @@ export type AsyncAction = {
   account?: string;
   txHash?: string;
   requestId?: string;
+  operation?: PendingActionOperation;
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -41,15 +43,24 @@ export type NewAsyncAction = {
   account?: string;
   txHash?: string;
   requestId?: string;
+  operation?: PendingActionOperation;
+  status?: AsyncActionStatus;
+  error?: string;
   createdAt?: number;
 };
 
 export type ActionPatch = Partial<
-  Pick<AsyncAction, "status" | "txHash" | "requestId" | "error" | "updatedAt">
+  Pick<AsyncAction, "status" | "txHash" | "requestId" | "operation" | "error" | "updatedAt">
 >;
 
 export function isFinalActionStatus(status: AsyncActionStatus) {
-  return status === "completed" || status === "failed" || status === "dismissed";
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "rejected" ||
+    status === "not-submitted" ||
+    status === "dismissed"
+  );
 }
 
 export function countPendingActions(actions: AsyncAction[]) {
@@ -79,7 +90,9 @@ export function addAction(actions: AsyncAction[], input: NewAsyncAction): AsyncA
     account: input.account,
     txHash: input.txHash,
     requestId: input.requestId,
-    status: "preparing",
+    operation: input.operation,
+    status: input.status ?? "preparing",
+    error: input.error,
     createdAt,
     updatedAt: createdAt,
   };
@@ -87,7 +100,11 @@ export function addAction(actions: AsyncAction[], input: NewAsyncAction): AsyncA
   return trimActionHistory([action, ...actions]);
 }
 
-export function updateAction(actions: AsyncAction[], id: string, patch: ActionPatch): AsyncAction[] {
+export function updateAction(
+  actions: AsyncAction[],
+  id: string,
+  patch: ActionPatch,
+): AsyncAction[] {
   return trimActionHistory(
     actions.map((action) =>
       action.id === id
