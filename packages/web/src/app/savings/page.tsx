@@ -164,6 +164,7 @@ export default function SavingsPage() {
     principal,
     confidentialBalancesLoading,
     confidentialBalancesError,
+    confidentialBalancesReadState,
     refreshConfidentialBalances,
   } = useWallet();
   const toast = useToast();
@@ -180,28 +181,39 @@ export default function SavingsPage() {
   const [withdrawalRefreshError, setWithdrawalRefreshError] = useState(false);
   const [depositSheetStep, setDepositSheetStep] = useState<SheetStep>();
   const [withdrawSheetStep, setWithdrawSheetStep] = useState<SheetStep>();
+  const [accessReviewStep, setAccessReviewStep] = useState<SheetStep>();
   const preparedDeposit = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const preparedAccess = useRef<{ session: PasskeySmartSession; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const reviewAbort = useRef<AbortController>();
   const [preparingDeposit, setPreparingDeposit] = useState(false);
   const depositPreparationId = useRef(0);
 
-  useEffect(() => {
+  function cancelOwnedReview() {
+    reviewAbort.current?.abort();
+    reviewAbort.current = undefined;
     depositPreparationId.current += 1;
+    withdrawalPreparationId.current += 1;
     preparedDeposit.current?.transaction.cancel();
+    preparedWithdrawal.current?.transaction.cancel();
+    preparedAccess.current?.transaction.cancel();
     preparedDeposit.current = undefined;
+    preparedWithdrawal.current = undefined;
+    preparedAccess.current = undefined;
     setPreparingDeposit(false);
+    setPreparingWithdrawal(false);
+  }
+
+  useEffect(() => {
+    cancelOwnedReview();
   }, [session, depositAmount]);
 
   useEffect(() => {
     if (depositSheetStep === "confirm") return;
-    depositPreparationId.current += 1;
-    preparedDeposit.current?.transaction.cancel();
-    preparedDeposit.current = undefined;
-    setPreparingDeposit(false);
+    cancelOwnedReview();
   }, [depositSheetStep]);
 
   useEffect(() => () => {
-    depositPreparationId.current += 1;
-    preparedDeposit.current?.transaction.cancel();
+    cancelOwnedReview();
   }, []);
 
   const preparedWithdrawal = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
@@ -209,23 +221,16 @@ export default function SavingsPage() {
   const withdrawalPreparationId = useRef(0);
 
   useEffect(() => {
-    withdrawalPreparationId.current += 1;
-    preparedWithdrawal.current?.transaction.cancel();
-    preparedWithdrawal.current = undefined;
-    setPreparingWithdrawal(false);
+    cancelOwnedReview();
   }, [session, withdrawAmount]);
 
   useEffect(() => {
     if (withdrawSheetStep === "confirm") return;
-    withdrawalPreparationId.current += 1;
-    preparedWithdrawal.current?.transaction.cancel();
-    preparedWithdrawal.current = undefined;
-    setPreparingWithdrawal(false);
+    cancelOwnedReview();
   }, [withdrawSheetStep]);
 
   useEffect(() => () => {
-    withdrawalPreparationId.current += 1;
-    preparedWithdrawal.current?.transaction.cancel();
+    cancelOwnedReview();
   }, []);
 
   const [confirmingAction, setConfirmingAction] = useState<"deposit" | "withdraw">();
@@ -510,7 +515,7 @@ export default function SavingsPage() {
     await refreshPendingWithdrawals(user);
   }
 
-  async function prepareDeposit(value: bigint) {
+  async function prepareDeposit(value: bigint, signal?: AbortSignal) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Valor invalido.");
@@ -558,7 +563,7 @@ export default function SavingsPage() {
     calls.push({ to: token, data });
 
     const readCalls = await prepareSmartReadSessionCalls(currentSession);
-    return currentSession.prepareTransaction([...readCalls, ...calls]);
+    return currentSession.prepareTransaction([...readCalls, ...calls], { signal });
   }
 
   async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
@@ -597,7 +602,7 @@ export default function SavingsPage() {
     await refreshBalances(user);
   }
 
-  async function prepareWithdrawal(value: bigint) {
+  async function prepareWithdrawal(value: bigint, signal?: AbortSignal) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Enter an amount first.");
@@ -613,7 +618,7 @@ export default function SavingsPage() {
       functionName: "requestWithdrawal",
       args: [encrypted.handle, encrypted.inputProof],
     });
-    return currentSession.prepareTransaction([...readCalls, { to: pool, data }]);
+    return currentSession.prepareTransaction([...readCalls, { to: pool, data }], { signal });
   }
 
   async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
@@ -831,6 +836,7 @@ export default function SavingsPage() {
 
   function closeSheets() {
     if (confirmingAction) return;
+    cancelOwnedReview();
     setDepositSheetStep(undefined);
     setWithdrawSheetStep(undefined);
   }
@@ -876,11 +882,14 @@ export default function SavingsPage() {
       toast({ tone: "error", title: "Amount is above the current account limit." });
       return;
     }
+    cancelOwnedReview();
     const requestId = ++depositPreparationId.current;
+    const controller = new AbortController();
+    reviewAbort.current = controller;
     const currentSession = activeSession();
     setPreparingDeposit(true);
     try {
-      const transaction = await prepareDeposit(parsedDepositAmount);
+      const transaction = await prepareDeposit(parsedDepositAmount, controller.signal);
       if (requestId !== depositPreparationId.current) {
         transaction.cancel();
         return;
@@ -918,11 +927,14 @@ export default function SavingsPage() {
       toast({ tone: "error", title: "Amount is above your pool balance." });
       return;
     }
+    cancelOwnedReview();
     const requestId = ++withdrawalPreparationId.current;
+    const controller = new AbortController();
+    reviewAbort.current = controller;
     const currentSession = activeSession();
     setPreparingWithdrawal(true);
     try {
-      const transaction = await prepareWithdrawal(parsedWithdrawAmount);
+      const transaction = await prepareWithdrawal(parsedWithdrawAmount, controller.signal);
       if (requestId !== withdrawalPreparationId.current) {
         transaction.cancel();
         return;
@@ -978,6 +990,11 @@ export default function SavingsPage() {
             celebration: type === "deposit" ? "deposit" : undefined,
           });
         } catch (error) {
+          if (session?.getPendingOperation?.()?.phase === "attempted") {
+            update({ status: "confirming", error: "Still processing. Check status to see the latest update." });
+            toast({ tone: "success", title: "Still processing. Follow progress in Activity." });
+            throw error;
+          }
           const errorMessage = getErrorMessage(error);
           reportClientToast(
             { title: "Transaction failed", description: errorMessage },
@@ -1017,6 +1034,56 @@ export default function SavingsPage() {
     }
   }
 
+  async function reviewBalanceAccess() {
+    const currentSession = activeSession();
+    cancelOwnedReview();
+    const controller = new AbortController();
+    reviewAbort.current = controller;
+    setAccessReviewStep("entry");
+    try {
+      const calls = await prepareSmartReadSessionCalls(currentSession);
+      if (controller.signal.aborted) return;
+      if (calls.length === 0) {
+        await refreshConfidentialBalances();
+        if (!controller.signal.aborted) setAccessReviewStep(undefined);
+        return;
+      }
+      const transaction = await currentSession.prepareTransaction(calls, { signal: controller.signal });
+      if (controller.signal.aborted || reviewAbort.current !== controller) {
+        transaction.cancel();
+        return;
+      }
+      preparedAccess.current = { session: currentSession, transaction, preparedAt: Date.now() };
+      setAccessReviewStep("confirm");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const errorMessage = getErrorMessage(error);
+      reportClientToast({ title: "Could not review balance access", description: errorMessage }, { action: "balance-access", stage: "preparation" }, error);
+      toast({ tone: "error", title: "Could not review balance access", description: errorMessage });
+      setAccessReviewStep(undefined);
+    }
+  }
+
+  function confirmBalanceAccess() {
+    const currentSession = activeSession();
+    const prepared = preparedAccess.current;
+    if (!prepared || prepared.session !== currentSession || Date.now() - prepared.preparedAt > 60_000) {
+      preparedAccess.current?.transaction.cancel();
+      preparedAccess.current = undefined;
+      setAccessReviewStep(undefined);
+      toast({ tone: "error", title: "Please review access again." });
+      return;
+    }
+    preparedAccess.current = undefined;
+    setAccessReviewStep(undefined);
+    // Do not await before send: passkey credentials require this click stack.
+    void prepared.transaction.send().then(() => refreshConfidentialBalances(), (error) => {
+      const errorMessage = getErrorMessage(error);
+      reportClientToast({ title: "Could not update balance access", description: errorMessage }, { action: "balance-access", stage: "submission" }, error);
+      toast({ tone: "error", title: "Could not update balance access", description: errorMessage });
+    });
+  }
+
   async function copyPendingHash(hash: `0x${string}`) {
     await navigator.clipboard.writeText(hash);
     toast({ tone: "success", title: "Withdrawal ID copied." });
@@ -1054,6 +1121,19 @@ export default function SavingsPage() {
           </span>
         </div>
         {confidentialBalancesError && <p className="text-xs text-danger">{confidentialBalancesError}</p>}
+        {confidentialBalancesReadState === "access-required" && (
+          <div className="rounded-2xl bg-white/45 p-3 text-sm">
+            <p className="text-muted">Review access to show your current savings balance.</p>
+            {accessReviewStep === "confirm" ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button type="button" className="btn-secondary !px-3" onClick={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }}>Back</button>
+                <button type="button" className="btn-primary !px-3" onClick={confirmBalanceAccess}>Confirm</button>
+              </div>
+            ) : (
+              <button type="button" className="btn-secondary mt-3 w-full" onClick={() => void reviewBalanceAccess()} disabled={!session}>Review access</button>
+            )}
+          </div>
+        )}
       </div>
 
       {pendingWithdrawals.length > 0 && (
@@ -1073,7 +1153,7 @@ export default function SavingsPage() {
       <div className="grid grid-cols-2 gap-3">
         <button
           type="button"
-          onClick={() => setDepositSheetStep("entry")}
+          onClick={() => { cancelOwnedReview(); setDepositSheetStep("entry"); }}
           disabled={!session || !poolReady}
           className="btn-primary w-full"
         >
@@ -1096,7 +1176,7 @@ export default function SavingsPage() {
 
         <button
           type="button"
-          onClick={() => setWithdrawSheetStep("entry")}
+          onClick={() => { cancelOwnedReview(); setWithdrawSheetStep("entry"); }}
           disabled={!showWithdraw}
           className="btn-secondary w-full"
         >
