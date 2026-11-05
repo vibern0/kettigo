@@ -179,12 +179,8 @@ async function ensureReadSessionDelegated(
   key: ZamaReadSessionKey,
   contracts: Address[],
 ) {
-  try {
-    const calls = await readSessionDelegationCalls(session, key, contracts);
-    if (calls.length > 0) await session.sendTransaction(calls);
-  } catch (error) {
-    throw error;
-  }
+  const calls = await readSessionDelegationCalls(session, key, contracts);
+  if (calls.length > 0) await session.sendTransaction(calls);
 }
 
 async function assertReadSessionDelegated(
@@ -192,12 +188,8 @@ async function assertReadSessionDelegated(
   key: ZamaReadSessionKey,
   contracts: Address[],
 ) {
-  try {
-    const calls = await readSessionDelegationCalls(session, key, contracts);
-    if (calls.length > 0) throw new ZamaReadSessionAccessRequiredError();
-  } catch (error) {
-    throw error;
-  }
+  const calls = await readSessionDelegationCalls(session, key, contracts);
+  if (calls.length > 0) throw new ZamaReadSessionAccessRequiredError();
 }
 
 const delegatedZamaSessions = createDelegatedZamaSessionManager({
