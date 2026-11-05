@@ -178,6 +178,23 @@ test("a no-longer-pending review never prepares or sends", async () => {
   expect(fixture.send).not.toHaveBeenCalled();
 });
 
+test("an expired participation Ready requires an explicit fresh review without sending", async () => {
+  const now = vi.spyOn(Date, "now").mockReturnValue(0);
+  try {
+    fixture.version = "2";
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+    await screen.findByRole("button", { name: "Confirm" });
+    now.mockReturnValue(61_000);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(await screen.findByText("Please review your savings again.")).toBeTruthy();
+    expect(fixture.prepare).toHaveBeenCalledTimes(1);
+  } finally {
+    now.mockRestore();
+  }
+});
+
 test("a completed deposit refreshes participation on the same Savings mount", async () => {
   fixture.version = "2";
   fixture.pending = [pending(false)];

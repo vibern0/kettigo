@@ -33,6 +33,7 @@ type ParticipationPanelProps = {
 
 export type ParticipationPanelHandle = { cancel: () => void; refresh: () => void };
 type AdmissionReady = Awaited<ReturnType<ReturnType<typeof createAdmissionCoordinator>["prepare"]>>;
+type TimedAdmissionReady = Readonly<{ admission: AdmissionReady; preparedAt: number }>;
 
 function poolVersion() {
   return (
@@ -71,7 +72,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     const [hydrated, setHydrated] = useState(false);
     const [pending, setPending] = useState<PendingAdmission>();
     const [member, setMember] = useState<bigint>();
-    const [ready, setReady] = useState<AdmissionReady>();
+    const [ready, setReady] = useState<TimedAdmissionReady>();
     const [busy, setBusy] = useState(false);
     const [unresolved, setUnresolved] = useState(false);
     const [finalizedPending, setFinalizedPending] = useState<PendingAdmission>();
@@ -83,7 +84,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
       epoch.current += 1;
       abortRef.current?.abort();
       abortRef.current = undefined;
-      ready?.cancel();
+      ready?.admission.cancel();
       setReady(undefined);
       setBusy(false);
     };
@@ -92,7 +93,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
       () => () => {
         epoch.current += 1;
         abortRef.current?.abort();
-        ready?.cancel();
+        ready?.admission.cancel();
       },
       [account, pool, session],
     );
@@ -205,7 +206,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
           nextReady.cancel();
           return;
         }
-        setReady(nextReady);
+        setReady({ admission: nextReady, preparedAt: Date.now() });
       } catch (error) {
         if (!controller.signal.aborted && request === epoch.current) {
           toast({ tone: "error", title: "Please review your savings again." });
@@ -218,6 +219,12 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     const confirm = () => {
       const prepared = ready;
       if (!prepared || !session) return;
+      if (Date.now() - prepared.preparedAt > 60_000) {
+        prepared.admission.cancel();
+        setReady(undefined);
+        toast({ tone: "error", title: "Please review your savings again." });
+        return;
+      }
       setReady(undefined);
       // runAction invokes its runner synchronously, preserving the wallet gesture stack.
       runAction(
@@ -225,7 +232,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
         async ({ update }) => {
           update({ status: "waiting-wallet" });
           try {
-            const result = await prepared.confirm({
+            const result = await prepared.admission.confirm({
               onOperationPrepared: (operation) => update({ status: "confirming", operation }),
             });
             update({ status: "completed" });
@@ -248,7 +255,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
             }
             if (error instanceof AdmissionPostConfirmationReadError) {
               // The canonical send completed; only the follow-up display reads failed.
-              setFinalizedPending(prepared.reviewedPending);
+              setFinalizedPending(prepared.admission.reviewedPending);
               setUnresolved(true);
               update({ status: "updating", error: "Savings status needs a refresh." });
               return;
