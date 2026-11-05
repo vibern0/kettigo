@@ -22,6 +22,7 @@ import {
   validTarget as validTargetShape,
   validTransition,
 } from "./state-shape-validation.mjs";
+import { validateWorkloadJournalBinding } from "./workload-journal-binding.mjs";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -100,19 +101,12 @@ function validStateMetadata(state) {
 }
 
 function validWorkloadDefinition(value) {
-  return (
-    value &&
-    Object.getPrototypeOf(value) === Object.prototype &&
-    Object.keys(value).length === 3 &&
-    value.version === 1 &&
-    typeof value.fingerprint === "string" &&
-    /^0x[0-9a-f]{64}$/.test(value.fingerprint) &&
-    Array.isArray(value.phaseIds) &&
-    value.phaseIds.length >= 1 &&
-    value.phaseIds.length <= 32 &&
-    value.phaseIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128) &&
-    new Set(value.phaseIds).size === value.phaseIds.length
-  );
+  try {
+    validateWorkloadJournalBinding(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function validatePersistedIntent(intent) {

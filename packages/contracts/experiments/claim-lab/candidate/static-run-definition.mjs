@@ -4,7 +4,7 @@ import process from "node:process";
 import { Buffer } from "node:buffer";
 import { getAddress, isAddress } from "ethers";
 
-import { ORIGINAL_ENVELOPE } from "./journal.mjs";
+import { ORIGINAL_ENVELOPE } from "./original-envelope.mjs";
 import { envelopeIdentity } from "./journal-values.mjs";
 
 const MAX_BYTES = 65_536;

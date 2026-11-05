@@ -9,6 +9,7 @@ import { loadState } from "./state-storage.mjs";
 import { assertOpen, assertSigningAllowed } from "./journal-guards.mjs";
 import { canonical, clone, decimalMicro, envelopeIdentity } from "./journal-values.mjs";
 import { persistedSafePolicy } from "./safe-approved-policy.mjs";
+import { validateWorkloadJournalBinding } from "./workload-journal-binding.mjs";
 import {
   validateJournalEnvelope,
   validateJournalRequest,
@@ -16,16 +17,7 @@ import {
   validJournalSignedPayload,
 } from "./journal-validation.mjs";
 
-export const ORIGINAL_ENVELOPE = Object.freeze({
-  id: "merkle-fhe-v2-sepolia-2026-11-04",
-  chainId: 11155111,
-  maxSignedTransactions: 600,
-  maxFeeWei: "3000000000000000",
-  maxFundingWei: "5000000000000000",
-  maxUsdcMicro: "100000000",
-  maxGasPriceWei: "100000",
-  durationMs: 7_200_000,
-});
+export { ORIGINAL_ENVELOPE } from "./original-envelope.mjs";
 
 const JOURNAL = "journal.json";
 const LOCK = "writer.lock";
@@ -144,16 +136,16 @@ export class CandidateRunJournal {
 
   async bindWorkloadDefinition(binding) {
     return this.#mutate(async () => {
-      validateWorkloadDefinition(binding);
+      const canonicalBinding = validateWorkloadJournalBinding(binding);
       if (this.state.workloadDefinition) {
-        if (canonical(this.state.workloadDefinition) !== canonical(binding))
+        if (canonical(this.state.workloadDefinition) !== canonical(canonicalBinding))
           fail("workload definition replacement refused");
         return clone(this.state.workloadDefinition);
       }
       if (this.state.intents.length)
         fail("workload definition must bind before financial reservation");
       const proposed = clone(this.state);
-      proposed.workloadDefinition = clone(binding);
+      proposed.workloadDefinition = clone(canonicalBinding);
       await this.#commit(proposed);
       return clone(proposed.workloadDefinition);
     });
@@ -393,22 +385,6 @@ function sameRequest(intent, request) {
     intent.fundingWei === request.fundingWei.toString() &&
     intent.usdcCommitmentMicro === decimalMicro(request.usdcCommitment, fail).toString()
   );
-}
-function validateWorkloadDefinition(binding) {
-  if (
-    !binding ||
-    Object.getPrototypeOf(binding) !== Object.prototype ||
-    Object.keys(binding).length !== 3 ||
-    binding.version !== 1 ||
-    typeof binding.fingerprint !== "string" ||
-    !/^0x[0-9a-f]{64}$/.test(binding.fingerprint) ||
-    !Array.isArray(binding.phaseIds) ||
-    binding.phaseIds.length < 1 ||
-    binding.phaseIds.length > 32 ||
-    binding.phaseIds.some((id) => typeof id !== "string" || !id || id.length > 128) ||
-    new Set(binding.phaseIds).size !== binding.phaseIds.length
-  )
-    fail("invalid workload definition");
 }
 function addReservation(state, request, envelope, now, assertBudget) {
   const startedAt = state.startedAt ?? now();
