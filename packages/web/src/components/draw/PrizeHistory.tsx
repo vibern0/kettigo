@@ -10,6 +10,7 @@ import {
   createPrizeCheckIntentStore,
   createViemPrizeChainReader,
   createViemPrizeProofClient,
+  type PrizeCheckIntent,
   type PreparedPrizeCheck,
 } from "@/lib/prize-check-coordinator";
 import { RPC_URL } from "@/lib/contracts";
@@ -28,7 +29,12 @@ type ListedDraw = Readonly<{ drawId: bigint }>;
 type Selection =
   | Readonly<{ kind: "loading"; drawId: bigint }>
   | Readonly<{ kind: "unchecked"; drawId: bigint }>
-  | Readonly<{ kind: "ready"; drawId: bigint; prepared: PreparedPrizeCheck }>
+  | Readonly<{
+      kind: "ready";
+      drawId: bigint;
+      prepared: PreparedPrizeCheck;
+      pending: (drawId: bigint) => PrizeCheckIntent | null;
+    }>
   | Readonly<{ kind: "access-ready"; drawId: bigint; prepared: PreparedSmartTransaction }>
   | Readonly<{ kind: "checked"; drawId: bigint; handle: Hex; award?: bigint; access?: true }>
   | Readonly<{ kind: "unavailable"; drawId: bigint }>;
@@ -200,7 +206,12 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         prepared.cancel();
         return;
       }
-      setSelection({ kind: "ready", drawId: selection.drawId, prepared });
+      setSelection({
+        kind: "ready",
+        drawId: selection.drawId,
+        prepared,
+        pending: coordinator.pending,
+      });
     } catch {
       if (request === selectionEpoch.current && !controller.signal.aborted)
         setSelection({ kind: "unavailable", drawId: selection.drawId });
@@ -214,9 +225,20 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
       { label: "Check prize", type: "check", account: session.address },
       async ({ update }) => {
         update({ status: "waiting-wallet" });
-        const checked = await prepared.confirm();
-        update({ status: "completed" });
-        await viewRound(checked.drawId);
+        try {
+          const checked = await prepared.confirm();
+          update({ status: "completed" });
+          await viewRound(checked.drawId);
+        } catch (error) {
+          const saved = selection.pending(selection.drawId);
+          if (saved)
+            update({
+              status: "confirming",
+              operation: saved.operation,
+              error: "Still processing. Check status to see the latest update.",
+            });
+          throw error;
+        }
       },
     );
   };
