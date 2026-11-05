@@ -15,7 +15,6 @@ import {
   hashTypedData,
   http,
   keccak256,
-  RpcRequestError,
   type Address,
   type Hex,
 } from "viem";
@@ -24,7 +23,6 @@ import { sepolia } from "viem/chains";
 import {
   lookupCanonicalUserOperationReceipt,
   SafeUserOperationIntegrityError,
-  type CanonicalReceiptDependencies,
   type EthereumBlock,
   type EthereumReceipt,
 } from "./canonical-user-operation-receipt.ts";
@@ -34,9 +32,18 @@ import {
   SafeUserOperationNotSubmittedError,
   SafeUserOperationPendingError,
   SafeUserOperationRejectedError,
-  sameHash,
 } from "./passkey-operation.ts";
 import { createPasskeyFeeEstimator } from "./passkey-fee-estimator.ts";
+import { createDeferredPasskeyAssertion } from "./passkey-prepared-assertion.ts";
+import {
+  canonicalReceiptDependencies,
+  sendPasskeyCalls,
+  submitSignedPasskeyOperation,
+  submissionTimedOut,
+  withinSubmissionDeadline,
+  type PasskeySubmissionDependencies,
+  type SubmissionRelay,
+} from "./passkey-submission.ts";
 
 import { writePasskeyMetadata, type PasskeyMetadata } from "./passkey-metadata.ts";
 import { createKettigoCredential, getKettigoCredential } from "./passkey-webauthn.ts";
@@ -69,9 +76,6 @@ const SAFE_MODULES_VERSION = "0.3.0";
 const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
-const USER_OPERATION_REJECTION_CODES = new Set([
-  -32602, -32500, -32501, -32502, -32503, -32504, -32505, -32507, -32508,
-]);
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig(
   "NEXT_PUBLIC_PIMLICO_API_KEY",
@@ -79,41 +83,6 @@ const PIMLICO_API_KEY = publicConfig(
 );
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
 const SHARED_SIGNER_ADDRESS = sharedSignerAddress();
-
-function submittedRequestMethod(error: RpcRequestError): string | undefined {
-  const request = error.metaMessages?.find((message) => message.startsWith("Request body: "));
-  if (!request) return undefined;
-  try {
-    const body: unknown = JSON.parse(request.slice("Request body: ".length));
-    if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-    const method = (body as { method?: unknown }).method;
-    return typeof method === "string" ? method : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Relay Kit's pinned Safe4337Pack submits through viem with
- * `eth_sendUserOperation`. Only that authenticated viem request boundary can
- * prove that an ERC-7769 validation/inclusion response was not accepted.
- */
-function bundlerRejection(error: unknown): RpcRequestError | undefined {
-  const seen = new Set<object>();
-  let candidate = error;
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (!(candidate instanceof Error) || seen.has(candidate)) return undefined;
-    seen.add(candidate);
-    if (
-      candidate instanceof RpcRequestError &&
-      USER_OPERATION_REJECTION_CODES.has(candidate.code) &&
-      submittedRequestMethod(candidate) === "eth_sendUserOperation"
-    )
-      return candidate;
-    candidate = candidate.cause;
-  }
-  return undefined;
-}
 
 type PasskeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 type SafeSignature = Parameters<typeof buildSignatureBytes>[0][number];
@@ -133,7 +102,6 @@ type SafeProviderLike = {
 type SafeOperationLike = {
   signatures: Map<string, SafeSignature>;
   addSignature(signature: SafeSignature): void;
-  getUserOperation?(): UserOperation<"0.7">;
 };
 
 type UserOperationReceiptLike = {
@@ -143,33 +111,18 @@ type UserOperationReceiptLike = {
   sender: string;
 };
 
-type RelayLike = {
+type RelayLike = SubmissionRelay & {
   protocolKit: ProtocolKitLike;
-  createTransaction(input: {
-    transactions: Array<{ to: string; data: string; value: string }>;
-    options?: { feeEstimator?: ReturnType<typeof createPasskeyFeeEstimator> };
-  }): Promise<unknown>;
-  signSafeOperation(operation: unknown): Promise<unknown>;
-  executeTransaction(input: { executable: unknown }): Promise<string>;
-  getUserOperationReceipt(userOperationHash: string): Promise<UserOperationReceiptLike | null>;
 };
 
 type RelayInitOptions = Parameters<typeof Safe4337Pack.init>[0];
 
-type PasskeySafeDependencies = {
+type PasskeySafeDependencies = PasskeySubmissionDependencies & {
   createCredential(input: { rpId: string; rpName: string }): Promise<Credential>;
   extractPasskeyData(credential: Credential): Promise<ExtractedPasskeyData>;
   getVerifierAddress(chainId: string): string;
   initRelay(options: RelayInitOptions): Promise<RelayLike>;
   getCode(address: Address): Promise<Hex | undefined>;
-  getTransactionReceipt(
-    input: { hash: Hex },
-    options?: { signal?: AbortSignal },
-  ): Promise<EthereumReceipt | null>;
-  getBlock(
-    input: { blockNumber: bigint },
-    options?: { signal?: AbortSignal },
-  ): Promise<EthereumBlock | null>;
   getCredential(
     rawId: string,
     rpId: string,
@@ -177,8 +130,6 @@ type PasskeySafeDependencies = {
   ): Promise<Credential>;
   estimateVerifierGas(address: Address): Promise<bigint>;
   sleep(milliseconds: number): Promise<void>;
-  receiptTimeoutMs?: number;
-  receiptPollMs?: number;
 };
 
 type ReceiptWaitOptions = {
@@ -365,27 +316,8 @@ function createSession(
       await refreshDeploymentState();
       // Each prepared approval owns its relay and WebAuthn gate. Other wallet
       // actions cannot consume this operation's challenge or assertion.
-      let requestAssertion: (() => Promise<Credential>) | undefined;
-      let ready!: () => void;
-      let failed!: (error: unknown) => void;
-      const assertionReady = new Promise<void>((resolve, reject) => {
-        ready = resolve;
-        failed = reject;
-      });
-      let resolveAssertion!: (credential: Credential) => void;
-      let rejectAssertion!: (error: unknown) => void;
-      const signingDeps = {
-        ...deps,
-        getCredential(rawId: string, relyingParty: string, options?: CredentialRequestOptions) {
-          requestAssertion = () => deps.getCredential(rawId, relyingParty, options);
-          const assertion = new Promise<Credential>((resolve, reject) => {
-            resolveAssertion = resolve;
-            rejectAssertion = reject;
-          });
-          ready();
-          return assertion;
-        },
-      };
+      const assertion = createDeferredPasskeyAssertion(deps);
+      const signingDeps = { ...deps, ...assertion.signingDependencies };
       const preparedRelay = await deps.initRelay(
         relayOptions(
           metadata,
@@ -417,28 +349,21 @@ function createSession(
         preparedRelay.signSafeOperation(operation),
       );
       // Run Safe's RPC checks now; pause only when its actual assertion is ready.
-      void signedOperation.then(ready, failed);
-      await assertionReady;
+      void signedOperation.then(assertion.markReady, assertion.fail);
+      await assertion.waitUntilReady();
       let used = false;
       return {
         cancel() {
           if (used) return;
           used = true;
-          rejectAssertion?.(new Error("Transaction review closed."));
+          assertion.cancel();
         },
         async send(options?: SmartTransactionOptions): Promise<Hex> {
           if (used) throw new Error("Please go back and review your transaction again.");
           used = true;
-          if (requestAssertion) {
-            // Invoke credentials.get in the Confirm click's call stack.
-            try {
-              requestAssertion().then(resolveAssertion, rejectAssertion);
-            } catch (error) {
-              rejectAssertion(error);
-            }
-          }
+          assertion.requestFromConfirmation();
           const signed = normalizePasskeySignature(await signedOperation);
-          const tx = await submitSignedOperation(
+          const tx = await submitSignedPasskeyOperation(
             preparedRelay,
             signed,
             deps,
@@ -460,12 +385,13 @@ function createSession(
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
       await refreshDeploymentState();
-      const transactionHash = await sendCalls(
+      const transactionHash = await sendPasskeyCalls(
         relay,
         calls,
         deps,
         getAddress(metadata.verifierAddress),
         getAddress(metadata.safeAddress),
+        normalizePasskeySignature,
         options,
         () => {
           if (usingCounterfactualRelay) refreshRequired = true;
@@ -473,221 +399,6 @@ function createSession(
       );
       return transactionHash;
     },
-  };
-}
-
-async function sendCalls(
-  relay: RelayLike,
-  calls: SmartAccountCall[],
-  deps: PasskeySafeDependencies,
-  verifierAddress: Address,
-  expectedSender: Address,
-  options?: SmartTransactionOptions,
-  onAccepted?: () => void,
-): Promise<Hex> {
-  const diagnostics: PasskeyGasDiagnostics = {};
-  const operation = await withPasskeyStage(diagnostics, "estimation", () =>
-    relay.createTransaction({
-      transactions: calls.map((call) => ({
-        to: getAddress(call.to),
-        data: call.data,
-        value: (call.value ?? 0n).toString(),
-      })),
-      options: {
-        feeEstimator: createPasskeyFeeEstimator(undefined, {
-          estimateVerifierGas: () => deps.estimateVerifierGas(verifierAddress),
-          diagnostics,
-        }),
-      },
-    }),
-  );
-  const signed = normalizePasskeySignature(
-    await withPasskeyStage(diagnostics, "signing", () => relay.signSafeOperation(operation)),
-  );
-  return submitSignedOperation(
-    relay,
-    signed,
-    deps,
-    diagnostics,
-    expectedSender,
-    options,
-    onAccepted,
-  );
-}
-
-async function submitSignedOperation(
-  relay: RelayLike,
-  signed: unknown,
-  deps: PasskeySafeDependencies,
-  diagnostics: PasskeyGasDiagnostics,
-  expectedSender: Address,
-  options?: SmartTransactionOptions,
-  onAccepted?: () => void,
-): Promise<Hex> {
-  // Read the final signed gas fields only; never copy identity, calldata,
-  // paymaster data, or credential/signature material into diagnostics.
-  const operation = signed as SafeOperationLike;
-  if (!operation.getUserOperation) throw new Error("Safe did not provide a final UserOperation.");
-  const userOperation = operation.getUserOperation();
-  if (!userOperation) throw new Error("Safe did not provide a final UserOperation.");
-  const identity = getSafeUserOperationIdentity(userOperation);
-  if (identity.sender !== getAddress(expectedSender)) {
-    throw new SafeUserOperationIntegrityError(identity, "The operation is not for this Safe.");
-  }
-  recordSubmittedGas(diagnostics, userOperation);
-  const deadline = Date.now() + Math.max(0, deps.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS);
-  try {
-    options?.onSigned?.();
-    await awaitSubmissionObserver(
-      options?.onOperationPrepared,
-      identity,
-      remainingSubmissionDeadline(deadline),
-    );
-  } catch (error) {
-    throw new SafeUserOperationNotSubmittedError(identity, error);
-  }
-  if (remainingSubmissionDeadline(deadline) <= 0)
-    throw new SafeUserOperationNotSubmittedError(identity);
-  let hash: string;
-  try {
-    const sent = await withinSubmissionDeadline(
-      () =>
-        withPasskeyStage(diagnostics, "submission", () =>
-          relay.executeTransaction({ executable: signed }),
-        ),
-      remainingSubmissionDeadline(deadline),
-    );
-    if (sent === submissionTimedOut) throw new Error("The sponsored transaction is still pending.");
-    hash = sent;
-  } catch (error) {
-    const rejection = bundlerRejection(error);
-    const wrapped = rejection
-      ? new SafeUserOperationRejectedError(identity, rejection.code, error)
-      : new SafeUserOperationPendingError(identity, error);
-    Object.assign(wrapped, {
-      passkeyDiagnostics: (error as { passkeyDiagnostics?: unknown }).passkeyDiagnostics,
-    });
-    throw wrapped;
-  }
-  if (!sameHash(hash, identity.userOperationHash)) {
-    throw new SafeUserOperationIntegrityError(
-      identity,
-      "The relay returned a different operation hash.",
-    );
-  }
-  onAccepted?.();
-  try {
-    const outcome = await withPasskeyStage(diagnostics, "receipt", () =>
-      pollCanonicalUserOperationReceipt(
-        canonicalReceiptDependencies(relay, deps),
-        identity,
-        deps,
-        deadline,
-      ),
-    );
-    if (outcome.state === "pending") throw new SafeUserOperationPendingError(identity);
-    if (outcome.state === "failed")
-      throw new SafeUserOperationFailedError(identity, outcome.transactionHash);
-    return outcome.transactionHash;
-  } catch (error) {
-    if (
-      error instanceof SafeUserOperationFailedError ||
-      error instanceof SafeUserOperationIntegrityError
-    )
-      throw error;
-    if (error instanceof SafeUserOperationPendingError) throw error;
-    throw new SafeUserOperationPendingError(identity, error);
-  }
-}
-
-const submissionTimedOut = Symbol("submission-timed-out");
-
-function remainingSubmissionDeadline(deadline: number): number {
-  return Math.max(0, deadline - Date.now());
-}
-
-function recordSubmittedGas(
-  diagnostics: PasskeyGasDiagnostics,
-  operation: UserOperation<"0.7">,
-): void {
-  if (typeof operation.verificationGasLimit === "bigint")
-    diagnostics.submittedVerificationGas = operation.verificationGasLimit.toString();
-  if (typeof operation.callGasLimit === "bigint")
-    diagnostics.submittedCallGas = operation.callGasLimit.toString();
-  if (typeof operation.preVerificationGas === "bigint")
-    diagnostics.submittedPreVerificationGas = operation.preVerificationGas.toString();
-  if (typeof operation.maxFeePerGas === "bigint")
-    diagnostics.submittedMaxFeePerGas = operation.maxFeePerGas.toString();
-  if (typeof operation.maxPriorityFeePerGas === "bigint")
-    diagnostics.submittedMaxPriorityFeePerGas = operation.maxPriorityFeePerGas.toString();
-}
-
-async function withinSubmissionDeadline<T>(
-  callback: () => Promise<T>,
-  timeoutMs: number,
-): Promise<T | typeof submissionTimedOut> {
-  if (timeoutMs <= 0) return submissionTimedOut;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const work = Promise.resolve().then(callback);
-  // A non-cooperative relay or observer can finish after the caller's
-  // deadline; retain its rejection so it never becomes an unhandled error.
-  void work.catch(() => undefined);
-  const timeout = new Promise<typeof submissionTimedOut>((resolve) => {
-    timer = setTimeout(() => resolve(submissionTimedOut), timeoutMs);
-  });
-  try {
-    return await Promise.race([work, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function awaitSubmissionObserver(
-  observer: SmartTransactionOptions["onOperationPrepared"],
-  identity: SafeUserOperationIdentity,
-  timeoutMs = DEFAULT_RECEIPT_TIMEOUT_MS,
-): Promise<void> {
-  if (!observer) return;
-  const result = await withinSubmissionDeadline(
-    () => Promise.resolve(observer(identity)),
-    Math.max(0, timeoutMs),
-  );
-  if (result === submissionTimedOut) throw new Error("The transaction review timed out.");
-}
-
-async function pollCanonicalUserOperationReceipt(
-  dependencies: CanonicalReceiptDependencies,
-  identity: SafeUserOperationIdentity,
-  options: Pick<PasskeySafeDependencies, "receiptTimeoutMs" | "receiptPollMs" | "sleep">,
-  deadline = Date.now() + Math.max(0, options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS),
-): Promise<SafeUserOperationReceipt> {
-  const pollMs = Math.max(0, options.receiptPollMs ?? DEFAULT_RECEIPT_POLL_MS);
-  while (true) {
-    const remainingForLookup = deadline - Date.now();
-    if (remainingForLookup <= 0) return Object.freeze({ state: "pending", operation: identity });
-    const outcome = await lookupCanonicalUserOperationReceipt(dependencies, identity, {
-      timeoutMs: remainingForLookup,
-    });
-    if (outcome.state !== "pending") return outcome;
-    const remainingForSleep = deadline - Date.now();
-    if (remainingForSleep <= 0) return outcome;
-    const sleep = await withinSubmissionDeadline(
-      () => options.sleep(Math.min(pollMs, remainingForSleep)),
-      remainingForSleep,
-    );
-    if (sleep === submissionTimedOut)
-      return Object.freeze({ state: "pending", operation: identity });
-  }
-}
-
-function canonicalReceiptDependencies(
-  relay: Pick<RelayLike, "getUserOperationReceipt">,
-  deps: Pick<PasskeySafeDependencies, "getTransactionReceipt" | "getBlock">,
-): CanonicalReceiptDependencies {
-  return {
-    getUserOperationReceipt: (operationHash) => relay.getUserOperationReceipt(operationHash),
-    getTransactionReceipt: (input, options) => deps.getTransactionReceipt(input, options),
-    getBlock: (input, options) => deps.getBlock(input, options),
   };
 }
 
