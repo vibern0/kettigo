@@ -6,9 +6,14 @@ import { TextEncoder } from "node:util";
 
 import {
   assertionAbi,
+  adjustFixedEthSignV,
+  buildSafeOpV07,
   mergePinnedSponsorEstimations,
+  packFixedContractSignature,
   parseClientDataFields,
   parseDerSignature,
+  safeOpV07Digest,
+  sdkWireV07,
 } from "./safe-sdk-equivalence.mjs";
 import { createPrecredentialPermit } from "./safe-precredential-permit.mjs";
 
@@ -39,6 +44,7 @@ const BROWSER_PLATFORM = {
   clearTimer: () => {},
 };
 const encodeUtf8 = (value) => new TextEncoder().encode(value);
+const NodeAbortController = globalThis.AbortController;
 
 function syntheticUserOperation() {
   return {
@@ -72,6 +78,12 @@ function safeOptions() {
 
 test("bounded assertion helpers match Relay Kit's public ABI oracle", () => {
   assert.equal(relay.getRelayKitVersion(), "6.1.1");
+  assert.match(requireWeb.resolve("@safe-global/relay-kit"), /@safe-global\+relay-kit@6\.1\.1/);
+  assert.match(
+    requireWeb.resolve("@safe-global/protocol-kit"),
+    /@safe-global\+protocol-kit@8\.0\.7/,
+  );
+  assert.match(requireTypes.resolve("@safe-global/types-kit"), /@safe-global\+types-kit@4\.0\.1/);
   const challenge = "A".repeat(43);
   const client = `{"type":"webauthn.get","challenge":"${challenge}","origin":"https://example.test"}`;
   const fields = parseClientDataFields(client);
@@ -85,6 +97,10 @@ test("bounded assertion helpers match Relay Kit's public ABI oracle", () => {
   );
   assert.throws(() => parseClientDataFields(client.replace(challenge, "short")), /client data/);
   assert.throws(() => parseDerSignature("0x3007020101020102"), /DER/);
+});
+
+test("strict DER hex rejects a non-hex nibble", () => {
+  assert.throws(() => parseDerSignature("0x300602010g020102"), /hex/);
 });
 
 test("strict sponsor merge and SafeOp digest match the pinned Relay Kit fixture", () => {
@@ -108,6 +124,7 @@ test("strict sponsor merge and SafeOp digest match the pinned Relay Kit fixture"
     signature: "0x000000000000000000000000",
   });
   const safeOperation = operation.getSafeOperation();
+  assert.deepEqual(buildSafeOpV07(operation.getUserOperation(), safeOptions()), safeOperation);
   assert.equal(safeOperation.validAfter, 0);
   assert.equal(safeOperation.validUntil, 0);
   assert.equal(
@@ -118,6 +135,14 @@ test("strict sponsor merge and SafeOp digest match the pinned Relay Kit fixture"
       primaryType: "SafeOp",
       message: safeOperation,
     }),
+  );
+  assert.equal(
+    safeOpV07Digest({
+      userOperation: operation.getUserOperation(),
+      options: safeOptions(),
+      hashTypedData: viem.hashTypedData,
+    }),
+    operation.getHash(),
   );
   const wire = relay.userOperationToHexValues(operation.getUserOperation(), ENTRY_POINT);
   assert.equal(wire.nonce, `0x${original.nonce.toString(16)}`);
@@ -130,11 +155,21 @@ test("strict sponsor merge and SafeOp digest match the pinned Relay Kit fixture"
     userOperation: operation.getUserOperation(),
   });
   assert.notEqual(operation.getHash(), userOperationHash);
+  assert.deepEqual(sdkWireV07(operation.getUserOperation()), wire);
   assert.throws(
     () => mergePinnedSponsorEstimations(original, { sender: original.sender }),
     /unknown sponsor field/,
   );
   assert.deepEqual(mergePinnedSponsorEstimations(original, { maxFeePerGas: 0n }), original);
+  assert.throws(() => buildSafeOpV07(original, { ...safeOptions(), validUntil: 1 }), /validity/);
+  assert.throws(
+    () => buildSafeOpV07({ ...original, callGasLimit: 1n << 128n }, safeOptions()),
+    /range/,
+  );
+  assert.throws(
+    () => buildSafeOpV07({ ...original, factory: "0x", factoryData: "0x12" }, safeOptions()),
+    /factory/,
+  );
 });
 
 test("SDK wire nullability and bounded parser mutations stay strict", () => {
@@ -179,11 +214,13 @@ test("Protocol Kit adjusts and packs each accepted ETH_SIGN V with zero validity
       safeHash,
       SHARED_SIGNER,
     );
+    assert.equal(adjustFixedEthSignV(signed), adjusted);
     assert.match(adjusted, /(?:1f|20)$/);
     const packed = protocol.buildSignatureBytes([
       new protocol.EthSafeSignature(SHARED_SIGNER, adjusted, true),
     ]);
     const wire = viem.encodePacked(["uint48", "uint48", "bytes"], [0n, 0n, packed]);
+    assert.equal(packFixedContractSignature({ signer: SHARED_SIGNER, signature: adjusted }), wire);
     assert.equal(wire.slice(0, 26), "0x000000000000000000000000");
     assert.ok(wire.length > 2 + 24);
   }
@@ -192,6 +229,7 @@ test("Protocol Kit adjusts and packs each accepted ETH_SIGN V with zero validity
     () => protocol.adjustVInSignature(SigningMethod.ETH_SIGN, invalid, safeHash, SHARED_SIGNER),
     /Invalid signature/,
   );
+  assert.throws(() => adjustFixedEthSignV(invalid), /Invalid signature/);
 });
 
 test("precredential permit synchronously gates an exact one-use WebAuthn request", () => {
@@ -220,7 +258,7 @@ test("precredential permit synchronously gates an exact one-use WebAuthn request
     return input;
   });
   assert.equal(nativeCalls, 1);
-  assert.equal(result.publicKey.signal.aborted, false);
+  assert.equal(result.signal.aborted, false);
   assert.throws(() => permit.start(request, () => request), /used/);
   permit.stop();
 });
@@ -271,15 +309,77 @@ test("precredential permit rejects altered scope and aborts after synchronous na
   assert.throws(() => permit.start(altered, () => undefined), /does not match/);
   let signal;
   const result = permit.start(makeRequest(), (request) => {
-    signal = request.publicKey.signal;
+    signal = request.signal;
     return Promise.resolve("native-started");
   });
   assert.equal(await result, "native-started");
   assert.equal(signal.aborted, false);
   permit.stop();
   assert.equal(signal.aborted, true);
-  assert.equal(
-    await permit.capture({ id: "synthetic" }, async (assertion) => assertion.id),
-    "synthetic",
+  await assert.rejects(
+    () => permit.capture({ id: "synthetic" }, async () => "late"),
+    /unavailable/,
   );
+});
+
+test("precredential stop latches before start and uses the top-level abort signal", async () => {
+  const challenge = new Uint8Array(32).fill(9);
+  const rawId = new Uint8Array([7, 8, 9]);
+  let nativeCalls = 0;
+  const permit = createPrecredentialPermit({
+    reservationId: "stopped-before-start",
+    challenge,
+    rawId,
+    rpId: "example.test",
+    deadlineAt: 2000,
+    now: () => 1000,
+    platform: {
+      createAbortController: () => new NodeAbortController(),
+      setTimer: () => ({ timer: "manual" }),
+      clearTimer: () => {},
+    },
+  });
+  permit.stop();
+  const request = {
+    publicKey: {
+      challenge,
+      allowCredentials: [{ type: "public-key", id: rawId }],
+      rpId: "example.test",
+      userVerification: "required",
+    },
+  };
+  assert.throws(
+    () =>
+      permit.start(request, () => {
+        nativeCalls += 1;
+      }),
+    /unavailable/,
+  );
+  assert.equal(nativeCalls, 0);
+  const active = createPrecredentialPermit({
+    reservationId: "top-level-signal",
+    challenge,
+    rawId,
+    rpId: "example.test",
+    deadlineAt: 2000,
+    now: () => 1000,
+    platform: {
+      createAbortController: () => new NodeAbortController(),
+      setTimer: (callback) => {
+        deadline = callback;
+        return {};
+      },
+      clearTimer: () => {},
+    },
+  });
+  let nativeRequest;
+  let deadline;
+  active.start(request, (value) => {
+    nativeRequest = value;
+  });
+  assert.equal(nativeRequest.signal.constructor.name, "AbortSignal");
+  assert.equal(nativeRequest.publicKey.signal, undefined);
+  deadline();
+  assert.equal(nativeRequest.signal.aborted, true);
+  await assert.rejects(() => active.capture({}, async () => "late"), /unavailable/);
 });

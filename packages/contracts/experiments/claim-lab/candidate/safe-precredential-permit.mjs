@@ -69,10 +69,12 @@ export function createPrecredentialPermit({
     deadlineAt,
   });
   let used = false;
+  let cancelled = false;
   let controller;
   let deadlineTimer;
 
   function stop() {
+    cancelled = true;
     if (deadlineTimer !== undefined) platform.clearTimer(deadlineTimer);
     controller?.abort();
   }
@@ -81,7 +83,7 @@ export function createPrecredentialPermit({
     reservationId,
     start(request, nativeGet) {
       if (used) throw new Error("credential permit already used");
-      if (stopped() || now() >= snapshot.deadlineAt)
+      if (cancelled || stopped() || now() >= snapshot.deadlineAt)
         throw new Error("credential permit is unavailable");
       if (typeof nativeGet !== "function") throw new Error("native credential getter is required");
       assertRequest(request, snapshot);
@@ -90,13 +92,14 @@ export function createPrecredentialPermit({
       deadlineTimer = platform.setTimer(stop, snapshot.deadlineAt - now());
       const nativeRequest = {
         ...request,
-        publicKey: { ...request.publicKey, signal: controller.signal },
+        publicKey: { ...request.publicKey },
+        signal: controller.signal,
       };
       return nativeGet(nativeRequest);
     },
     stop,
     async capture(assertion, capture) {
-      if (!used || typeof capture !== "function")
+      if (!used || cancelled || controller?.signal.aborted || typeof capture !== "function")
         throw new Error("credential capture is unavailable");
       return capture(assertion);
     },
