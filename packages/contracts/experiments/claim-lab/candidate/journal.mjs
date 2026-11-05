@@ -20,6 +20,7 @@ import {
   validateObservations,
   validatePersistedErrors,
 } from "./attempt-observation-validation.mjs";
+import { isNatural, validClock, validTransition } from "./state-shape-validation.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -155,13 +156,6 @@ function validPersistedIntentFields(intent) {
     ].every(Boolean)
   );
 }
-function validClock(state, envelope) {
-  return state.startedAt === null
-    ? state.deadlineAt === null && state.intents.length === 0
-    : Number.isSafeInteger(state.startedAt) &&
-        Number.isSafeInteger(state.deadlineAt) &&
-        state.deadlineAt === state.startedAt + envelope.durationMs;
-}
 function validBudget(budget) {
   return (
     Number.isSafeInteger(budget.signedCount) &&
@@ -170,9 +164,6 @@ function validBudget(budget) {
       UINT.test(budget[key] ?? ""),
     )
   );
-}
-function isNatural(value) {
-  return Number.isSafeInteger(value) && value >= 0;
 }
 function validTarget(to, input) {
   return (
@@ -194,16 +185,6 @@ function validatePersistedTransition(intent) {
     if (intent.state !== "terminal" || !intent.attempts.length) fail("invalid persisted terminal");
     validateStoredReceipt(terminal, intent);
   } else if (intent.state === "terminal") fail("invalid persisted terminal");
-}
-function validTransition(state, signed, attempts, terminal) {
-  return (
-    {
-      reserved: !signed && attempts === 0 && !terminal,
-      signed: signed && attempts === 0 && !terminal,
-      "broadcast-attempted": signed && attempts > 0 && !terminal,
-      terminal: signed && attempts > 0 && Boolean(terminal),
-    }[state] === true
-  );
 }
 async function loadState(statePath, envelope, identity) {
   try {
@@ -302,6 +283,15 @@ export class CandidateRunJournal {
         fail("sender nonce collision");
       const proposed = clone(this.state);
       addReservation(proposed, request, this.envelope, this.now, this.#assertBudget.bind(this));
+      if (
+        this.state.intents.some(
+          (entry) =>
+            entry.sender.toLowerCase() === request.sender.toLowerCase() &&
+            entry.intentId !== request.intentId &&
+            !entry.terminal,
+        )
+      )
+        fail("sender has unresolved intent");
       await this.#commit(proposed);
       return { replay: false, intent: this.intent(request.intentId) };
     });
@@ -347,6 +337,22 @@ export class CandidateRunJournal {
       intent.state = "broadcast-attempted";
       await this.#commit(proposed);
       return this.intent(intentId);
+    });
+  }
+
+  async attemptWithPermit(intentId, send) {
+    if (typeof send !== "function") fail("send callback required");
+    return this.#mutate(async () => {
+      this.#assertSigningAllowed();
+      const proposed = clone(this.state);
+      const intent = findIntent(proposed, intentId);
+      if (!intent.signed) fail("attempt without durable signature");
+      if (intent.terminal) fail("attempt after terminal");
+      intent.attempts.push({ at: this.now(), error: null, unrecoverable: false });
+      intent.state = "broadcast-attempted";
+      await this.#commit(proposed);
+      this.#assertSigningAllowed();
+      return send();
     });
   }
 

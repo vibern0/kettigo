@@ -2,6 +2,7 @@ import { Transaction, getAddress, isAddress, keccak256 } from "ethers";
 
 const CHAIN_ID = 11155111;
 const ZERO = "0x";
+const FORBIDDEN_POOL_TARGETS = new Set([getAddress("0xAdB8F835E565aC7e71d2DF6cFBd0FC003fa22C27")]);
 const fail = (message) => {
   throw new Error(`candidate EOA sender: ${message}`);
 };
@@ -32,6 +33,9 @@ function normalizedRequest(request) {
   const value = asBigInt(request.value, "value");
   const gasLimit = asBigInt(request.gasLimit, "gas limit");
   const gasPrice = asBigInt(request.gasPrice, "gas price");
+  if (typeof request.usdcCommitment !== "string") fail("explicit USDC commitment required");
+  if (request.fundingWei !== undefined && asBigInt(request.fundingWei, "funding") !== value)
+    fail("funding must equal transaction value");
   if (!gasLimit || !gasPrice) fail("gas limit and gas price must be positive");
   return { ...request, to, value, gasLimit, gasPrice };
 }
@@ -92,10 +96,14 @@ export class DurableEoaSender {
     if (!sameAddress(normalized.sender, this.actor)) fail("unknown actor");
     this.#assertTarget(normalized);
     const existing = this.inflight.get(normalized.intentId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.digest !== transactionDigest(normalized))
+        fail("duplicate intent has different unsigned request");
+      return existing.operation;
+    }
     const operation = this.actorTail.then(() => this.#submit(normalized));
     this.actorTail = operation.catch(() => {});
-    this.inflight.set(normalized.intentId, operation);
+    this.inflight.set(normalized.intentId, { digest: transactionDigest(normalized), operation });
     try {
       return await operation;
     } finally {
@@ -104,34 +112,32 @@ export class DurableEoaSender {
   }
 
   async reconcile(intentId) {
-    const intent = this.journal.intent(intentId);
-    if (!intent?.signed) fail("unknown signed intent");
-    const raw = intent.signed.raw;
-    const saved = Transaction.from(raw);
-    assertDecoded(
-      raw,
-      {
-        nonce: intent.nonce,
-        to: intent.to,
-        data: intent.input,
-        value: saved.value,
-        gasLimit: saved.gasLimit,
-        gasPrice: saved.gasPrice,
-      },
-      intent.signed.hash,
-      intent.sender,
-      intent.unsignedDigest,
-    );
-    const known = await this.provider.getTransaction(intent.signed.hash);
-    if (known) this.#assertKnownTransaction(known, intent);
+    const intent = this.#loadSavedIntent(intentId);
+    try {
+      await this.#assertNetwork();
+    } catch (error) {
+      await this.journal.recordObservation(intentId, { stage: "network", error: errorText(error) });
+      throw error;
+    }
+    let known;
+    try {
+      known = await this.provider.getTransaction(intent.signed.hash);
+      if (known) this.#assertKnownTransaction(known, intent);
+    } catch (error) {
+      await this.journal.recordObservation(intentId, {
+        stage: "transaction",
+        error: errorText(error),
+      });
+      return { state: "unresolved", knownPending: false };
+    }
     let receipt;
     try {
       receipt = await this.provider.getTransactionReceipt(intent.signed.hash);
     } catch (error) {
       await this.journal.recordObservation(intentId, { stage: "receipt", error: errorText(error) });
-      return { state: "unresolved" };
+      return { state: "unresolved", knownPending: Boolean(known) };
     }
-    if (!receipt) return { state: "unresolved" };
+    if (!receipt) return { state: "unresolved", knownPending: Boolean(known) };
     try {
       await this.#recordCanonicalReceipt(intent, receipt);
       return { state: receipt.status === 1 ? "success" : "reverted" };
@@ -145,7 +151,30 @@ export class DurableEoaSender {
     }
   }
 
+  #loadSavedIntent(intentId) {
+    const intent = this.journal.intent(intentId);
+    if (!intent?.signed) fail("unknown signed intent");
+    const saved = Transaction.from(intent.signed.raw);
+    assertDecoded(
+      intent.signed.raw,
+      {
+        nonce: intent.nonce,
+        to: intent.to,
+        data: intent.input,
+        value: saved.value,
+        gasLimit: saved.gasLimit,
+        gasPrice: saved.gasPrice,
+      },
+      intent.signed.hash,
+      intent.sender,
+      intent.unsignedDigest,
+    );
+    return intent;
+  }
+
   async #submit(request) {
+    const signerAddress = getAddress(await this.signer.getAddress());
+    if (signerAddress !== this.actor) fail("signer is not actor");
     const reserved = await this.journal.reserve({
       intentId: request.intentId,
       sender: this.actor,
@@ -156,17 +185,14 @@ export class DurableEoaSender {
       offeredAt: request.offeredAt,
       maxFeeWei: request.gasLimit * request.gasPrice,
       maxGasPriceWei: request.gasPrice,
-      fundingWei: request.fundingWei ?? 0n,
-      usdcCommitment: request.usdcCommitment ?? "0",
+      fundingWei: request.value,
+      usdcCommitment: request.usdcCommitment,
     });
     const intent = reserved.intent;
     if (!intent.signed) {
-      const network = await this.provider.getNetwork();
-      if (Number(network.chainId) !== CHAIN_ID) fail("provider is not Sepolia");
+      await this.#assertNetwork();
       await this.#assertNonce(request.nonce);
       await this.journal.assertSigningPermit();
-      const signerAddress = getAddress(await this.signer.getAddress());
-      if (signerAddress !== this.actor) fail("signer is not actor");
       const raw = await this.signer.signTransaction(unsignedTransaction(request));
       const decoded = Transaction.from(raw);
       assertDecoded(raw, request, decoded.hash, this.actor);
@@ -178,12 +204,13 @@ export class DurableEoaSender {
   async #broadcastOrReconcile(intentId) {
     const outcome = await this.reconcile(intentId);
     if (outcome.state !== "unresolved") return outcome;
+    if (outcome.knownPending) return outcome;
     const intent = this.journal.intent(intentId);
     await this.#assertResumeNonce(intent);
-    await this.journal.assertSigningPermit();
-    await this.journal.recordAttempt(intentId);
     try {
-      const hash = await this.provider.sendRawTransaction(intent.signed.raw);
+      const hash = await this.journal.attemptWithPermit(intentId, () =>
+        this.provider.sendRawTransaction(intent.signed.raw),
+      );
       if (!sameBytes(hash, intent.signed.hash)) fail("provider returned mismatched hash");
     } catch (error) {
       await this.journal.recordObservation(intentId, {
@@ -196,6 +223,8 @@ export class DurableEoaSender {
   }
 
   #assertTarget(request) {
+    if (request.to !== null && FORBIDDEN_POOL_TARGETS.has(request.to))
+      fail("legacy or canary target is forbidden");
     if (request.to !== null && !this.targets.has(request.to)) fail("write target is not allowed");
     if (request.to === null) {
       const digest = keccak256(request.data).toLowerCase();
@@ -209,12 +238,16 @@ export class DurableEoaSender {
     ]);
     if (latest !== nonce || pending !== nonce) fail("unexplained nonce consumption");
   }
+  async #assertNetwork() {
+    const network = await this.provider.getNetwork();
+    if (Number(network.chainId) !== CHAIN_ID) fail("provider is not Sepolia");
+  }
   async #assertResumeNonce(intent) {
     const [latest, pending] = await Promise.all([
       this.provider.getTransactionCount(this.actor, "latest"),
       this.provider.getTransactionCount(this.actor, "pending"),
     ]);
-    if (latest > intent.nonce || pending > intent.nonce)
+    if (latest !== intent.nonce || pending !== intent.nonce)
       fail("unexplained nonce consumption during resume");
   }
   #assertKnownTransaction(transaction, intent) {
@@ -231,13 +264,28 @@ export class DurableEoaSender {
   async #recordCanonicalReceipt(intent, receipt) {
     const transaction = await this.provider.getTransaction(intent.signed.hash);
     const block = await this.provider.getBlock(receipt.blockNumber);
-    if (!transaction || !block || receipt.blockHash !== block.hash) fail("non-canonical receipt");
+    if (
+      !transaction ||
+      !block ||
+      receipt.blockHash !== block.hash ||
+      transaction.blockHash !== receipt.blockHash ||
+      transaction.blockNumber !== receipt.blockNumber
+    )
+      fail("non-canonical receipt");
     this.#assertKnownTransaction(transaction, intent);
-    if (receipt.hash !== intent.signed.hash) fail("receipt transaction mismatch");
+    const signed = Transaction.from(intent.signed.raw);
+    if (
+      receipt.hash !== intent.signed.hash ||
+      !sameAddress(receipt.from, intent.sender) ||
+      receipt.to !== intent.to ||
+      receipt.nonce !== intent.nonce ||
+      BigInt(receipt.gasPrice) !== signed.gasPrice
+    )
+      fail("receipt transaction mismatch");
     await this.journal.recordTerminal(intent.intentId, {
       hash: intent.signed.hash,
       status: receipt.status,
-      feeWei: BigInt(receipt.gasUsed) * BigInt(receipt.gasPrice),
+      feeWei: BigInt(receipt.gasUsed) * signed.gasPrice,
       from: intent.sender,
       to: intent.to,
       input: intent.input,
