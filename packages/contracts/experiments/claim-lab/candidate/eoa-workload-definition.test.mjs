@@ -98,16 +98,26 @@ test("compiles the fixed 375-action graph without putting actions in StaticA pha
   assert.equal(workload.actions[1].id, "bootstrap-usdc");
   assert.equal(new Set(workload.actions.map((action) => action.id)).size, 375);
   assert.equal(workloadFingerprint(workload), workload.fingerprint);
+  const phase = (name) =>
+    workload.actions.filter((action) => action.kind === "eoa" && action.phase === name).length;
+  assert.equal(phase("setup"), 71);
+  assert.equal(phase("deposit"), 96);
+  assert.equal(phase("draw"), 88);
+  assert.equal(phase("queue"), 7);
+  assert.equal(phase("final"), 100);
+  assert.equal(workload.actions.filter((action) => action.kind === "externalSafe").length, 13);
+  assert.equal(workload.actions.filter((action) => action.actorRole === "participant").length, 206);
 });
 
-test("keeps the Safe exit/reuse/rejoin ordering and rejects a changed static template", () => {
+test("encodes Safe exit/reuse/rejoin as dependency edges and rejects a changed static template", () => {
   const workload = compileCandidateWorkload(definition(), manifest());
-  const index = (id) => workload.actions.findIndex((action) => action.id === id);
-  assert.ok(index("safe-exit-membership") < index("eoa00-reuse-slot-0"));
-  assert.ok(index("eoa00-reuse-slot-0") < index("safe-rejoin-slot-1"));
-  assert.ok(index("safe-rejoin-slot-1") < index("admit-eoa06-stage-8"));
-  assert.ok(index("safe-rejoin-slot-1") < index("safe-delayed-check-b"));
-  assert.ok(index("morpho-initial-6") < index("safe-exit-membership"));
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  assert.ok(action("eoa-00-approve").dependencies.includes("safe-exit-membership"));
+  assert.ok(action("safe-rejoin-deposit").dependencies.includes("eoa-00-admit"));
+  assert.ok(action("eoa-01-approve").dependencies.includes("safe-rejoin-admission"));
+  assert.ok(action("safe-delayed-check-b").dependencies.includes("safe-rejoin-admission"));
+  assert.equal(action("safe-conditional-wallet-claim").status, "PENDING");
+  assert.equal(action("check-stage8-eoa-00").operation.args.length, 8);
   const changed = definition();
   changed.creationInputDigests[0] = hash(99);
   const changedManifest = manifest();
