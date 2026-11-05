@@ -1478,3 +1478,41 @@ test("onSigned failure retains identity and prevents execution", async () => {
   );
   assert.equal(sends, 0);
 });
+
+test("preparation refreshes recovered counterfactual deployment mode from observed code", async () => {
+  for (const [code, deployed] of [
+    ["0x6000", true],
+    ["0x", false],
+  ]) {
+    let initCount = 0;
+    const metadata = {
+      rawId: RAW_ID,
+      coordinates: COORDINATES,
+      verifierAddress: VERIFIER_ADDRESS,
+      safeAddress: SAFE_ADDRESS,
+    };
+    const session = await restorePasskeyAccount(
+      { metadata, rpId: "app.kettigo.xyz" },
+      dependencies({
+        async getCode() {
+          return code;
+        },
+        async initRelay(options) {
+          initCount += 1;
+          if (initCount === 1) return relay();
+          if (initCount === 2 && !deployed) return relay();
+          assert.equal("safeAddress" in options.options, deployed);
+          const instance = relay();
+          instance.signSafeOperation = async (operation) => {
+            await options.signer.getFn({});
+            return operation;
+          };
+          return instance;
+        },
+      }),
+    );
+    await session.lookupUserOperation(getSafeUserOperationIdentity(finalUserOperation()));
+    const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+    prepared.cancel();
+  }
+});

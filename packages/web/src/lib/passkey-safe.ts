@@ -439,8 +439,14 @@ function createSession(
       () => deps.getCode(getAddress(metadata.safeAddress)),
       deps.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
     );
-    if (code === submissionTimedOut) return;
+    if (code === submissionTimedOut) throw new Error("Safe deployment state refresh timed out.");
     if (!code || code === "0x") {
+      if (!usingCounterfactualRelay) {
+        relay = await deps.initRelay(
+          relayOptions(metadata, predictedOptions(metadata.rawId), rpId, deps),
+        );
+        usingCounterfactualRelay = true;
+      }
       refreshRequired = false;
       return;
     }
@@ -481,6 +487,7 @@ function createSession(
       return outcome;
     },
     prepareTransaction: async (calls) => {
+      await refreshDeploymentState();
       // Each prepared approval owns its relay and WebAuthn gate. Other wallet
       // actions cannot consume this operation's challenge or assertion.
       let requestAssertion: (() => Promise<Credential>) | undefined;
