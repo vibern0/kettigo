@@ -8,7 +8,14 @@ import { D1Archive, type BlockHeader } from "../src/archive.ts";
 import { type RpcSource } from "../src/ingest.ts";
 import { branchHash, leafHash, type ArchiveLog, type Namespace, type Node } from "../src/domain.ts";
 import { depth32Fixture, zero } from "../tests/fixtures.ts";
-import { SqliteD1, migrate } from "./replay-retained.mts";
+import {
+  SqliteD1,
+  exportArchive,
+  migrate,
+  restoreCanonical,
+  restoreSqlSnapshot,
+  writeSqlSnapshot,
+} from "./replay-retained.mts";
 import { runRpcBackfill } from "./rpc-backfill.mts";
 import { FallbackRpc } from "../src/rpc.ts";
 import { initializeArchiveForTick } from "../src/worker.ts";
@@ -183,6 +190,43 @@ test("backfill never publishes a partial archive on a fixed-target reorg or no p
   });
 });
 
+test("backfill rejects the exact no-progress guard after a persisted slice rolls back", async () => {
+  const directory = mkdtempSync("/tmp/kettigo-rpc-backfill-rollback-");
+  const namespace = namespaceAtTwo();
+  const chain = headers(4);
+  const output = join(directory, "rollback.sqlite");
+  const rpc = new FixtureRpc(chain, new Map(), namespace);
+  const originalBlock = rpc.block.bind(rpc);
+  let blockThreeReads = 0;
+  const ranges: Array<[number, number]> = [];
+  rpc.block = async (number) => {
+    const block = await originalBlock(number);
+    if (number === 3 && ++blockThreeReads === 2) return { ...block, hash: hash(99) };
+    return block;
+  };
+  rpc.logs = async (from, to) => {
+    ranges.push([from, to]);
+    return [];
+  };
+
+  await assert.rejects(
+    () =>
+      runRpcBackfill({
+        namespace,
+        target: { chainId: "11155111", number: 4, hash: chain[4].hash },
+        output,
+        source: rpc,
+        maxBlocksPerSlice: 2,
+        maxSlices: 4,
+        deadlineMs: 1_000,
+      }),
+    /backfill made no progress/,
+  );
+  assert.deepEqual(ranges, [[2, 3]]);
+  assert.equal(blockThreeReads, 2);
+  assert.equal(existsSync(output), false);
+});
+
 test("backfill rejects an existing output without changing it", async () => {
   const directory = mkdtempSync("/tmp/kettigo-rpc-backfill-existing-");
   const output = join(directory, "existing.sqlite");
@@ -258,6 +302,77 @@ test("native SQLite restart repairs the only legacy scheduler interruption shape
     parentHash: zero,
   });
   db.close();
+});
+
+test("repaired native archive retains a depth-32 proof through canonical and SQL restores", async () => {
+  const directory = mkdtempSync("/tmp/kettigo-rpc-backfill-repair-restore-");
+  const { namespace, block, logs } = depth32Fixture();
+  const source = join(directory, "repaired.sqlite");
+  const db = migrate(source);
+  db.prepare("INSERT INTO namespaces VALUES(?,?,?,?,?,?)").run(
+    namespace.chainId,
+    namespace.pool,
+    namespace.depth,
+    namespace.zero,
+    JSON.stringify(namespace.emptyHashes),
+    namespace.deploymentBlock,
+  );
+  db.prepare("INSERT INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)").run(
+    namespace.chainId,
+    namespace.pool,
+    namespace.deploymentBlock,
+    0,
+    zero,
+    0,
+    null,
+    new Date().toISOString(),
+  );
+  const archive = new D1Archive(new SqliteD1(db));
+  await initializeArchiveForTick(
+    archive,
+    namespace,
+    new FixtureRpc([{ number: 0, hash: zero, parentHash: zero }, block], new Map(), namespace),
+  );
+  await archive.ingest(namespace, await archive.status(namespace), logs, [block]);
+  const original = await archive.proof(
+    namespace,
+    "1",
+    "0x1111111111111111111111111111111111111111",
+  );
+  assert.ok(original);
+  const retained = exportArchive(db, namespace);
+  const canonical = join(directory, "canonical.json");
+  const manifest = join(directory, "canonical.manifest.json");
+  writeFileSync(canonical, JSON.stringify(retained));
+  writeFileSync(manifest, JSON.stringify(retained.manifest));
+  const sql = join(directory, "repaired.sql");
+  const sqlManifest = join(directory, "repaired.sql.manifest.json");
+  writeSqlSnapshot(source, sql, sqlManifest, namespace);
+  db.close();
+
+  const canonicalTarget = join(directory, "canonical.sqlite");
+  await restoreCanonical(canonical, manifest, canonicalTarget, namespace);
+  const sqlTarget = join(directory, "sql.sqlite");
+  await restoreSqlSnapshot(sql, sqlManifest, sqlTarget, namespace);
+  for (const target of [canonicalTarget, sqlTarget]) {
+    const restored = new D1Archive(new SqliteD1(new DatabaseSync(target, { readOnly: true })));
+    assert.deepEqual(await restored.status(namespace), {
+      nextBlock: retained.manifest.checkpoint.nextBlock,
+      lastFinalizedBlock: retained.manifest.checkpoint.lastFinalizedBlock,
+      lastFinalizedHash: retained.manifest.checkpoint.lastFinalizedHash,
+      revision: 1,
+      disabledReason: undefined,
+    });
+    assert.deepEqual(await restored.canonicalBlock(namespace, 0), {
+      number: 0,
+      hash: zero,
+      parentHash: zero,
+    });
+    assert.deepEqual(
+      await restored.proof(namespace, "1", "0x1111111111111111111111111111111111111111"),
+      original,
+    );
+  }
 });
 
 test("backfill pins a fallback source when the primary is pruned and aborts disabled or expired work", async (t) => {
