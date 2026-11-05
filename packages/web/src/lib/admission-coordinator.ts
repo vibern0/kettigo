@@ -36,6 +36,14 @@ export class AdmissionReconciliationError extends Error {
   }
 }
 
+/** A send completed, but the following display-only reads were unavailable. */
+export class AdmissionPostConfirmationReadError extends Error {
+  constructor(cause: unknown) {
+    super("Savings status needs a refresh.", { cause });
+    this.name = "AdmissionPostConfirmationReadError";
+  }
+}
+
 export type AdmissionCoordinatorDependencies = Readonly<{
   account: Address;
   pool: Address;
@@ -188,7 +196,15 @@ function readyAdmission(
       removeAbort();
       try {
         const sent = prepared.send();
-        confirmation = sent.then(() => reconcile(dependencies, review, signal));
+        confirmation = sent.then(async () => {
+          try {
+            return await reconcile(dependencies, review, signal);
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            if (error instanceof AdmissionReconciliationError) throw error;
+            throw new AdmissionPostConfirmationReadError(error);
+          }
+        });
       } catch (error) {
         confirmation = Promise.reject(error);
       }

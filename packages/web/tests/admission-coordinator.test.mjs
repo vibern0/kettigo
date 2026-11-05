@@ -4,6 +4,7 @@ import { RpcRateLimitError } from "@zama-fhe/sdk";
 
 import {
   AdmissionReconciliationError,
+  AdmissionPostConfirmationReadError,
   AdmissionStaleError,
   createAdmissionCoordinator,
   readWithConfirmedVisibility,
@@ -118,6 +119,33 @@ test("a false signed marker completes without reporting an active membership", a
     membershipIndex: 1n,
     pending: pending({ requested: false }),
   });
+});
+
+test("keeps a completed admission unresolved when a post-confirmation membership read is unavailable", async () => {
+  const { coordinator } = fixture({
+    membershipIndex: 1n,
+  });
+  const ready = await coordinator.prepare(await coordinator.review());
+  // The coordinator owns the post-send read boundary; callers must not recast it as a failed send.
+  const unavailable = createAdmissionCoordinator({
+    account: ACCOUNT,
+    pool: POOL,
+    decryptPublicBoolean: async () => ({ clearValue: true, decryptionProof: PROOF }),
+    readPendingAdmission: async () => pending(),
+    readMembershipIndex: async () => {
+      throw new Error("provider unavailable");
+    },
+    encodeFinalizeAdmission: () => "0xabcdef",
+    session: {
+      address: ACCOUNT,
+      prepareTransaction: async () => ({ cancel() {}, send: async () => "0xdead" }),
+    },
+  });
+  assert.ok(ready);
+  await assert.rejects(
+    unavailable.prepare(await unavailable.review()).then((prepared) => prepared.confirm()),
+    AdmissionPostConfirmationReadError,
+  );
 });
 
 test("does not reconcile a failed prepared submission as an admission", async () => {

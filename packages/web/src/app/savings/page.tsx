@@ -28,6 +28,7 @@ import { useToast } from "@/components/Toast";
 import { DepositSheet } from "@/components/savings/DepositSheet";
 import { WithdrawalSheet } from "@/components/savings/WithdrawalSheet";
 import { SavingsStatus } from "@/components/savings/SavingsStatus";
+import { ParticipationPanel, type ParticipationPanelHandle } from "@/components/savings/ParticipationPanel";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
 import type { ActionPatch } from "@/lib/action-center-model";
@@ -184,11 +185,13 @@ export default function SavingsPage() {
   const [accessReviewStep, setAccessReviewStep] = useState<SheetStep>();
   const preparedDeposit = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
   const preparedAccess = useRef<{ session: PasskeySmartSession; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const participation = useRef<ParticipationPanelHandle>(null);
   const reviewAbort = useRef<AbortController>();
   const [preparingDeposit, setPreparingDeposit] = useState(false);
   const depositPreparationId = useRef(0);
 
   function cancelOwnedReview() {
+    participation.current?.cancel();
     reviewAbort.current?.abort();
     reviewAbort.current = undefined;
     depositPreparationId.current += 1;
@@ -1115,6 +1118,8 @@ export default function SavingsPage() {
       <TestnetWarning />
 
       <SavingsStatus walletBalance={usdcBalance} principal={principal} pendingTotal={withdrawalInProgress} pendingWithdrawals={pendingWithdrawals} loading={confidentialBalancesLoading} error={confidentialBalancesError} accessRequired={confidentialBalancesReadState === "access-required"} accessConfirming={accessReviewStep === "confirm"} accessAvailable={Boolean(session)} automaticWithdrawals={automaticWithdrawals} withdrawalRefreshError={withdrawalRefreshError} onAccessBack={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }} onAccessConfirm={confirmBalanceAccess} onAccessReview={() => void reviewBalanceAccess()} />
+
+      <ParticipationPanel ref={participation} account={session?.address} pool={poolReady ? asAddress(addresses.pool, "Prize pool") : undefined} session={session ?? undefined} onReviewStart={cancelOwnedReview} />
 
       <div className="grid grid-cols-2 gap-3">
         <button
