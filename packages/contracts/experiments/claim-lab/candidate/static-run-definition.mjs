@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import process from "node:process";
 import { getAddress, isAddress } from "ethers";
 
@@ -113,6 +114,12 @@ function validate(value) {
 function validateWorkload(value) {
   const actors = registry(value.actors);
   const contractRegistry = contracts(value.contracts);
+  if (
+    Object.values(actors)
+      .flat()
+      .some((actor) => Object.values(contractRegistry).includes(actor))
+  )
+    fail("actor contract cross-role conflict");
   const allowedEoaTargets = addresses(value.allowedEoaTargets, "allowed EOA targets", {
     min: 1,
     max: 16,
@@ -150,8 +157,10 @@ function hashes(value, label) {
 }
 
 export async function loadStaticRunDefinition(path) {
+  let handle;
   try {
-    const details = await stat(path);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const details = await handle.stat();
     if (
       !details.isFile() ||
       details.size > MAX_BYTES ||
@@ -159,11 +168,15 @@ export async function loadStaticRunDefinition(path) {
       (typeof process.getuid === "function" && details.uid !== process.getuid())
     )
       throw new Error();
-    const text = await readFile(path, "utf8");
-    return validate(JSON.parse(text));
+    const buffer = Buffer.alloc(MAX_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > MAX_BYTES) throw new Error();
+    return validate(JSON.parse(buffer.toString("utf8", 0, bytesRead)));
   } catch (error) {
     if (error?.message?.startsWith("candidate definition:")) throw error;
     fail("definition unavailable or permissions invalid");
+  } finally {
+    await handle?.close();
   }
 }
 export function candidateActorRole(definition, actor) {

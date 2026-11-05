@@ -66,6 +66,11 @@ test("rejects malformed policy identity, actor conflicts, and forbidden targets"
     await assert.rejects(loadStaticRunDefinition(await file(value)));
   }
 });
+test("rejects actor reuse as a contract identity", async () => {
+  const value = definition();
+  value.contracts.adapter = value.actors.sponsor;
+  await assert.rejects(loadStaticRunDefinition(await file(value)), /cross-role/);
+});
 test("redacts private definition permission and parser failures", async () => {
   const path = await file(definition(), 0o644);
   await assert.rejects(

@@ -44,8 +44,11 @@ export class EthersV6EoaProviderAdapter {
   getTransactionCount(actor, blockTag) {
     return this.provider.getTransactionCount(actor, blockTag);
   }
-  sendRawTransaction(raw) {
-    return this.provider.sendRawTransaction(raw);
+  async sendRawTransaction(raw) {
+    const response = await this.provider.broadcastTransaction(raw);
+    if (!response || typeof response.hash !== "string" || !HASH.test(response.hash))
+      fail("broadcast response mismatch");
+    return response.hash;
   }
   async getTransaction(hash) {
     if (typeof hash !== "string" || !HASH.test(hash)) fail("invalid hash");

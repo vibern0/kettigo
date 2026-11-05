@@ -32,7 +32,7 @@ function provider(overrides = {}) {
   return {
     getNetwork: async () => ({ chainId: 11155111n }),
     getTransactionCount: async () => 0,
-    sendRawTransaction: async () => HASH,
+    broadcastTransaction: async () => ({ hash: HASH }),
     getTransaction: async () => tx,
     getTransactionReceipt: async () => receipt,
     getBlock: async () => ({ hash: BLOCK }),
@@ -44,6 +44,15 @@ test("normalizes an ethers receipt nonce from the exact canonical transaction", 
   const receipt = await adapter.getTransactionReceipt(HASH);
   assert.equal(receipt.nonce, 7);
   assert.equal(receipt.gasUsed * receipt.gasPrice, 63_000n);
+});
+test("adapts the ethers v6 broadcast response to the durable sender hash", async () => {
+  const adapter = new EthersV6EoaProviderAdapter(provider());
+  assert.equal(await adapter.sendRawTransaction("0x1234"), HASH);
+  await assert.rejects(
+    new EthersV6EoaProviderAdapter(
+      provider({ broadcastTransaction: async () => ({}) }),
+    ).sendRawTransaction("0x"),
+  );
 });
 test("keeps null receipt unresolved and rejects mismatched transaction or canonical block", async () => {
   assert.equal(
