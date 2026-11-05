@@ -13,7 +13,13 @@ import {
   validatePersistedCaps,
   validatePersistedUniqueness,
   validateRecomputedBudget,
+  validIntentBudget,
 } from "./budget-validation.mjs";
+import {
+  validAttempt,
+  validateObservations,
+  validatePersistedErrors,
+} from "./attempt-observation-validation.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -39,9 +45,9 @@ const MAX_RAW = 524_288;
 const MAX_ERROR = 2_048;
 const MAX_JOURNAL_BYTES = 2_000_000;
 
-function fail(message) {
+const fail = (message) => {
   throw new Error(`candidate journal: ${message}`);
-}
+};
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -145,6 +151,7 @@ function validPersistedIntentFields(intent) {
       validTarget(intent.to, intent.input),
       validIntentBudget(intent),
       Array.isArray(intent.attempts),
+      intent.observations === undefined || Array.isArray(intent.observations),
     ].every(Boolean)
   );
 }
@@ -181,7 +188,8 @@ function validatePersistedTransition(intent) {
   const terminal = intent.terminal;
   if (!validTransition(intent.state, hasSigned, intent.attempts.length, terminal))
     fail("invalid persisted transition");
-  validateAttempts(intent);
+  validatePersistedErrors(intent, validAttempt);
+  validateObservations(intent);
   if (terminal) {
     if (intent.state !== "terminal" || !intent.attempts.length) fail("invalid persisted terminal");
     validateStoredReceipt(terminal, intent);
@@ -195,28 +203,6 @@ function validTransition(state, signed, attempts, terminal) {
       "broadcast-attempted": signed && attempts > 0 && !terminal,
       terminal: signed && attempts > 0 && Boolean(terminal),
     }[state] === true
-  );
-}
-function validateAttempts(intent) {
-  let first = null;
-  let unrecoverable = null;
-  for (const attempt of intent.attempts) {
-    if (!validAttempt(attempt)) fail("invalid persisted attempt");
-    if (attempt.error && !first) first = attempt.error;
-    if (attempt.error && attempt.unrecoverable && !unrecoverable) unrecoverable = attempt.error;
-  }
-  if (intent.firstError !== first || intent.firstUnrecoverableError !== unrecoverable)
-    fail("invalid persisted errors");
-}
-function validAttempt(attempt) {
-  return (
-    Boolean(attempt) &&
-    isNatural(attempt.at) &&
-    (attempt.error === null ||
-      (typeof attempt.error === "string" &&
-        Boolean(attempt.error) &&
-        attempt.error.length <= MAX_ERROR)) &&
-    typeof attempt.unrecoverable === "boolean"
   );
 }
 async function loadState(statePath, envelope, identity) {
@@ -240,14 +226,6 @@ function newState(envelope, identity) {
     budget: budgetZero(),
     intents: [],
   };
-}
-function validIntentBudget(intent) {
-  return (
-    UINT.test(intent.maxFeeWei ?? "") &&
-    UINT.test(intent.maxGasPriceWei ?? "") &&
-    UINT.test(intent.fundingWei ?? "") &&
-    UINT.test(intent.usdcCommitmentMicro ?? "")
-  );
 }
 
 export class CandidateRunJournal {
@@ -346,6 +324,13 @@ export class CandidateRunJournal {
     });
   }
 
+  async assertSigningPermit() {
+    return this.#mutate(async () => {
+      this.#assertSigningAllowed();
+      return true;
+    });
+  }
+
   async recordAttempt(intentId, { at = this.now(), error = null, unrecoverable = false } = {}) {
     return this.#mutate(async () => {
       this.#assertSigningAllowed();
@@ -360,6 +345,29 @@ export class CandidateRunJournal {
       if (error && unrecoverable && !intent.firstUnrecoverableError)
         intent.firstUnrecoverableError = error;
       intent.state = "broadcast-attempted";
+      await this.#commit(proposed);
+      return this.intent(intentId);
+    });
+  }
+
+  async recordObservation(intentId, { at = this.now(), stage, error, unrecoverable = false } = {}) {
+    return this.#mutate(async () => {
+      natural(at, "observation time");
+      if (typeof stage !== "string" || !stage || stage.length > 64)
+        fail("invalid observation stage");
+      if (typeof error !== "string" || !error || error.length > MAX_ERROR)
+        fail("invalid observation error");
+      const proposed = clone(this.state);
+      const intent = findIntent(proposed, intentId);
+      if (!intent.signed) fail("observation without durable signature");
+      (intent.observations ??= []).push({
+        at,
+        stage,
+        error,
+        unrecoverable: Boolean(unrecoverable),
+      });
+      if (!intent.firstError) intent.firstError = error;
+      if (unrecoverable && !intent.firstUnrecoverableError) intent.firstUnrecoverableError = error;
       await this.#commit(proposed);
       return this.intent(intentId);
     });
@@ -489,6 +497,7 @@ function savedIntent(request, fee, gasPrice, funding, usdc) {
     state: "reserved",
     signed: null,
     attempts: [],
+    observations: [],
     firstError: null,
     firstUnrecoverableError: null,
     terminal: null,

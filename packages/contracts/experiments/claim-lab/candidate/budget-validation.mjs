@@ -13,6 +13,12 @@ const zero = () => ({
 });
 const canonical = (value) => JSON.stringify(value, Object.keys(value).sort());
 
+export function validIntentBudget(intent) {
+  return ["maxFeeWei", "maxGasPriceWei", "fundingWei", "usdcCommitmentMicro"].every((key) =>
+    UINT.test(intent[key] ?? ""),
+  );
+}
+
 export function validateRecomputedBudget(state) {
   const expected = zero();
   for (const intent of state.intents) {
