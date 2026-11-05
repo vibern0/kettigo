@@ -1,8 +1,9 @@
 import { env as workerEnv } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { D1Archive, type BlockHeader } from "../src/archive.ts";
+import { D1Archive, type BlockHeader, type Checkpoint } from "../src/archive.ts";
 import { ingestOneSlice, type RpcSource } from "../src/ingest.ts";
 import { branchHash, leafHash, type ArchiveLog, type Namespace } from "../src/domain.ts";
+import { drainScheduledSlices } from "../src/worker.ts";
 
 const zero = `0x${"00".repeat(32)}`;
 const env = workerEnv as unknown as { PROOF_DB: D1Database };
@@ -67,6 +68,159 @@ class FixtureRpc implements RpcSource {
 }
 
 describe("finalized RPC ingestion", () => {
+  it(
+    "drains five finalized empty blocks per scheduled minute without exceeding three two-block slices",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB),
+        h1 = header(1, "1"),
+        h2 = header(2, "2", h1.hash),
+        h3 = header(3, "3", h2.hash),
+        h4 = header(4, "4", h3.hash),
+        h5 = header(5, "5", h4.hash),
+        h6 = header(6, "6", h5.hash),
+        h7 = header(7, "7", h6.hash),
+        h8 = header(8, "8", h7.hash),
+        h9 = header(9, "9", h8.hash),
+        h10 = header(10, "a", h9.hash),
+        ranges: Array<[number, number]> = [];
+      class RangeFixtureRpc extends FixtureRpc {
+        override async logs(from: number, to: number) {
+          ranges.push([from, to]);
+          return super.logs(from, to);
+        }
+      }
+      const rpc = new RangeFixtureRpc([h1, h2, h3, h4, h5], [], n);
+      await archive.initialize(n);
+
+      await drainScheduledSlices(archive, n, rpc, 2);
+      rpc.blocks.push(h6, h7, h8, h9, h10);
+      const state = await drainScheduledSlices(archive, n, rpc, 2);
+
+      expect(state).toMatchObject({ nextBlock: 11, lastFinalizedBlock: 10 });
+      expect(ranges).toEqual([
+        [1, 2],
+        [3, 4],
+        [5, 5],
+        [6, 7],
+        [8, 9],
+        [10, 10],
+      ]);
+      expect(ranges.every(([from, to]) => to - from + 1 <= 2)).toBe(true);
+    },
+  );
+
+  it(
+    "stops after one slice when the archive is already caught up or disabled",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB),
+        h1 = header(1, "1"),
+        rpc = new FixtureRpc([h1], [], n);
+      let chainIdCalls = 0;
+      rpc.chainId = async () => {
+        chainIdCalls += 1;
+        return n.chainId;
+      };
+      await archive.initialize(n);
+      await archive.ingest(n, await archive.status(n), [], [h1]);
+
+      const caughtUp = await drainScheduledSlices(archive, n, rpc, 2);
+      await archive.disable(n, caughtUp, "operator disabled");
+      const disabled = await drainScheduledSlices(archive, n, rpc, 2);
+
+      expect(caughtUp).toMatchObject({ nextBlock: 2, lastFinalizedBlock: 1 });
+      expect(disabled).toMatchObject({ nextBlock: 2, disabledReason: "operator disabled" });
+      expect(chainIdCalls).toBe(1);
+    },
+  );
+
+  it("stops after a rollback instead of starting a later slice", { timeout: 5000 }, async () => {
+    expect.hasAssertions();
+    const n = namespace(),
+      archive = new D1Archive(env.PROOF_DB),
+      h1 = header(1, "1"),
+      orphan2 = header(2, "2", h1.hash),
+      orphan3 = header(3, "3", orphan2.hash),
+      canonical2 = header(2, "a", h1.hash),
+      canonical3 = header(3, "b", canonical2.hash),
+      ranges: Array<[number, number]> = [];
+    class RangeFixtureRpc extends FixtureRpc {
+      override async logs(from: number, to: number) {
+        ranges.push([from, to]);
+        return super.logs(from, to);
+      }
+    }
+    await archive.initialize(n);
+    await archive.ingest(n, await archive.status(n), [], [h1, orphan2, orphan3]);
+
+    const state = await drainScheduledSlices(
+      archive,
+      n,
+      new RangeFixtureRpc([h1, canonical2, canonical3], [], n),
+      2,
+    );
+
+    expect(state).toMatchObject({
+      nextBlock: 2,
+      lastFinalizedBlock: 1,
+      lastFinalizedHash: h1.hash,
+    });
+    expect(ranges).toEqual([]);
+  });
+
+  it(
+    "does not begin a later slice after an in-flight atomic settlement aborts the tick",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const n = namespace(),
+        archive = new D1Archive(env.PROOF_DB),
+        h1 = header(1, "1"),
+        h2 = header(2, "2", h1.hash),
+        h3 = header(3, "3", h2.hash),
+        ranges: Array<[number, number]> = [],
+        controller = new AbortController();
+      class RangeFixtureRpc extends FixtureRpc {
+        override async logs(from: number, to: number) {
+          ranges.push([from, to]);
+          return super.logs(from, to);
+        }
+      }
+      await archive.initialize(n);
+      const abortingArchive = archive as unknown as {
+        ingest(
+          namespace: Namespace,
+          expected: Checkpoint,
+          logs: readonly ArchiveLog[],
+          headers: readonly BlockHeader[],
+        ): Promise<Checkpoint>;
+      };
+      const ingest = abortingArchive.ingest.bind(archive);
+      abortingArchive.ingest = async (namespace, expected, logs, headers) => {
+        const state = await ingest(namespace, expected, logs, headers);
+        controller.abort(new Error("tick deadline exceeded"));
+        return state;
+      };
+
+      await expect(
+        drainScheduledSlices(
+          archive,
+          n,
+          new RangeFixtureRpc([h1, h2, h3], [], n),
+          2,
+          controller.signal,
+        ),
+      ).rejects.toThrow("tick deadline exceeded");
+      expect(await archive.status(n)).toMatchObject({ nextBlock: 3, lastFinalizedBlock: 2 });
+      expect(ranges).toEqual([[1, 2]]);
+    },
+  );
+
   it(
     "persists the real deployment-parent anchor for the first canonical header",
     { timeout: 5000 },

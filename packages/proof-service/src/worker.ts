@@ -1,11 +1,13 @@
 import { handle, type Env } from "./server.ts";
 import { D1Archive } from "./archive.ts";
 import { validateNamespace } from "./domain.ts";
-import { ingestOneSlice } from "./ingest.ts";
+import { ingestOneSlice, type RpcSource } from "./ingest.ts";
 import { createRpc } from "./rpc.ts";
 import { throwIfAborted } from "./ingest.ts";
 
 const MAX_TICK_MS = 25_000;
+
+const MAX_SCHEDULED_SLICES = 3;
 
 const MAX_OPERATOR_INPUT_BYTES = 1024;
 
@@ -94,6 +96,24 @@ async function boundedTick(env: Env) {
   return runWithinDeadline((signal) => tick(env, signal));
 }
 
+/** Runs a fixed number of serial, canonically verified slices within one pinned RPC source. */
+export async function drainScheduledSlices(
+  archive: D1Archive,
+  namespace: ReturnType<typeof validateNamespace>,
+  source: RpcSource,
+  maxBlocks: number,
+  signal?: AbortSignal,
+) {
+  let state = await archive.status(namespace);
+  for (let slice = 0; slice < MAX_SCHEDULED_SLICES; slice += 1) {
+    throwIfAborted(signal);
+    const nextBlock = state.nextBlock;
+    state = await ingestOneSlice(archive, namespace, source, maxBlocks, signal);
+    if (state.disabledReason || state.nextBlock <= nextBlock) return state;
+  }
+  return state;
+}
+
 function operatorResponse(status: number, headers?: HeadersInit) {
   return new Response(null, { status, headers: { "cache-control": "no-store", ...headers } });
 }
@@ -155,28 +175,23 @@ async function tick(env: Env, signal?: AbortSignal) {
   );
   // Initialization belongs to the scheduler path; it never relies on a client GET.
   const rpc = createRpc(env.PRIMARY_RPC_URL, env.HISTORICAL_RPC_URL, n, c);
-  const status = await archive.status(n).catch(() => undefined);
-  if (!status) {
-    if (n.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
-    const anchor = await rpc.withSource(
-      (source) => source.block(n.deploymentBlock - 1, signal),
+  return rpc.withSource(async (source) => {
+    const status = await archive.status(n).catch(() => undefined);
+    if (!status) {
+      if (n.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
+      const anchor = await source.block(n.deploymentBlock - 1, signal);
+      throwIfAborted(signal);
+      await archive.initialize(n, anchor.hash);
+    } else await archive.assertNamespace(n);
+    throwIfAborted(signal);
+    return drainScheduledSlices(
+      archive,
+      n,
+      source,
+      Math.min(2, Math.max(1, Number(env.MAX_BLOCKS_PER_SLICE ?? "2"))),
       signal,
     );
-    throwIfAborted(signal);
-    await archive.initialize(n, anchor.hash);
-  } else await archive.assertNamespace(n);
-  throwIfAborted(signal);
-  return rpc.withSource(
-    (source) =>
-      ingestOneSlice(
-        archive,
-        n,
-        source,
-        Math.min(2, Math.max(1, Number(env.MAX_BLOCKS_PER_SLICE ?? "2"))),
-        signal,
-      ),
-    signal,
-  );
+  }, signal);
 }
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
