@@ -30,3 +30,9 @@ test("escapes markup before injecting runtime values into HTML", () => {
 test("does not rely on a deferred Next script for runtime configuration", () => {
   assert.doesNotMatch(layoutSource, /next\/script|src="\/config\.js"/);
 });
+
+test("allowlists the proof client runtime configuration", () => {
+  const script = runtimeConfigScript({ NEXT_PUBLIC_PROOF_SERVICE_URL: "https://proof.example", NEXT_PUBLIC_POOL_VERSION: "2" });
+  assert.match(script, /NEXT_PUBLIC_PROOF_SERVICE_URL/);
+  assert.match(script, /NEXT_PUBLIC_POOL_VERSION/);
+});

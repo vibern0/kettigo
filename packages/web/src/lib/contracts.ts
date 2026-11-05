@@ -1,7 +1,7 @@
 // Contract addresses & ABIs. The active Kettigo ABIs come from the shared
 // protocol package.
 
-import { erc20Abi } from "viem";
+import { erc20Abi, getAddress } from "viem";
 import { publicConfig } from "./runtime-config";
 
 export {
@@ -10,10 +10,15 @@ export {
   morphoYieldAdapterAbi,
 } from "@kettigo/protocol";
 
+const configuredAddress = (name: `NEXT_PUBLIC_${string}`) => {
+  const value = publicConfig(name, process.env[name]);
+  return value ? getAddress(value) : ("" as `0x${string}`);
+};
+
 export const CONTRACTS = {
-  usdc: publicConfig("NEXT_PUBLIC_USDC_ADDRESS", process.env.NEXT_PUBLIC_USDC_ADDRESS) as `0x${string}`,
-  confidentialUsdc: publicConfig("NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS", process.env.NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS) as `0x${string}`,
-  confidentialPrizePool: publicConfig("NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS", process.env.NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS) as `0x${string}`,
+  usdc: configuredAddress("NEXT_PUBLIC_USDC_ADDRESS"),
+  confidentialUsdc: configuredAddress("NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS"),
+  confidentialPrizePool: configuredAddress("NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS"),
 } as const;
 
 export const CHAIN_ID = Number(publicConfig("NEXT_PUBLIC_CHAIN_ID", process.env.NEXT_PUBLIC_CHAIN_ID) || 11155111);

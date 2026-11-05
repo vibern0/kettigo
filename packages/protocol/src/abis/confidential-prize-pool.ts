@@ -53,6 +53,29 @@ export const confidentialPrizePoolAbi = [
     outputs: [{ name: "wasChecked", type: "bool" }],
   },
   {
+    type: "function", name: "checkPrize", stateMutability: "nonpayable",
+    inputs: [
+      { name: "drawId_", type: "uint256" }, { name: "beneficiary", type: "address" },
+      { name: "index", type: "uint256" }, { name: "generation", type: "uint64" },
+      { name: "balanceHandle", type: "bytes32" }, { name: "siblingHashes", type: "bytes32[]" },
+      { name: "siblingSums", type: "bytes32[]" }, { name: "parentSums", type: "bytes32[]" },
+    ], outputs: [],
+  },
+  {
+    type: "function", name: "pendingAdmissionOf", stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "pending", type: "tuple", components: [
+      { name: "balance", type: "bytes32" }, { name: "nonce", type: "uint256" },
+      { name: "marker", type: "bytes32" }, { name: "requested", type: "bool" },
+    ] }],
+  },
+  {
+    type: "function", name: "finalizeAdmission", stateMutability: "nonpayable",
+    inputs: [{ name: "account", type: "address" }, { name: "nonce", type: "uint256" }, { name: "positive", type: "bool" }, { name: "proof", type: "bytes" }], outputs: [],
+  },
+  { type: "function", name: "membershipIndexOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "encryptedAwardOf", stateMutability: "view", inputs: [{ name: "drawId_", type: "uint256" }, { name: "beneficiary", type: "address" }], outputs: [{ type: "bytes32" }] },
+  {
     type: "function", name: "draws", stateMutability: "view",
     inputs: [{ name: "drawId", type: "uint256" }],
     outputs: [
