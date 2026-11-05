@@ -1193,7 +1193,10 @@ export default function SavingsPage() {
             void runTrackedTransaction(
               `Deposit ${formatUSDC(parsedDepositAmount)} USDC`,
               "deposit",
-              (update, onSigned) => depositConfidential(parsedDepositAmount, update, onSigned),
+              async (update, onSigned) => {
+                await depositConfidential(parsedDepositAmount, update, onSigned);
+                participation.current?.refresh();
+              },
               "Deposit complete.",
             )
           }
@@ -1228,7 +1231,10 @@ export default function SavingsPage() {
             void runTrackedTransaction(
               `Withdraw ${formatUSDC(parsedWithdrawAmount)} USDC`,
               "withdraw",
-              (update, onSigned) => withdrawConfidential(parsedWithdrawAmount, update, onSigned),
+              async (update, onSigned) => {
+                await withdrawConfidential(parsedWithdrawAmount, update, onSigned);
+                participation.current?.refresh();
+              },
               "Withdrawal requested.",
             )
           }

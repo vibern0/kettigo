@@ -9,7 +9,12 @@ const fixture = vi.hoisted(() => ({
   prepare: vi.fn(),
   send: vi.fn(),
   decrypt: vi.fn(),
+  encrypt: vi.fn(),
+  smartReads: vi.fn(),
   membershipIndex: 0n,
+  walletBalance: 0n,
+  principal: undefined as bigint | undefined,
+  accessState: "ready" as "ready" | "access-required",
   session: undefined as { address: `0x${string}`; prepareTransaction: typeof vi.fn } | undefined,
   pending: [] as [`0x${string}`, bigint, `0x${string}`, boolean][],
 }));
@@ -39,10 +44,10 @@ vi.mock("@/lib/contracts", async (original) => ({
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
     session: fixture.session,
-    principal: undefined,
+    principal: fixture.principal,
     confidentialBalancesLoading: false,
     confidentialBalancesError: null,
-    confidentialBalancesReadState: "ready",
+    confidentialBalancesReadState: fixture.accessState,
     refreshConfidentialBalances: vi.fn(),
   }),
 }));
@@ -55,9 +60,9 @@ vi.mock("@/lib/zama", async () => ({
   createPublicZamaSDK: () => ({ terminate: vi.fn() }),
   decryptPublicBoolean: fixture.decrypt,
   decryptPublicUint64: vi.fn(),
-  encryptUint64: vi.fn(),
-  prepareSmartReadSessionCalls: vi.fn(),
-  withSmartZamaSDK: vi.fn(),
+  encryptUint64: fixture.encrypt,
+  prepareSmartReadSessionCalls: fixture.smartReads,
+  withSmartZamaSDK: async (_session: unknown, action: (sdk: unknown) => unknown) => action({}),
 }));
 vi.mock("@/components/ActionCenter", () => ({
   useActionCenter: () => ({
@@ -68,6 +73,9 @@ vi.mock("@/components/ActionCenter", () => ({
   }),
 }));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn() }));
+vi.mock("canvas-confetti", () => ({
+  default: { create: () => Object.assign(() => Promise.resolve(), { reset: vi.fn() }) },
+}));
 
 import SavingsPage from "@/app/savings/page";
 import { ToastProvider } from "@/components/Toast";
@@ -93,15 +101,20 @@ beforeEach(() => {
   fixture.version = "legacy1";
   fixture.pending = [pending()];
   fixture.membershipIndex = 0n;
+  fixture.walletBalance = 0n;
+  fixture.principal = undefined;
+  fixture.accessState = "ready";
   fixture.reads.mockReset();
   fixture.prepare.mockReset();
   fixture.send.mockReset();
   fixture.decrypt.mockReset();
+  fixture.encrypt.mockReset();
+  fixture.smartReads.mockReset();
   fixture.session = { address: fixture.account, prepareTransaction: fixture.prepare };
   fixture.reads.mockImplementation(async ({ functionName }: { functionName: string }) => {
     if (functionName === "membershipIndexOf") return fixture.membershipIndex;
     if (functionName === "pendingAdmissionOf") return fixture.pending.shift() ?? pending();
-    if (functionName === "balanceOf") return 0n;
+    if (functionName === "balanceOf") return fixture.walletBalance;
     return 0n;
   });
   fixture.prepare.mockResolvedValue({ cancel: vi.fn(), send: fixture.send });
@@ -111,6 +124,8 @@ beforeEach(() => {
     return "0xdead";
   });
   fixture.decrypt.mockResolvedValue({ clearValue: true, decryptionProof: proof });
+  fixture.encrypt.mockResolvedValue({ handle: marker, inputProof: proof });
+  fixture.smartReads.mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -161,4 +176,120 @@ test("a no-longer-pending review never prepares or sends", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Review participation" }));
   await waitFor(() => expect(fixture.prepare).not.toHaveBeenCalled());
   expect(fixture.send).not.toHaveBeenCalled();
+});
+
+test("a completed deposit refreshes participation on the same Savings mount", async () => {
+  fixture.version = "2";
+  fixture.pending = [pending(false)];
+  fixture.walletBalance = 100_000_000n;
+  fixture.send.mockImplementation(async ({ onSigned }: { onSigned?: () => void } = {}) => {
+    onSigned?.();
+    fixture.pending = [pending(true)];
+    return "0xdead";
+  });
+  mount();
+  await screen.findByText("Add to savings, then finish setup when you are ready to participate.");
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await screen.findByRole("button", { name: "Review participation" });
+});
+
+test("starting a deposit aborts a pending participation decryption before preparation", async () => {
+  let resolveDecrypt!: (value: { clearValue: boolean; decryptionProof: `0x${string}` }) => void;
+  fixture.version = "2";
+  fixture.decrypt.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveDecrypt = resolve;
+    }),
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  await waitFor(() => expect(fixture.decrypt).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  resolveDecrypt({ clearValue: true, decryptionProof: proof });
+  await new Promise((done) => setTimeout(done, 0));
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
+
+test("starting access review aborts a pending participation decryption before preparation", async () => {
+  let resolveDecrypt!: (value: { clearValue: boolean; decryptionProof: `0x${string}` }) => void;
+  fixture.version = "2";
+  fixture.accessState = "access-required";
+  fixture.decrypt.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveDecrypt = resolve;
+    }),
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  await waitFor(() => expect(fixture.decrypt).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  resolveDecrypt({ clearValue: true, decryptionProof: proof });
+  await new Promise((done) => setTimeout(done, 0));
+  expect(fixture.prepare).not.toHaveBeenCalled();
+});
+
+test("starting a withdrawal disposes a late participation preparation", async () => {
+  let resolvePrepared!: (value: { cancel: () => void; send: typeof fixture.send }) => void;
+  const lateCancel = vi.fn();
+  fixture.version = "2";
+  fixture.principal = 10_000_000n;
+  fixture.prepare.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolvePrepared = resolve;
+    }),
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+  resolvePrepared({ cancel: lateCancel, send: fixture.send });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
+
+test("replacing the account disposes a late participation preparation", async () => {
+  let resolvePrepared!: (value: { cancel: () => void; send: typeof fixture.send }) => void;
+  const lateCancel = vi.fn();
+  fixture.version = "2";
+  fixture.prepare.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolvePrepared = resolve;
+    }),
+  );
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  fixture.session = {
+    address: "0x4444444444444444444444444444444444444444",
+    prepareTransaction: fixture.prepare,
+  };
+  view.rerender(
+    <ToastProvider>
+      <SavingsPage />
+    </ToastProvider>,
+  );
+  resolvePrepared({ cancel: lateCancel, send: fixture.send });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
+
+test("unmounting disposes a late participation preparation", async () => {
+  let resolvePrepared!: (value: { cancel: () => void; send: typeof fixture.send }) => void;
+  const lateCancel = vi.fn();
+  fixture.version = "2";
+  fixture.prepare.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolvePrepared = resolve;
+    }),
+  );
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  view.unmount();
+  resolvePrepared({ cancel: lateCancel, send: fixture.send });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
 });

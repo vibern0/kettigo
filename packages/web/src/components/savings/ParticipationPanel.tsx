@@ -31,7 +31,7 @@ type ParticipationPanelProps = {
   onReviewStart: () => void;
 };
 
-export type ParticipationPanelHandle = { cancel: () => void };
+export type ParticipationPanelHandle = { cancel: () => void; refresh: () => void };
 type AdmissionReady = Awaited<ReturnType<ReturnType<typeof createAdmissionCoordinator>["prepare"]>>;
 
 function poolVersion() {
@@ -78,7 +78,6 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
       setReady(undefined);
       setBusy(false);
     };
-    useImperativeHandle(ref, () => ({ cancel }), [ready]);
     useEffect(() => setHydrated(true), []);
     useEffect(
       () => () => {
@@ -117,6 +116,8 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
         if (request === epoch.current) setUnresolved(true);
       }
     };
+
+    useImperativeHandle(ref, () => ({ cancel, refresh: () => void refresh() }), [cancel, refresh]);
 
     useEffect(() => {
       if (enabled) void refresh();
