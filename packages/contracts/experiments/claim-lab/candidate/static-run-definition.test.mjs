@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, open, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -77,4 +77,66 @@ test("redacts private definition permission and parser failures", async () => {
     loadStaticRunDefinition(path),
     /definition unavailable or permissions invalid/,
   );
+});
+
+test("reads a complete checked descriptor across forced short reads", async () => {
+  const path = await file(definition());
+  const probe = await open(path, "r");
+  const prototype = Object.getPrototypeOf(probe);
+  const original = prototype.read;
+  await probe.close();
+  prototype.read = function (buffer, offset, length, position) {
+    return original.call(this, buffer, offset, Math.min(length, 97), position);
+  };
+  try {
+    assert.equal((await loadStaticRunDefinition(path)).actors.eoaParticipants.length, 32);
+  } finally {
+    prototype.read = original;
+  }
+});
+
+test("parses the checked descriptor after its path is replaced", async () => {
+  const path = await file(definition());
+  const replacement = await file({});
+  const probe = await open(path, "r");
+  const prototype = Object.getPrototypeOf(probe);
+  const original = prototype.stat;
+  await probe.close();
+  let replaced = false;
+  prototype.stat = async function (...args) {
+    const result = await original.apply(this, args);
+    if (!replaced) {
+      replaced = true;
+      await rename(replacement, path);
+    }
+    return result;
+  };
+  try {
+    assert.equal((await loadStaticRunDefinition(path)).chainId, 11155111);
+  } finally {
+    prototype.stat = original;
+  }
+});
+
+test("rejects growth after descriptor metadata is checked", async () => {
+  const value = definition();
+  const path = await file(value);
+  const probe = await open(path, "r");
+  const prototype = Object.getPrototypeOf(probe);
+  const original = prototype.stat;
+  await probe.close();
+  let grown = false;
+  prototype.stat = async function (...args) {
+    const result = await original.apply(this, args);
+    if (!grown) {
+      grown = true;
+      await writeFile(path, `${JSON.stringify(value)}${" ".repeat(65_537)}`);
+    }
+    return result;
+  };
+  try {
+    await assert.rejects(loadStaticRunDefinition(path), /definition unavailable/);
+  } finally {
+    prototype.stat = original;
+  }
 });

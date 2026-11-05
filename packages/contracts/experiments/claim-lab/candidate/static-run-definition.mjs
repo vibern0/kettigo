@@ -169,7 +169,12 @@ export async function loadStaticRunDefinition(path) {
     )
       throw new Error();
     const buffer = Buffer.alloc(MAX_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (!result.bytesRead) break;
+      bytesRead += result.bytesRead;
+    }
     if (bytesRead > MAX_BYTES) throw new Error();
     return validate(JSON.parse(buffer.toString("utf8", 0, bytesRead)));
   } catch (error) {
