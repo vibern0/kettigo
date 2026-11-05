@@ -369,6 +369,62 @@ test("rejects chain snapshot and close-block mismatches", async () => {
   }
 });
 
+test("rejects each independently authenticated immutable chain snapshot mismatch", async () => {
+  for (const mismatch of [{ rootSum: handle }, { upperBound: 2n }, { closeBlockNumber: 8n }]) {
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response(JSON.stringify({ proof: proof() })),
+      chainReader: {
+        readDraw: async () => ({
+          rootHash: proof().rootHash,
+          rootSum: parent,
+          ticket: handle,
+          upperBound: 1n,
+          closeBlockNumber: 7n,
+          ...mismatch,
+        }),
+        getBlockHash: async () => proof().blockHash,
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable", Object.keys(mismatch)[0]);
+  }
+});
+
+test("maps each rejecting chain reader to unavailable without continuing", async () => {
+  for (const stage of ["readDraw", "getBlockHash"]) {
+    let blockReads = 0;
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response(JSON.stringify({ proof: proof() })),
+      chainReader: {
+        readDraw: async () => {
+          if (stage === "readDraw") throw new Error("provider read failure");
+          return {
+            rootHash: proof().rootHash,
+            rootSum: parent,
+            ticket: handle,
+            upperBound: 1n,
+            closeBlockNumber: 7n,
+          };
+        },
+        getBlockHash: async () => {
+          blockReads++;
+          if (stage === "getBlockHash") throw new Error("provider block failure");
+          return proof().blockHash;
+        },
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable", stage);
+    assert.equal(blockReads, stage === "readDraw" ? 0 : 1, stage);
+  }
+});
+
 test("bounds a non-cooperative chain reader with the operation deadline", async () => {
   const timed = createPrizeProofClient({
     chainId: 11155111,
@@ -454,6 +510,83 @@ test("preserves caller cancellation", async () => {
   await assert.rejects(() => cancelled.getProof(1n, { signal: controller.signal }), {
     name: "AbortError",
   });
+});
+
+test("caller abort during readDraw prevents a late block lookup or proof", async () => {
+  const controller = new AbortController();
+  let resolveRead;
+  let startRead;
+  let blockReads = 0;
+  const started = new Promise((resolve) => {
+    startRead = resolve;
+  });
+  const pending = createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    fetch: async () => new Response(JSON.stringify({ proof: proof() })),
+    chainReader: {
+      readDraw: async () => {
+        startRead();
+        return new Promise((resolve) => {
+          resolveRead = resolve;
+        });
+      },
+      getBlockHash: async () => {
+        blockReads++;
+        return proof().blockHash;
+      },
+    },
+  }).getProof(1n, { signal: controller.signal });
+  await started;
+  controller.abort();
+  await assert.rejects(() => pending, { name: "AbortError" });
+  resolveRead({
+    rootHash: proof().rootHash,
+    rootSum: parent,
+    ticket: handle,
+    upperBound: 1n,
+    closeBlockNumber: 7n,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(blockReads, 0);
+});
+
+test("caller abort during getBlockHash prevents a late usable proof", async () => {
+  const controller = new AbortController();
+  let resolveBlock;
+  let startBlock;
+  const started = new Promise((resolve) => {
+    startBlock = resolve;
+  });
+  const pending = createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    fetch: async () => new Response(JSON.stringify({ proof: proof() })),
+    chainReader: {
+      readDraw: async () => ({
+        rootHash: proof().rootHash,
+        rootSum: parent,
+        ticket: handle,
+        upperBound: 1n,
+        closeBlockNumber: 7n,
+      }),
+      getBlockHash: async () => {
+        startBlock();
+        return new Promise((resolve) => {
+          resolveBlock = resolve;
+        });
+      },
+    },
+  }).getProof(1n, { signal: controller.signal });
+  await started;
+  controller.abort();
+  await assert.rejects(() => pending, { name: "AbortError" });
+  resolveBlock(proof().blockHash);
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 test("cancels a non-cooperative response reader when the deadline expires", async () => {
