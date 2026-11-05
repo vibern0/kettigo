@@ -37,6 +37,7 @@ import {
   prepareZamaReadContracts,
   removeZamaReadSessionKey,
   signZamaReadSessionTypedData,
+  ZamaReadSessionAccessRequiredError,
   type ZamaReadSessionKey,
 } from "./zama-session-manager";
 
@@ -178,8 +179,25 @@ async function ensureReadSessionDelegated(
   key: ZamaReadSessionKey,
   contracts: Address[],
 ) {
-  const calls = await readSessionDelegationCalls(session, key, contracts);
-  if (calls.length > 0) await session.sendTransaction(calls);
+  try {
+    const calls = await readSessionDelegationCalls(session, key, contracts);
+    if (calls.length > 0) await session.sendTransaction(calls);
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function assertReadSessionDelegated(
+  session: PasskeySmartSession,
+  key: ZamaReadSessionKey,
+  contracts: Address[],
+) {
+  try {
+    const calls = await readSessionDelegationCalls(session, key, contracts);
+    if (calls.length > 0) throw new ZamaReadSessionAccessRequiredError();
+  } catch (error) {
+    throw error;
+  }
 }
 
 const delegatedZamaSessions = createDelegatedZamaSessionManager({
@@ -201,6 +219,7 @@ const delegatedZamaSessions = createDelegatedZamaSessionManager({
     return new ZamaSDK(configFor(new ReadSessionZamaSigner(key.privateKey)));
   },
   ensureDelegated: ensureReadSessionDelegated,
+  assertDelegated: assertReadSessionDelegated,
 });
 
 export function asChecksumAddress(value: unknown, label: string): Address {
@@ -213,6 +232,12 @@ export function asChecksumAddress(value: unknown, label: string): Address {
 
 export function isZeroEncryptedHandle(handle: unknown) {
   return typeof handle === "string" && handle.toLowerCase() === ZERO_HANDLE;
+}
+
+function assertReadScopeActive(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("The read session was aborted.", "AbortError");
+  }
 }
 
 export function clearValueToBigInt(value: unknown) {
@@ -264,6 +289,32 @@ export async function decryptWithSmartReadSession(
   const delegator = getAddress(session.address);
   return delegatedZamaSessions.run(session, delegationContracts, (sdk) =>
     sdk.decryption.delegatedDecryptValues(normalized, delegator, delegator),
+  );
+}
+
+export async function decryptWithExistingSmartReadSession(
+  session: PasskeySmartSession,
+  encryptedInputs: Array<{ encryptedValue: Hex; contractAddress: Address }>,
+  options?: { signal?: AbortSignal },
+) {
+  const normalized = encryptedInputs.map((input) => ({
+    encryptedValue: input.encryptedValue,
+    contractAddress: getAddress(input.contractAddress),
+  }));
+  const allowedContracts = [
+    asChecksumAddress(CONTRACTS.confidentialUsdc, "Savings token"),
+    asChecksumAddress(CONTRACTS.confidentialPrizePool, "Prize pool"),
+  ];
+  const { delegationContracts } = prepareZamaReadContracts(
+    normalized.map((input) => input.contractAddress),
+    allowedContracts,
+  );
+  const delegator = getAddress(session.address);
+  return delegatedZamaSessions.runExisting(
+    session,
+    delegationContracts,
+    (sdk) => sdk.decryption.delegatedDecryptValues(normalized, delegator, delegator),
+    options,
   );
 }
 
@@ -337,6 +388,24 @@ export async function decryptSmartUint64(
       contractAddress: getAddress(contractAddress),
     },
   ]);
+  return clearValueToBigInt(decryptedValueForHandle(result, handle));
+}
+
+export async function decryptExistingSmartUint64(
+  session: PasskeySmartSession,
+  handle: Hex,
+  contractAddress: Address,
+  options?: { signal?: AbortSignal },
+) {
+  assertReadScopeActive(options?.signal);
+  if (isZeroEncryptedHandle(handle)) return 0n;
+
+  const result = await decryptWithExistingSmartReadSession(
+    session,
+    [{ encryptedValue: handle, contractAddress: getAddress(contractAddress) }],
+    options,
+  );
+  assertReadScopeActive(options?.signal);
   return clearValueToBigInt(decryptedValueForHandle(result, handle));
 }
 
