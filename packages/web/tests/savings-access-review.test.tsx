@@ -49,7 +49,7 @@ vi.mock("@/lib/zama", async () => ({
   withSmartZamaSDK: vi.fn(),
   prepareSmartReadSessionCalls: fixture.readCalls,
 }));
-vi.mock("@/components/ActionCenter", () => ({ useActionCenter: () => ({ runAction: vi.fn() }) }));
+vi.mock("@/components/ActionCenter", () => ({ useActionCenter: () => ({ runAction: (_input: unknown, runner: (controls: { update: () => void }) => Promise<void>) => { void runner({ update() {} }); return "access"; } }) }));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn() }));
 
 import SavingsPage from "@/app/savings/page";

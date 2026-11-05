@@ -1057,9 +1057,8 @@ export default function SavingsPage() {
       setAccessReviewStep("confirm");
     } catch (error) {
       if (controller.signal.aborted) return;
-      const errorMessage = getErrorMessage(error);
-      reportClientToast({ title: "Could not review balance access", description: errorMessage }, { action: "balance-access", stage: "preparation" }, error);
-      toast({ tone: "error", title: "Could not review balance access", description: errorMessage });
+      reportClientToast({ title: "Could not review balance access", description: "Please try again." }, { action: "balance-access", stage: "preparation" }, error);
+      toast({ tone: "error", title: "Could not review balance access", description: "Please try again." });
       setAccessReviewStep(undefined);
     }
   }
@@ -1076,12 +1075,25 @@ export default function SavingsPage() {
     }
     preparedAccess.current = undefined;
     setAccessReviewStep(undefined);
-    // Do not await before send: passkey credentials require this click stack.
-    void prepared.transaction.send().then(() => refreshConfidentialBalances(), (error) => {
-      const errorMessage = getErrorMessage(error);
-      reportClientToast({ title: "Could not update balance access", description: errorMessage }, { action: "balance-access", stage: "submission" }, error);
-      toast({ tone: "error", title: "Could not update balance access", description: errorMessage });
-    });
+    // runAction invokes this runner immediately; do not await before send.
+    runAction(
+      { label: "Show savings balance", type: "approval", account: currentSession.address },
+      async ({ update }) => {
+        update({ status: "waiting-wallet" });
+        try {
+          const submitted = prepared.transaction.send({
+            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+          });
+          await submitted;
+          update({ status: "updating" });
+          await refreshConfidentialBalances();
+          update({ status: "completed" });
+        } catch (error) {
+          reportClientToast({ title: "Could not update balance access", description: "Check Activity for the latest status." }, { action: "balance-access", stage: "submission" }, error);
+          throw error;
+        }
+      },
+    );
   }
 
   async function copyPendingHash(hash: `0x${string}`) {

@@ -40,6 +40,7 @@ test("balance access review prepares before Confirm and Confirm sends once witho
       state.refreshed += 1;
     },
     preparedAccess: { current: undefined },
+    runAction: (_input, runner) => { void runner({ update() {} }); return "access"; },
     Date,
     toast: () => {},
     reportClientToast: () => {},
@@ -87,6 +88,7 @@ test("a cancelled balance-access review disposes a late prepared transaction", a
     prepareSmartReadSessionCalls: async () => [{ to: "acl", data: "grant" }],
     refreshConfidentialBalances: async () => {},
     preparedAccess: { current: undefined },
+    runAction: () => "access",
     Date,
     toast: () => {},
     reportClientToast: () => {},
