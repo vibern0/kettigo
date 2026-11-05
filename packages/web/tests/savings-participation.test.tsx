@@ -310,3 +310,124 @@ test("unmounting disposes a late participation preparation", async () => {
   resolvePrepared({ cancel: lateCancel, send: fixture.send });
   await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
 });
+
+test("dismissing an unused deposit Ready preserves pending participation for a fresh confirmation", async () => {
+  const events: string[] = [];
+  const oldSend = vi.fn();
+  const newSend = vi.fn(async () => {
+    events.push("participation-send");
+    fixture.membershipIndex = 1n;
+    fixture.pending = [pending(false)];
+    return "0xdead";
+  });
+  const deposit = {
+    cancel: vi.fn(() => events.push("deposit-cancel")),
+    send: oldSend,
+  };
+  const participation = { cancel: vi.fn(), send: newSend };
+  fixture.version = "2";
+  fixture.walletBalance = 100_000_000n;
+  fixture.prepare.mockImplementation(async () => {
+    events.push(`prepare-${fixture.prepare.mock.calls.length}`);
+    return fixture.prepare.mock.calls.length === 1 ? deposit : participation;
+  });
+
+  mount();
+  await screen.findByRole("button", { name: "Review participation" });
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Close deposit sheet" }).at(-1)!);
+  expect(deposit.cancel).toHaveBeenCalledTimes(1);
+  expect(oldSend).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Review participation" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  expect(events.indexOf("deposit-cancel")).toBeLessThan(events.indexOf("prepare-2"));
+  expect(oldSend).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(newSend).toHaveBeenCalledTimes(1);
+  expect(oldSend).not.toHaveBeenCalled();
+});
+
+test("dismissing an unused withdrawal Ready preserves pending participation for a fresh confirmation", async () => {
+  const events: string[] = [];
+  const oldSend = vi.fn();
+  const newSend = vi.fn(async () => {
+    events.push("participation-send");
+    fixture.membershipIndex = 1n;
+    fixture.pending = [pending(false)];
+    return "0xdead";
+  });
+  const withdrawal = {
+    cancel: vi.fn(() => events.push("withdrawal-cancel")),
+    send: oldSend,
+  };
+  const participation = { cancel: vi.fn(), send: newSend };
+  fixture.version = "2";
+  fixture.principal = 50_000_000n;
+  fixture.prepare.mockImplementation(async () => {
+    events.push(`prepare-${fixture.prepare.mock.calls.length}`);
+    return fixture.prepare.mock.calls.length === 1 ? withdrawal : participation;
+  });
+
+  mount();
+  await screen.findByRole("button", { name: "Review participation" });
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review withdrawal" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Close withdrawal sheet" }).at(-1)!);
+  expect(withdrawal.cancel).toHaveBeenCalledTimes(1);
+  expect(oldSend).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Review participation" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  expect(events.indexOf("withdrawal-cancel")).toBeLessThan(events.indexOf("prepare-2"));
+  expect(oldSend).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(newSend).toHaveBeenCalledTimes(1);
+  expect(oldSend).not.toHaveBeenCalled();
+});
+
+test("dismissing an unused balance-access Ready preserves pending participation for a fresh confirmation", async () => {
+  const events: string[] = [];
+  const oldSend = vi.fn();
+  const newSend = vi.fn(async () => {
+    events.push("participation-send");
+    fixture.membershipIndex = 1n;
+    fixture.pending = [pending(false)];
+    return "0xdead";
+  });
+  const access = {
+    cancel: vi.fn(() => events.push("access-cancel")),
+    send: oldSend,
+  };
+  const participation = { cancel: vi.fn(), send: newSend };
+  fixture.version = "2";
+  fixture.accessState = "access-required";
+  fixture.smartReads.mockResolvedValue([{ to: fixture.account, data: "0x" }]);
+  fixture.prepare.mockImplementation(async () => {
+    events.push(`prepare-${fixture.prepare.mock.calls.length}`);
+    return fixture.prepare.mock.calls.length === 1 ? access : participation;
+  });
+
+  mount();
+  await screen.findByRole("button", { name: "Review participation" });
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(access.cancel).toHaveBeenCalledTimes(1);
+  expect(oldSend).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Review participation" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  expect(events.indexOf("access-cancel")).toBeLessThan(events.indexOf("prepare-2"));
+  expect(oldSend).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(newSend).toHaveBeenCalledTimes(1);
+  expect(oldSend).not.toHaveBeenCalled();
+});
