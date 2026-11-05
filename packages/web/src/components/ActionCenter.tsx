@@ -126,6 +126,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [statusUnavailable, setStatusUnavailable] = useState(false);
+  const [statusResultId, setStatusResultId] = useState<string>();
   const sessionRef = useRef(session);
   const sessionEpochRef = useRef(0);
   const runnersRef = useRef(new Map<string, (controls: ActionRunnerControls) => Promise<void>>());
@@ -138,6 +139,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     sessionRef.current = session;
     sessionEpochRef.current += 1;
+    setStatusResultId(undefined);
     if (!session?.getPendingOperation) return;
 
     let record: PendingOperationRecord | null;
@@ -158,6 +160,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
             ...pendingAction,
             id: pendingAction.id,
             createdAt: pendingAction.createdAt,
+            updatedAt: pendingAction.updatedAt,
           });
         return updateAction(current, match.id, {
           status: pendingAction.status,
@@ -273,7 +276,9 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
           })
         )
           return;
-        updateTrackedAction(action.id, patchForPendingRecovery(result));
+        const patch = patchForPendingRecovery(result);
+        updateTrackedAction(action.id, patch);
+        if (patch.status && isFinalActionStatus(patch.status)) setStatusResultId(action.id);
       } catch (error) {
         if (epoch !== sessionEpochRef.current) return;
         reportClientError(error, { action: "pending-operation", stage: "recovery" });
@@ -293,15 +298,22 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
 
   const liveCount = countPendingActions(actions);
   const pendingActions = actions.filter((action) => !isFinalActionStatus(action.status));
+  const statusResult = statusResultId
+    ? actions.find((action) => action.id === statusResultId)
+    : undefined;
+  const visibleActions = statusResult
+    ? [statusResult, ...pendingActions.filter((action) => action.id !== statusResult.id)]
+    : pendingActions;
+  const hasVisibleActivity = liveCount > 0 || statusUnavailable || Boolean(statusResult);
 
   useEffect(() => {
-    if (liveCount === 0) setSheetOpen(false);
-  }, [liveCount]);
+    if (!hasVisibleActivity) setSheetOpen(false);
+  }, [hasVisibleActivity]);
 
   return (
     <ActionCenterContext.Provider value={value}>
       {children}
-      {(liveCount > 0 || statusUnavailable) && (
+      {hasVisibleActivity && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 mx-auto flex w-full max-w-[480px] justify-end px-5">
           <button
             type="button"
@@ -331,7 +343,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {sheetOpen && (liveCount > 0 || statusUnavailable) && (
+      {sheetOpen && hasVisibleActivity && (
         <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/30 px-4 pb-4 backdrop-blur-sm">
           <button
             type="button"
@@ -363,7 +375,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
               </button>
             </div>
 
-            {pendingActions.length === 0 ? (
+            {visibleActions.length === 0 ? (
               <p className="text-sm text-muted">
                 {statusUnavailable
                   ? "Activity status is unavailable right now."
@@ -371,7 +383,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
               </p>
             ) : (
               <div className="space-y-2">
-                {pendingActions.map((action) => (
+                {visibleActions.map((action) => (
                   <div
                     key={action.id}
                     className="rounded-3xl border border-white/55 bg-white/35 p-4"
@@ -405,15 +417,16 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
                       </div>
                     )}
 
-                    {action.status === "confirming" && action.operation && (
-                      <button
-                        type="button"
-                        onClick={() => void checkPendingStatus(action)}
-                        className="mt-3 rounded-full bg-brand px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
-                      >
-                        Check status
-                      </button>
-                    )}
+                    {(action.status === "preparing" || action.status === "confirming") &&
+                      action.operation && (
+                        <button
+                          type="button"
+                          onClick={() => void checkPendingStatus(action)}
+                          className="mt-3 rounded-full bg-brand px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+                        >
+                          Check status
+                        </button>
+                      )}
                   </div>
                 ))}
               </div>

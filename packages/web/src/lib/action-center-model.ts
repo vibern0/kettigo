@@ -47,6 +47,7 @@ export type NewAsyncAction = {
   status?: AsyncActionStatus;
   error?: string;
   createdAt?: number;
+  updatedAt?: number;
 };
 
 export type ActionPatch = Partial<
@@ -76,9 +77,12 @@ export function createActionId(createdAt = Date.now()) {
 }
 
 export function trimActionHistory(actions: AsyncAction[]) {
-  return [...actions]
-    .sort((left, right) => right.updatedAt - left.updatedAt)
+  const sorted = [...actions].sort((left, right) => right.updatedAt - left.updatedAt);
+  const current = sorted.filter((action) => !isFinalActionStatus(action.status));
+  const history = sorted
+    .filter((action) => isFinalActionStatus(action.status))
     .slice(0, ACTION_HISTORY_LIMIT);
+  return [...current, ...history].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
 export function addAction(actions: AsyncAction[], input: NewAsyncAction): AsyncAction[] {
@@ -94,7 +98,7 @@ export function addAction(actions: AsyncAction[], input: NewAsyncAction): AsyncA
     status: input.status ?? "preparing",
     error: input.error,
     createdAt,
-    updatedAt: createdAt,
+    updatedAt: input.updatedAt ?? createdAt,
   };
 
   return trimActionHistory([action, ...actions]);

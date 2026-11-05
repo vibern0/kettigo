@@ -214,4 +214,89 @@ describe("ActionCenter pending operation", () => {
     window.localStorage.removeItem("kettigo:actions");
     wallet.session = session;
   });
+
+  it("keeps an older durable action reachable beyond twelve newer completed history rows", async () => {
+    const olderOperation = {
+      chainId: 11155111 as const,
+      entryPoint: "0x0000000071727De22E5E9d8bAF0edAc6f37da032" as const,
+      sender: "0x1234567890123456789012345678901234567890" as const,
+      userOperationHash: `0x${"ef".repeat(32)}` as `0x${string}`,
+      createdAt: 1_000,
+      phase: "attempted" as const,
+    };
+    const newerTimestamp = Date.now() + 10_000;
+    const newerCompletedHistory = Array.from({ length: 12 }, (_, index) => ({
+      id: `completed-${index}`,
+      label: `Completed ${index}`,
+      type: "deposit",
+      status: "completed",
+      createdAt: newerTimestamp + index,
+      updatedAt: newerTimestamp + index,
+      ...(index === 0
+        ? {
+            operation: {
+              ...olderOperation,
+              userOperationHash: `0x${"cd".repeat(32)}`,
+            },
+          }
+        : {}),
+    }));
+    window.localStorage.setItem("kettigo:actions", JSON.stringify(newerCompletedHistory));
+    wallet.session = { ...session, getPendingOperation: () => olderOperation };
+    recoverPendingOperation.mockResolvedValue({ state: "pending", operation: olderOperation });
+
+    render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("actions").textContent).toContain(olderOperation.userOperationHash),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /activity/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check status" }));
+
+    await waitFor(() => expect(recoverPendingOperation).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("actions").textContent).toContain("completed-0");
+    expect(screen.getByTestId("actions").textContent).toContain(olderOperation.userOperationHash);
+    expect(sendTransaction).not.toHaveBeenCalled();
+    expect(prepareTransaction).not.toHaveBeenCalled();
+    expect(signTypedData).not.toHaveBeenCalled();
+    window.localStorage.removeItem("kettigo:actions");
+    wallet.session = session;
+  });
+
+  it("checks a prepared orphan and shows its known not-sent result without a runner", async () => {
+    window.localStorage.removeItem("kettigo:actions");
+    const preparedOperation = {
+      ...session.getPendingOperation(),
+      userOperationHash: `0x${"12".repeat(32)}` as `0x${string}`,
+      phase: "prepared" as const,
+    };
+    savedRunner.mockClear();
+    wallet.session = { ...session, getPendingOperation: () => preparedOperation };
+    recoverPendingOperation.mockResolvedValue({
+      state: "not-submitted",
+      operation: preparedOperation,
+    });
+
+    render(
+      <ActionCenterProvider>
+        <ActionProbe />
+      </ActionCenterProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /activity/i }));
+    expect(screen.getByText("Preparing")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+
+    expect(await screen.findByText("Not sent")).toBeTruthy();
+    expect(screen.getByText("This action was not sent. Review it again.")).toBeTruthy();
+    expect(savedRunner).not.toHaveBeenCalled();
+    expect(sendTransaction).not.toHaveBeenCalled();
+    expect(prepareTransaction).not.toHaveBeenCalled();
+    expect(signTypedData).not.toHaveBeenCalled();
+    wallet.session = session;
+  });
 });
