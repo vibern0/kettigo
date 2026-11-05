@@ -81,12 +81,33 @@ function validateStateStructure(state, envelope) {
     !validBudget(state.budget) ||
     !(state.safePolicy == null || validPersistedSafePolicy(state.safePolicy)) ||
     !(state.safePolicyIdentity == null || typeof state.safePolicyIdentity === "string") ||
+    !(
+      state.workloadDefinition === undefined ||
+      state.workloadDefinition === null ||
+      validWorkloadDefinition(state.workloadDefinition)
+    ) ||
     (state.safePolicy && state.safePolicyIdentity !== state.safePolicy.policyIdentity) ||
     (!state.safePolicy &&
       state.safePolicyIdentity !== undefined &&
       state.safePolicyIdentity !== null)
   )
     fail("invalid journal structure");
+}
+
+function validWorkloadDefinition(value) {
+  return (
+    value &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.keys(value).length === 3 &&
+    value.version === 1 &&
+    typeof value.fingerprint === "string" &&
+    /^0x[0-9a-f]{64}$/.test(value.fingerprint) &&
+    Array.isArray(value.phaseIds) &&
+    value.phaseIds.length >= 1 &&
+    value.phaseIds.length <= 32 &&
+    value.phaseIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128) &&
+    new Set(value.phaseIds).size === value.phaseIds.length
+  );
 }
 
 function validatePersistedIntent(intent) {

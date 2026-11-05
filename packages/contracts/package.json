@@ -9,6 +9,7 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "candidate:typecheck": "tsc -p experiments/claim-lab/candidate/tsconfig.json",
     "node": "hardhat node",
     "deploy:confidential-usdc": "hardhat run scripts/deploy-confidential-usdc.ts --network sepolia",
     "deploy:confidential-usdc:local": "hardhat run scripts/deploy-confidential-usdc.ts --network localhost",
@@ -36,7 +37,8 @@
     "solidity-coverage": "^0.8.12",
     "ts-node": "^10.9.2",
     "typechain": "^8.3.2",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "viem": "2.55.19"
   },
   "dependencies": {
     "@fhevm/mock-utils": "0.4.2",

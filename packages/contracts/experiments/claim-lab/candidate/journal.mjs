@@ -61,6 +61,7 @@ function newState(envelope, identity) {
     envelopeIdentity: identity,
     safePolicy: null,
     safePolicyIdentity: null,
+    workloadDefinition: null,
     startedAt: null,
     deadlineAt: null,
     budget: budgetZero(),
@@ -136,6 +137,26 @@ export class CandidateRunJournal {
     const intent = this.state.intents.find((entry) => entry.intentId === intentId);
     if (!intent) fail("unknown intent");
     return actualAttemptCount(intent);
+  }
+  workloadDefinition() {
+    return this.state.workloadDefinition ? clone(this.state.workloadDefinition) : null;
+  }
+
+  async bindWorkloadDefinition(binding) {
+    return this.#mutate(async () => {
+      validateWorkloadDefinition(binding);
+      if (this.state.workloadDefinition) {
+        if (canonical(this.state.workloadDefinition) !== canonical(binding))
+          fail("workload definition replacement refused");
+        return clone(this.state.workloadDefinition);
+      }
+      if (this.state.intents.length)
+        fail("workload definition must bind before financial reservation");
+      const proposed = clone(this.state);
+      proposed.workloadDefinition = clone(binding);
+      await this.#commit(proposed);
+      return clone(proposed.workloadDefinition);
+    });
   }
   async close() {
     if (this.closed) return;
@@ -372,6 +393,22 @@ function sameRequest(intent, request) {
     intent.fundingWei === request.fundingWei.toString() &&
     intent.usdcCommitmentMicro === decimalMicro(request.usdcCommitment, fail).toString()
   );
+}
+function validateWorkloadDefinition(binding) {
+  if (
+    !binding ||
+    Object.getPrototypeOf(binding) !== Object.prototype ||
+    Object.keys(binding).length !== 3 ||
+    binding.version !== 1 ||
+    typeof binding.fingerprint !== "string" ||
+    !/^0x[0-9a-f]{64}$/.test(binding.fingerprint) ||
+    !Array.isArray(binding.phaseIds) ||
+    binding.phaseIds.length < 1 ||
+    binding.phaseIds.length > 32 ||
+    binding.phaseIds.some((id) => typeof id !== "string" || !id || id.length > 128) ||
+    new Set(binding.phaseIds).size !== binding.phaseIds.length
+  )
+    fail("invalid workload definition");
 }
 function addReservation(state, request, envelope, now, assertBudget) {
   const startedAt = state.startedAt ?? now();
