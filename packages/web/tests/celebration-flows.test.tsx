@@ -171,7 +171,7 @@ describe("prize reveals", () => {
     if (scenario === "empty balance") fixture.handle = `0x${"0".repeat(64)}`;
     const { container } = mount(<DrawPage />);
     fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
-    await screen.findByText("No prize this time.");
+    await screen.findByText("Nothing ready to claim.");
     expect(container.querySelector("canvas")).toBeNull();
     expect(screen.getByRole("button", { name: "Check prize" })).toBeTruthy();
   });

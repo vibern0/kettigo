@@ -8,6 +8,7 @@ type PrizeCreditPanelProps = Readonly<{
 }>;
 
 export function PrizeCreditPanel({ actions, onAction, winnings }: PrizeCreditPanelProps) {
+  const empty = winnings === 0n;
   return (
     <div className="card space-y-3">
       <div>
@@ -18,9 +19,11 @@ export function PrizeCreditPanel({ actions, onAction, winnings }: PrizeCreditPan
         </p>
       </div>
       <div className="flex min-h-20 items-center justify-between gap-3 rounded-2xl border border-white/50 bg-white/35 px-4 py-3">
-        <span className="text-xs font-semibold text-muted">Prize ready</span>
+        <span className="text-xs font-semibold text-muted">
+          {empty ? "Nothing ready to claim" : "Prize ready"}
+        </span>
         <span className="min-w-32 max-w-[68%] text-right font-display text-2xl font-bold leading-none tabular-nums text-brand break-words">
-          {formatUSDC(winnings, 6)} USDC
+          {empty ? "—" : `${formatUSDC(winnings, 6)} USDC`}
         </span>
       </div>
       {actions.map((action) => (

@@ -31,6 +31,7 @@ export type AsyncAction = {
   txHash?: string;
   requestId?: string;
   operation?: PendingActionOperation;
+  creditScope?: CreditActionScope;
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -44,6 +45,7 @@ export type NewAsyncAction = {
   txHash?: string;
   requestId?: string;
   operation?: PendingActionOperation;
+  creditScope?: CreditActionScope;
   status?: AsyncActionStatus;
   error?: string;
   createdAt?: number;
@@ -53,6 +55,13 @@ export type NewAsyncAction = {
 export type ActionPatch = Partial<
   Pick<AsyncAction, "status" | "txHash" | "requestId" | "operation" | "error" | "updatedAt">
 >;
+
+export type CreditActionScope = Readonly<{
+  kind: "prize-credit";
+  action: "claimPrize" | "addPrizeToSavings";
+  pool: string;
+  mode: "legacy1" | "2";
+}>;
 
 export function isFinalActionStatus(status: AsyncActionStatus) {
   return (
@@ -95,6 +104,7 @@ export function addAction(actions: AsyncAction[], input: NewAsyncAction): AsyncA
     txHash: input.txHash,
     requestId: input.requestId,
     operation: input.operation,
+    creditScope: input.creditScope,
     status: input.status ?? "preparing",
     error: input.error,
     createdAt,

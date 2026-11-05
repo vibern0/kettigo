@@ -311,6 +311,39 @@ test("renders the immutable recovered award without a fresh prize check", async 
   expect(fixture.prepare).not.toHaveBeenCalled();
 });
 
+test.each(["Claim prize", "Add prize to savings"] as const)(
+  "%s leaves a checked round visible after the aggregate credit is consumed",
+  async (label) => {
+    fixture.readerFactory.mockReturnValue({
+      readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+      readChecked: vi.fn(async () => true),
+      readAward: vi.fn(async () => fixture.award),
+    });
+    fixture.decrypt.mockImplementation(async (_session, handle) =>
+      handle === fixture.award ? 5_000_000n : 5_000_000n,
+    );
+    fixture.prepare.mockResolvedValue({
+      cancel: vi.fn(),
+      send: async ({ onOperationPrepared }: { onOperationPrepared: (value: ReturnType<typeof savedIntent>["operation"]) => void }) => {
+        onOperationPrepared(savedIntent().operation);
+        fixture.winningsHandle = `0x${"0".repeat(64)}`;
+        return `0x${"f".repeat(64)}` as const;
+      },
+    });
+
+    mount();
+    await viewRound();
+    expect(await screen.findByText("Round #12")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
+    fireEvent.click(await screen.findByRole("button", { name: label }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.getByText("Nothing ready to claim")).toBeTruthy());
+    expect(screen.getByText("Round #12")).toBeTruthy();
+    expect(screen.getByText("5.000000 USDC")).toBeTruthy();
+  },
+);
+
 test("a matching completed Activity record rereads the selected immutable award", async () => {
   const intent = savedIntent();
   window.localStorage.setItem(

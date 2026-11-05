@@ -11,8 +11,8 @@ export function getPrizeRevealFeedback(winnings: bigint) {
   }
   return {
     tone: "info" as const,
-    title: "No prize this time.",
-    description: "Your savings are still yours.",
+    title: "Nothing ready to claim.",
+    description: "Check each completed draw to see your result.",
   };
 }
 
