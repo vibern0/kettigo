@@ -92,7 +92,7 @@ function parseDraw(raw: unknown): PrizeArchiveDraw {
     l = v.closeLogIndex;
   if (
     !Number.isSafeInteger(b) ||
-    (b as number) < 0 ||
+    (b as number) <= 0 ||
     !Number.isSafeInteger(l) ||
     (l as number) < 0
   )
@@ -170,21 +170,62 @@ async function readJson(response: Response, signal?: AbortSignal) {
   const reader = response.body.getReader(),
     chunks: Uint8Array[] = [];
   let size = 0;
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  const cancel = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  const read = async () => {
+    live(signal);
+    pendingRead = reader.read();
+    let removeAbort: () => void = () => {};
+    const aborted = new Promise<never>((_, reject) => {
+      const onAbort = () => {
+        cancel();
+        reject(abort());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      removeAbort = () => signal?.removeEventListener("abort", onAbort);
+    });
+    try {
+      return await Promise.race([pendingRead, aborted]);
+    } finally {
+      removeAbort();
+    }
+  };
   try {
     for (;;) {
-      live(signal);
-      const item = await reader.read();
+      const item = await read();
+      pendingRead = undefined;
       live(signal);
       if (item.done) break;
       size += item.value.byteLength;
       if (size > MAX_BODY_BYTES) {
-        await reader.cancel();
+        cancel();
         throw new Error("archive response too large");
       }
       chunks.push(item.value);
     }
   } finally {
-    reader.releaseLock();
+    if (pendingRead) {
+      void pendingRead.then(
+        () => {
+          try {
+            reader.releaseLock();
+          } catch {
+            /* already released */
+          }
+        },
+        () => {
+          try {
+            reader.releaseLock();
+          } catch {
+            /* already released */
+          }
+        },
+      );
+    } else {
+      reader.releaseLock();
+    }
   }
   const bytes = new Uint8Array(size);
   let offset = 0;
@@ -219,16 +260,15 @@ async function withDeadline<T>(
       reject(new Error("archive timeout"));
     }, timeoutMs);
   });
-  const callerAbort = new Promise<never>((_, reject) =>
-    callerSignal?.addEventListener(
-      "abort",
-      () => {
-        abortFromCaller();
-        reject(abort());
-      },
-      { once: true },
-    ),
-  );
+  let removeCallerAbort: () => void = () => {};
+  const callerAbort = new Promise<never>((_, reject) => {
+    const onCallerAbort = () => {
+      abortFromCaller();
+      reject(abort());
+    };
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    removeCallerAbort = () => callerSignal?.removeEventListener("abort", onCallerAbort);
+  });
   try {
     return await Promise.race([work(controller.signal), deadline, callerAbort]);
   } catch (error) {
@@ -238,7 +278,7 @@ async function withDeadline<T>(
     );
   } finally {
     if (timer) clearTimeout(timer);
-    callerSignal?.removeEventListener("abort", abortFromCaller);
+    removeCallerAbort();
   }
 }
 
@@ -250,17 +290,9 @@ export function createPrizeProofClient(options: PrizeProofClientOptions) {
     base = new URL(options.baseUrl);
   const request = async (url: string, signal?: AbortSignal): Promise<TransportResult> => {
     live(signal);
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, options.timeoutMs ?? 10_000),
-      cancel = () => controller.abort();
-    signal?.addEventListener("abort", cancel, { once: true });
     try {
       const response = await (options.fetch ?? fetch)(new URL(url, base), {
-          signal: controller.signal,
+          signal,
           headers: { accept: "application/json" },
         }),
         body = await readJson(response, signal);
@@ -277,13 +309,10 @@ export function createPrizeProofClient(options: PrizeProofClientOptions) {
       live(signal);
       return {
         type: "outcome",
-        outcome: unavailable(
-          timedOut ? "archive timeout" : e instanceof Error ? e.message : "archive unavailable",
-        ),
+        outcome: unavailable(e instanceof Error ? e.message : "archive unavailable"),
       };
     } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", cancel);
+      // The operation-wide deadline owns fetch and response-body cancellation.
     }
   };
   const validate = async (

@@ -27,23 +27,27 @@ const branch = (leftHash, leftSum, rightHash, rightSum) =>
     [1, leftHash, leftSum, rightHash, rightSum],
   );
 
-function proof() {
+function proof(index = 0n, upperBound = 1n) {
   let root = leaf();
-  for (let level = 0; level < 32; level++)
-    root = branch(root, level === 0 ? handle : parent, sibling, sibling);
+  let sum = handle;
+  for (let level = 0; level < 32; level++) {
+    const left = ((index >> BigInt(level)) & 1n) === 0n;
+    root = left ? branch(root, sum, sibling, sibling) : branch(sibling, sibling, root, sum);
+    sum = parent;
+  }
   return {
     drawId: "1",
     rootHash: root,
     rootSum: parent,
     ticket: handle,
-    upperBound: "1",
+    upperBound: upperBound.toString(),
     closeBlockNumber: 7,
     closeLogIndex: 0,
     chainId: "11155111",
     pool,
     blockHash: `0x${"44".repeat(32)}`,
     account,
-    index: "0",
+    index: index.toString(),
     generation: "1",
     balance: handle,
     siblingHashes: Array(32).fill(sibling),
@@ -73,9 +77,38 @@ function client(response = { proof: proof() }) {
 }
 
 test("authenticates an independently constructed full-depth proof against the immutable chain snapshot", async () => {
+  // This is intentionally a fixed vector, independently anchored to Solidity's
+  // abi.encode(uint8,address,uint64,bytes32) / abi.encode(uint8,bytes32x4).
+  assert.equal(
+    proof().rootHash,
+    "0xc951696283a98a6630145167a76119aeebf65e9427a90a3eaf8b1b8042649273",
+  );
   const result = await client().getProof(1n);
   assert.equal(result.kind, "proof");
   if (result.kind === "proof") assert.equal(result.proof.rootHash, proof().rootHash);
+});
+
+test("authenticates a fixed mixed-bit path through both branch directions", async () => {
+  const p = proof(0xa5a5a5a5n, 1n << 32n);
+  assert.equal(p.rootHash, "0xe9e91223b76e0cb1a6edbac727291abb0a67c9b42d7d3eaa0ab6910c47ef2eee");
+  const result = await createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    fetch: async () => new Response(JSON.stringify({ proof: p })),
+    chainReader: {
+      readDraw: async () => ({
+        rootHash: p.rootHash,
+        rootSum: p.rootSum,
+        ticket: p.ticket,
+        upperBound: 1n << 32n,
+        closeBlockNumber: 7n,
+      }),
+      getBlockHash: async () => p.blockHash,
+    },
+  }).getProof(1n);
+  assert.equal(result.kind, "proof");
 });
 
 test("rejects a proof whose authenticated path is tampered", async () => {
@@ -119,6 +152,26 @@ test("preserves 409 archive availability outcomes", async () => {
   assert.deepEqual(result, { kind: "indexing" });
 });
 
+test("preserves HISTORY_UNAVAILABLE for both documented archive statuses", async () => {
+  for (const status of [404, 409]) {
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () =>
+        new Response(JSON.stringify({ outcome: "HISTORY_UNAVAILABLE" }), { status }),
+      chainReader: {
+        readDraw: async () => {
+          throw new Error("not reached");
+        },
+        getBlockHash: async () => handle,
+      },
+    }).getProof(1n);
+    assert.deepEqual(result, { kind: "history-unavailable" });
+  }
+});
+
 test("rejects a valid proof returned for a different requested draw", async () => {
   const result = await client().getProof(2n);
   assert.equal(result.kind, "unavailable");
@@ -145,6 +198,177 @@ test("never accepts a raw kind-shaped response as a trusted result", async () =>
   assert.equal(reads, 0);
 });
 
+test("never accepts a raw kind-shaped draw list", async () => {
+  const result = await client({ kind: "draws", draws: [proof()] }).listDraws();
+  assert.equal(result.kind, "unavailable");
+});
+
+test("rejects malformed archive JSON and fetch failure as unavailable", async () => {
+  for (const fetch of [
+    async () => new Response("{not json"),
+    async () => {
+      throw new Error("archive offline");
+    },
+  ]) {
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch,
+      chainReader: {
+        readDraw: async () => {
+          throw new Error("not reached");
+        },
+        getBlockHash: async () => handle,
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable");
+  }
+});
+
+test("rejects identity, bounds, handle, root, and proof-array mutations before chain reads", async () => {
+  const mutations = [
+    ["account", zeroAddress],
+    ["pool", zeroAddress],
+    ["chainId", "1"],
+    ["drawId", "2"],
+    ["generation", "0"],
+    ["generation", (1n << 64n).toString()],
+    ["index", "1"],
+    ["index", (1n << 32n).toString()],
+    ["upperBound", "0"],
+    ["upperBound", ((1n << 32n) | 1n).toString()],
+    ["balance", "0x12"],
+    ["rootHash", `0x${"aa".repeat(32)}`],
+    ["closeBlockNumber", 0],
+    ["closeLogIndex", -1],
+  ];
+  for (const [key, value] of mutations) {
+    const p = proof();
+    p[key] = value;
+    let reads = 0;
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response(JSON.stringify({ proof: p })),
+      chainReader: {
+        readDraw: async () => {
+          reads++;
+          throw new Error("not reached");
+        },
+        getBlockHash: async () => {
+          reads++;
+          return handle;
+        },
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable", key);
+    assert.equal(reads, 0, key);
+  }
+});
+
+test("rejects sibling and parent value mutations before chain reads", async () => {
+  for (const key of ["siblingHashes", "siblingSums", "parentSums"]) {
+    const p = proof();
+    p[key][7] = `0x${"aa".repeat(32)}`;
+    let reads = 0;
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response(JSON.stringify({ proof: p })),
+      chainReader: {
+        readDraw: async () => {
+          reads++;
+          throw new Error("not reached");
+        },
+        getBlockHash: async () => {
+          reads++;
+          return handle;
+        },
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable", key);
+    assert.equal(reads, 0, key);
+  }
+});
+
+test("rejects each proof sibling and parent length mutation before chain reads", async () => {
+  for (const key of ["siblingHashes", "siblingSums", "parentSums"]) {
+    const p = proof();
+    p[key] = p[key].slice(1);
+    let reads = 0;
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response(JSON.stringify({ proof: p })),
+      chainReader: {
+        readDraw: async () => {
+          reads++;
+          throw new Error("not reached");
+        },
+        getBlockHash: async () => {
+          reads++;
+          return handle;
+        },
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable", key);
+    assert.equal(reads, 0, key);
+  }
+});
+
+test("rejects chain snapshot and close-block mismatches", async () => {
+  for (const reader of [
+    {
+      readDraw: async () => ({
+        rootHash: handle,
+        rootSum: parent,
+        ticket: handle,
+        upperBound: 1n,
+        closeBlockNumber: 7n,
+      }),
+      getBlockHash: async () => proof().blockHash,
+    },
+    {
+      readDraw: async () => ({
+        rootHash: proof().rootHash,
+        rootSum: parent,
+        ticket: `0x${"aa".repeat(32)}`,
+        upperBound: 1n,
+        closeBlockNumber: 7n,
+      }),
+      getBlockHash: async () => proof().blockHash,
+    },
+    {
+      readDraw: async () => ({
+        rootHash: proof().rootHash,
+        rootSum: parent,
+        ticket: handle,
+        upperBound: 1n,
+        closeBlockNumber: 7n,
+      }),
+      getBlockHash: async () => `0x${"55".repeat(32)}`,
+    },
+  ]) {
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response(JSON.stringify({ proof: proof() })),
+      chainReader: reader,
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable");
+  }
+});
+
 test("bounds a non-cooperative chain reader with the operation deadline", async () => {
   const timed = createPrizeProofClient({
     chainId: 11155111,
@@ -162,9 +386,43 @@ test("bounds a non-cooperative chain reader with the operation deadline", async 
 
 test("bounds list pagination and rejects wrong scoped records", async () => {
   await assert.rejects(() => client().listDraws({ limit: 101 }));
+  await assert.rejects(() => client().getProof(1n << 256n));
+  await assert.rejects(() => client().listDraws({ cursor: 1n << 256n }));
   const wrong = { ...proof(), pool: zeroAddress };
   const result = await client({ draws: [wrong] }).listDraws();
   assert.equal(result.kind, "unavailable");
+});
+
+test("accepts zero upper-bound list metadata but rejects malformed and cursor-violating lists", async () => {
+  const empty = { ...proof(), upperBound: "0" };
+  const listed = await client({ draws: [empty] }).listDraws();
+  assert.equal(listed.kind, "draws");
+  const malformed = await client({ draws: "not-an-array" }).listDraws();
+  assert.equal(malformed.kind, "unavailable");
+  const cursor = await client({ draws: [proof()] }).listDraws({ cursor: 1n });
+  assert.equal(cursor.kind, "unavailable");
+});
+
+test("rejects invalid or oversized content lengths without chain reads", async () => {
+  for (const contentLength of ["not-a-number", "128001"]) {
+    let reads = 0;
+    const result = await createPrizeProofClient({
+      chainId: 11155111,
+      pool,
+      account,
+      baseUrl: "https://proof.example",
+      fetch: async () => new Response("{}", { headers: { "content-length": contentLength } }),
+      chainReader: {
+        readDraw: async () => {
+          reads++;
+          throw new Error("not reached");
+        },
+        getBlockHash: async () => handle,
+      },
+    }).getProof(1n);
+    assert.equal(result.kind, "unavailable", contentLength);
+    assert.equal(reads, 0, contentLength);
+  }
 });
 
 test("rejects a positive proof for a different chain without treating it as an outcome", async () => {
@@ -196,4 +454,65 @@ test("preserves caller cancellation", async () => {
   await assert.rejects(() => cancelled.getProof(1n, { signal: controller.signal }), {
     name: "AbortError",
   });
+});
+
+test("cancels a non-cooperative response reader when the deadline expires", async () => {
+  let cancelled = 0;
+  const stream = new ReadableStream({
+    pull() {
+      return new Promise(() => {});
+    },
+    cancel() {
+      cancelled++;
+    },
+  });
+  const timed = createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    timeoutMs: 5,
+    fetch: async () => new Response(stream),
+    chainReader: {
+      readDraw: async () => {
+        throw new Error("not reached");
+      },
+      getBlockHash: async () => handle,
+    },
+  });
+  const result = await timed.getProof(1n);
+  assert.equal(result.kind, "unavailable");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(cancelled, 1);
+});
+
+test("caps chunked UTF-8 body bytes and cancels before chain reads", async () => {
+  let cancelled = 0,
+    reads = 0;
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("é".repeat(64_001)));
+    },
+    cancel() {
+      cancelled++;
+    },
+  });
+  const bounded = createPrizeProofClient({
+    chainId: 11155111,
+    pool,
+    account,
+    baseUrl: "https://proof.example",
+    fetch: async () => new Response(stream),
+    chainReader: {
+      readDraw: async () => {
+        reads++;
+        throw new Error("not reached");
+      },
+      getBlockHash: async () => handle,
+    },
+  });
+  const result = await bounded.getProof(1n);
+  assert.equal(result.kind, "unavailable");
+  assert.equal(cancelled, 1);
+  assert.equal(reads, 0);
 });
