@@ -4,6 +4,9 @@ import { entryPoint07Address } from "viem/account-abstraction";
 
 const fixture = vi.hoisted(() => ({
   account: "0x1111111111111111111111111111111111111111" as const,
+  alternateAccount: "0x4444444444444444444444444444444444444444" as const,
+  pool: "0x3333333333333333333333333333333333333333" as `0x${string}`,
+  alternatePool: "0x5555555555555555555555555555555555555555" as const,
   prepare: vi.fn(),
   send: vi.fn(),
   refresh: vi.fn(),
@@ -16,11 +19,22 @@ const fixture = vi.hoisted(() => ({
   postReadFailureUsed: false,
   sent: false,
   session: undefined as any,
+  membershipByScope: undefined as Record<string, bigint> | undefined,
+  pendingByScope: undefined as
+    Record<string, readonly [`0x${string}`, bigint, `0x${string}`, boolean]> | undefined,
 }));
 vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
-    readContract: async ({ functionName }: { functionName: string }) => {
+    readContract: async ({
+      address,
+      args,
+      functionName,
+    }: {
+      address: string;
+      args: readonly string[];
+      functionName: string;
+    }) => {
       if (
         fixture.sent &&
         fixture.postReadFailure ===
@@ -30,9 +44,15 @@ vi.mock("viem", async (original) => ({
         fixture.postReadFailureUsed = true;
         throw new Error(`${functionName} unavailable`);
       }
+      const scope = `${address.toLowerCase()}:${args[0]?.toLowerCase()}`;
       return functionName === "pendingAdmissionOf"
-        ? [`0x${"a".repeat(64)}`, 7n, `0x${"a".repeat(64)}`, true]
-        : 0n;
+        ? (fixture.pendingByScope?.[scope] ?? [
+            `0x${"a".repeat(64)}`,
+            7n,
+            `0x${"a".repeat(64)}`,
+            true,
+          ])
+        : (fixture.membershipByScope?.[scope] ?? 0n);
     },
     getBlockNumber: async () => 0n,
     request: async () => [],
@@ -44,7 +64,9 @@ vi.mock("@/lib/contracts", async (original) => ({
   CONTRACTS: {
     usdc: fixture.account,
     confidentialUsdc: "0x2222222222222222222222222222222222222222",
-    confidentialPrizePool: "0x3333333333333333333333333333333333333333",
+    get confidentialPrizePool() {
+      return fixture.pool;
+    },
   },
 }));
 vi.mock("@/lib/runtime-config", () => ({
@@ -90,15 +112,19 @@ function ActionStatusProbe() {
   return <output data-testid="action-statuses">{JSON.stringify(actions)}</output>;
 }
 
-function renderSavingsActivity() {
-  return render(
+function savingsActivityTree() {
+  return (
     <ToastProvider>
       <ActionCenterProvider>
         <SavingsPage />
         <ActionStatusProbe />
       </ActionCenterProvider>
-    </ToastProvider>,
+    </ToastProvider>
   );
+}
+
+function renderSavingsActivity() {
+  return render(savingsActivityTree());
 }
 
 beforeEach(() => {
@@ -114,6 +140,9 @@ beforeEach(() => {
   fixture.postReadFailure = undefined;
   fixture.postReadFailureUsed = false;
   fixture.sent = false;
+  fixture.pool = "0x3333333333333333333333333333333333333333";
+  fixture.membershipByScope = undefined;
+  fixture.pendingByScope = undefined;
   fixture.decrypt.mockReset();
   fixture.decrypt.mockResolvedValue({ clearValue: true, decryptionProof: "0x1234" });
   fixture.session = {
@@ -351,3 +380,87 @@ test.each([
     expect(document.body.textContent).not.toContain("submission secret");
   },
 );
+
+test.each(["account", "pool"] as const)(
+  "a late canonical participation result cannot update the replaced %s scope",
+  async (scope) => {
+    fixture.version = "2";
+    const operation = {
+      chainId: 11155111 as const,
+      entryPoint: entryPoint07Address,
+      sender: fixture.account,
+      userOperationHash: `0x${"f".repeat(64)}` as const,
+    };
+    let resolveSend!: (hash: `0x${string}`) => void;
+    const cancel = vi.fn();
+    fixture.prepare.mockResolvedValue({ cancel, send: fixture.send });
+    fixture.send.mockImplementation(({ onOperationPrepared }) => {
+      onOperationPrepared(operation);
+      return new Promise((resolve) => {
+        resolveSend = resolve;
+      });
+    });
+    const view = renderSavingsActivity();
+    fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(fixture.send).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(localStorage.getItem("kettigo:actions")).toContain(operation.userOperationHash),
+    );
+
+    if (scope === "account") {
+      fixture.session = { ...fixture.session, address: fixture.alternateAccount };
+    } else {
+      fixture.pool = fixture.alternatePool;
+    }
+    view.rerender(savingsActivityTree());
+    resolveSend("0xdead");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("action-statuses").textContent).toContain('"status":"confirming"'),
+    );
+    expect(await screen.findByRole("button", { name: "Review participation" })).toBeTruthy();
+    expect(screen.queryByText("Savings setup complete.")).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(fixture.prepare).toHaveBeenCalledTimes(1);
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+  },
+);
+
+test("an unmounted participation confirmation keeps its attempted Activity identity recoverable", async () => {
+  fixture.version = "2";
+  const operation = {
+    chainId: 11155111 as const,
+    entryPoint: entryPoint07Address,
+    sender: fixture.account,
+    userOperationHash: `0x${"9".repeat(64)}` as const,
+  };
+  let rejectSend!: (error: Error) => void;
+  const cancel = vi.fn();
+  fixture.prepare.mockResolvedValue({ cancel, send: fixture.send });
+  fixture.send.mockImplementation(({ onOperationPrepared }) => {
+    fixture.pending = { ...operation, createdAt: 1, phase: "attempted" as const };
+    onOperationPrepared(operation);
+    return new Promise((_resolve, reject) => {
+      rejectSend = reject;
+    });
+  });
+  const view = renderSavingsActivity();
+  fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(fixture.send).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(localStorage.getItem("kettigo:actions")).toContain(operation.userOperationHash),
+  );
+  view.unmount();
+  rejectSend(new Error("late old-scope secret"));
+  await Promise.resolve();
+
+  renderSavingsActivity();
+  fireEvent.click(await screen.findByRole("button", { name: /Activity/i }));
+  expect(await screen.findByRole("button", { name: "Check status" })).toBeTruthy();
+  expect(cancel).not.toHaveBeenCalled();
+  expect(fixture.prepare).toHaveBeenCalledTimes(1);
+  expect(fixture.send).toHaveBeenCalledTimes(1);
+  expect(document.body.textContent).not.toContain("late old-scope secret");
+});
