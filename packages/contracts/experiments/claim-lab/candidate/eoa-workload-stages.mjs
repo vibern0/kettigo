@@ -9,6 +9,8 @@ import {
   sdkProofRef,
   sdkRef,
 } from "./eoa-workload-templates.mjs";
+import { addStage8Checks } from "./eoa-workload-draw-stage8.mjs";
+import { addStage33Checks } from "./eoa-workload-draw-stage33.mjs";
 
 export function addSafeInitial(add, call, definition) {
   add(
@@ -90,6 +92,12 @@ export function addReserveStages(add, call, definition) {
     call("wrap(address,uint256)", [definition.actors.sponsor, "12000000"]),
     ["reserve-approve"],
   );
+  addPrizeStages(add, call, definition);
+  addStage8Checks(add, call, definition);
+  addStage33Checks(add, call, definition);
+}
+
+function addPrizeStages(add, call, definition) {
   for (const [stage, amount, before] of [
     ["8", "1000000", "eoa-06-admit"],
     ["33", "1000000", "eoa-31-admit"],
@@ -124,107 +132,16 @@ export function addReserveStages(add, call, definition) {
       `prize-fund-${stage}`,
     ]);
   }
-  for (let index = 0; index < 7; index += 1) {
-    const id = String(index).padStart(2, "0");
-    add(
-      `check-stage8-eoa-${id}`,
-      "draw",
-      "participant",
-      "candidatePool",
-      checkTemplate("close-draw-8", definition.actors.eoaParticipants[index]),
-      [
-        "close-draw-8",
-        ...(index >= 1 && index < 5 ? ["check-stage8-eoa-00"] : []),
-        ...(index >= 5
-          ? [
-              "check-stage8-eoa-01",
-              "check-stage8-eoa-02",
-              "check-stage8-eoa-03",
-              "check-stage8-eoa-04",
-            ]
-          : []),
-      ],
-      {
-        actorIndex: index,
-        concurrencyGroup: index === 0 ? "stage8-1" : index < 5 ? "stage8-4" : "stage8-2",
-      },
-    );
-    add(
-      `claim-stage8-eoa-${id}`,
-      "draw",
-      "participant",
-      "candidatePool",
-      call("claimPrize()", []),
-      [`check-stage8-eoa-${id}`],
-      {
-        actorIndex: index,
-        concurrencyGroup: "conditional",
-        refs: { condition: "positive-credit-or-SKIPPED" },
-      },
-    );
-  }
-  add(
-    "safe-stage-8-check",
-    "draw",
-    "safeParticipant",
-    "candidatePool",
-    checkTemplate("close-draw-8", definition.actors.safeParticipant),
-    ["close-draw-8"],
-  );
-  addStage33Checks(add, call, definition);
 }
 
-function addStage33Checks(add, call, definition) {
-  for (let index = 0; index < 32; index += 1) {
-    const id = String(index).padStart(2, "0");
-    add(
-      `check-stage33-eoa-${id}`,
-      "draw",
-      "participant",
-      "candidatePool",
-      checkTemplate("close-draw-33", definition.actors.eoaParticipants[index]),
-      [
-        "close-draw-33",
-        ...Array.from(
-          { length: Math.floor(index / 8) * 8 },
-          (_, member) => `check-stage33-eoa-${String(member).padStart(2, "0")}`,
-        ),
-      ],
-      { actorIndex: index, concurrencyGroup: `stage33-${Math.floor(index / 8)}` },
-    );
-    add(
-      `claim-stage33-eoa-${id}`,
-      "draw",
-      "participant",
-      "candidatePool",
-      call("claimPrize()", []),
-      [`check-stage33-eoa-${id}`],
-      {
-        actorIndex: index,
-        concurrencyGroup: "conditional",
-        refs: { condition: "positive-credit-or-SKIPPED" },
-      },
-    );
-  }
-  add(
-    "safe-stage-33-check",
-    "draw",
-    "safeParticipant",
-    "candidatePool",
-    checkTemplate("close-draw-33", definition.actors.safeParticipant),
-    ["close-draw-33"],
-  );
-  add(
-    "safe-conditional-wallet-claim",
-    "draw",
-    "safeParticipant",
-    "candidatePool",
-    call("claimPrize()", []),
-    ["safe-stage-8-check", "safe-stage-33-check"],
-    { refs: { condition: "positive-credit-or-SKIPPED" } },
-  );
-}
 export function addFinal(add, call, definition) {
+  addEoaFinalRequests(add, call, definition);
+  addSafeFinalRequest(add, call, definition);
+  addFinalBatch(add, call, definition);
+  addFinalProcesses(add, call, definition);
+}
+
+function addEoaFinalRequests(add, call, definition) {
   for (let index = 0; index < 32; index += 1) {
     const id = String(index).padStart(2, "0");
     add(
@@ -264,6 +181,9 @@ export function addFinal(add, call, definition) {
       { actorIndex: index, concurrencyGroup: "final-requests" },
     );
   }
+}
+
+function addSafeFinalRequest(add, call, definition) {
   add(
     "safe-withdrawal-request",
     "final",
@@ -291,6 +211,9 @@ export function addFinal(add, call, definition) {
       ),
     ],
   );
+}
+
+function addFinalBatch(add, call, definition) {
   add(
     "final-batch-close",
     "final",
@@ -320,6 +243,9 @@ export function addFinal(add, call, definition) {
     ]),
     ["final-batch-close"],
   );
+}
+
+function addFinalProcesses(add, call, definition) {
   for (let index = 0; index < 33; index += 1) {
     const account =
       index === 32 ? definition.actors.safeParticipant : definition.actors.eoaParticipants[index];

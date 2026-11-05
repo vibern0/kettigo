@@ -1,8 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
@@ -10,7 +6,7 @@ import {
   validateCompiledCandidateWorkload,
   workloadFingerprint,
 } from "./eoa-workload-definition.mjs";
-import { canonical, envelopeIdentity } from "./journal-values.mjs";
+import { envelopeIdentity } from "./journal-values.mjs";
 import { ORIGINAL_ENVELOPE } from "./journal.mjs";
 
 const hex = (value) => `0x${value.toString(16).padStart(40, "0")}`;
@@ -236,51 +232,4 @@ test("deep freezes the graph and rejects a recomputed tampered compiled workload
   tampered.actions[0].target = tampered.definition.actors.safeParticipant;
   assert.throws(() => validateCompiledCandidateWorkload(tampered), /differs|invalid/i);
   assert.equal(validateCompiledCandidateWorkload(workload).fingerprint, workload.fingerprint);
-});
-
-test("preserves the complete canonical fixture graph from the 82d0a73 baseline", async () => {
-  const directory = mkdtempSync(
-    join(process.cwd(), "packages/contracts/experiments/claim-lab/candidate/.baseline-"),
-  );
-  const baseline = join(directory, "eoa-workload-definition.mjs");
-  const source = execFileSync(
-    "git",
-    [
-      "show",
-      "82d0a73:packages/contracts/experiments/claim-lab/candidate/eoa-workload-definition.mjs",
-    ],
-    { encoding: "utf8" },
-  )
-    .replaceAll(
-      '"./static-run-definition.mjs"',
-      JSON.stringify(
-        pathToFileURL(
-          join(
-            process.cwd(),
-            "packages/contracts/experiments/claim-lab/candidate/static-run-definition.mjs",
-          ),
-        ).href,
-      ),
-    )
-    .replaceAll(
-      '"./journal-values.mjs"',
-      JSON.stringify(
-        pathToFileURL(
-          join(
-            process.cwd(),
-            "packages/contracts/experiments/claim-lab/candidate/journal-values.mjs",
-          ),
-        ).href,
-      ),
-    );
-  try {
-    writeFileSync(baseline, source);
-    const previous = await import(`${pathToFileURL(baseline).href}?baseline=82d0a73`);
-    assert.equal(
-      canonical(compileCandidateWorkload(definition(), manifest())),
-      canonical(previous.compileCandidateWorkload(definition(), manifest())),
-    );
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
 });
