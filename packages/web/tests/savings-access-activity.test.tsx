@@ -116,7 +116,7 @@ function savingsActivityTree() {
   return (
     <ToastProvider>
       <ActionCenterProvider>
-        <SavingsPage />
+        <SavingsPage key={fixture.pool} />
         <ActionStatusProbe />
       </ActionCenterProvider>
     </ToastProvider>
@@ -290,9 +290,13 @@ test("participation Activity reloads the saved attempted identity for read-only 
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
-test.each(["membership", "pending"] as const)(
-  "a canonical participation send keeps %s-read failure refreshable without retrying",
-  async (postReadFailure) => {
+test.each([
+  ["membership-read failure", "membership"],
+  ["pending-read failure", "pending"],
+  ["stale readable values", undefined],
+] as const)(
+  "a canonical participation send keeps %s refreshable without retrying",
+  async (_state, postReadFailure) => {
     fixture.version = "2";
     fixture.postReadFailure = postReadFailure;
     fixture.send.mockImplementation(async () => {

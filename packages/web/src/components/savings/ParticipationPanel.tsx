@@ -13,6 +13,7 @@ import { sepolia } from "viem/chains";
 import { confidentialPrizePoolAbi, RPC_URL } from "@/lib/contracts";
 import {
   AdmissionPostConfirmationReadError,
+  AdmissionReconciliationError,
   createAdmissionCoordinator,
   type PendingAdmission,
 } from "@/lib/admission-coordinator";
@@ -79,6 +80,9 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     const abortRef = useRef<AbortController>();
     const reviewEpoch = useRef(0);
     const statusEpoch = useRef(0);
+    const scopeKey = `${account?.toLowerCase() ?? ""}:${pool?.toLowerCase() ?? ""}`;
+    const renderedScope = useRef(scopeKey);
+    renderedScope.current = scopeKey;
     const enabled = hydrated && poolVersion() && Boolean(account && pool && session);
 
     const cancel = () => {
@@ -221,6 +225,9 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     const confirm = () => {
       const prepared = ready;
       if (!prepared || !session) return;
+      const confirmationEpoch = reviewEpoch.current;
+      const confirmationScope = renderedScope.current;
+      const confirmationAbort = abortRef.current;
       if (Date.now() - prepared.preparedAt > 60_000) {
         prepared.admission.cancel();
         setReady(undefined);
@@ -242,6 +249,12 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
             setPending(result.pending);
             toast({ tone: "success", title: "Savings setup complete." });
           } catch (error) {
+            if (
+              confirmationEpoch !== reviewEpoch.current ||
+              confirmationScope !== renderedScope.current ||
+              confirmationAbort?.signal.aborted
+            )
+              return;
             let attempted = false;
             try {
               attempted = session.getPendingOperation?.()?.phase === "attempted";
@@ -255,8 +268,11 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
               });
               return;
             }
-            if (error instanceof AdmissionPostConfirmationReadError) {
-              // The canonical send completed; only the follow-up display reads failed.
+            if (
+              error instanceof AdmissionPostConfirmationReadError ||
+              error instanceof AdmissionReconciliationError
+            ) {
+              // The canonical send completed, but display reads are not yet conclusive.
               setFinalizedPending(prepared.admission.reviewedPending);
               setUnresolved(true);
               update({ status: "updating", error: "Savings status needs a refresh." });
