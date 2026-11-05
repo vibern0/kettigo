@@ -19,6 +19,15 @@ export function validIntentBudget(intent) {
   );
 }
 
+export function assertBudget({ state, budget, envelope, fee, funding, usdc }) {
+  if (budget.signedCount + 1 > envelope.maxSignedTransactions) fail("signature budget exceeded");
+  if (occupiedFee(state) + fee > BigInt(envelope.maxFeeWei)) fail("fee budget exceeded");
+  if (BigInt(budget.fundingCommittedWei) + funding > BigInt(envelope.maxFundingWei))
+    fail("funding budget exceeded");
+  if (BigInt(budget.usdcCommittedMicro) + usdc > BigInt(envelope.maxUsdcMicro))
+    fail("USDC budget exceeded");
+}
+
 export function validateRecomputedBudget(state) {
   const expected = zero();
   for (const intent of state.intents) {

@@ -1,4 +1,25 @@
 export const isNatural = (value) => Number.isSafeInteger(value) && value >= 0;
+const UINT = /^(0|[1-9][0-9]*)$/;
+
+export function validBudget(budget) {
+  return (
+    Number.isSafeInteger(budget.signedCount) &&
+    budget.signedCount >= 0 &&
+    ["feeReservedWei", "feeActualWei", "fundingCommittedWei", "usdcCommittedMicro"].every((key) =>
+      UINT.test(budget[key] ?? ""),
+    )
+  );
+}
+
+export function validTarget(to, input, { validAddress, hex, maxInput }) {
+  return (
+    (validAddress(to) || to === null) &&
+    typeof input === "string" &&
+    input.length <= maxInput &&
+    hex.test(input) &&
+    (to !== null || input !== "0x")
+  );
+}
 
 export function validClock(state, envelope) {
   return state.startedAt === null

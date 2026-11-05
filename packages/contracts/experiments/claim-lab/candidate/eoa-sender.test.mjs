@@ -394,6 +394,8 @@ test("2 signer lookup and 10 post-attempt deadline changes result in zero signat
     /deadline/,
   );
   assert.equal(provider.sent.length, 0);
+  assert.equal(j2.intent("attempt-only").attempts.at(-1).outcome, "suppressed");
+  assert.equal(j2.actualSendCount("attempt-only"), 0);
   await j2.close();
 });
 

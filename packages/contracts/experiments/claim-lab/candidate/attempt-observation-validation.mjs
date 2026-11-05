@@ -41,6 +41,11 @@ export function validAttempt(attempt) {
       (typeof attempt.error === "string" &&
         Boolean(attempt.error) &&
         attempt.error.length <= MAX_ERROR)) &&
-    typeof attempt.unrecoverable === "boolean"
+    typeof attempt.unrecoverable === "boolean" &&
+    (attempt.outcome === undefined ||
+      ["pre-send", "suppressed", "started-or-unknown"].includes(attempt.outcome))
   );
 }
+
+export const actualAttemptCount = (intent) =>
+  intent.attempts.filter((attempt) => attempt.outcome !== "suppressed").length;

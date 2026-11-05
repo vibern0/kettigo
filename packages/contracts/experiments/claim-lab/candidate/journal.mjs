@@ -1,26 +1,35 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireLease, assertLease, persist, releaseLease } from "./persistence.mjs";
 import {
   findIntent,
-  occupiedFee,
   serializeReceipt,
   validateReceipt,
   validateStoredReceipt,
 } from "./receipt.mjs";
 import {
+  assertBudget,
   validatePersistedCaps,
   validatePersistedUniqueness,
   validateRecomputedBudget,
   validIntentBudget,
 } from "./budget-validation.mjs";
 import {
+  actualAttemptCount,
   validAttempt,
   validateObservations,
   validatePersistedErrors,
 } from "./attempt-observation-validation.mjs";
-import { isNatural, validClock, validTransition } from "./state-shape-validation.mjs";
+import {
+  isNatural,
+  validBudget,
+  validClock,
+  validTarget as validTargetShape,
+  validTransition,
+} from "./state-shape-validation.mjs";
+import { loadState } from "./state-storage.mjs";
+import { assertOpen, assertSigningAllowed } from "./journal-guards.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -156,44 +165,21 @@ function validPersistedIntentFields(intent) {
     ].every(Boolean)
   );
 }
-function validBudget(budget) {
-  return (
-    Number.isSafeInteger(budget.signedCount) &&
-    budget.signedCount >= 0 &&
-    ["feeReservedWei", "feeActualWei", "fundingCommittedWei", "usdcCommittedMicro"].every((key) =>
-      UINT.test(budget[key] ?? ""),
-    )
-  );
-}
 function validTarget(to, input) {
-  return (
-    (validAddress(to) || to === null) &&
-    typeof input === "string" &&
-    input.length <= MAX_INPUT &&
-    HEX.test(input) &&
-    (to !== null || input !== "0x")
-  );
+  return validTargetShape(to, input, { validAddress, hex: HEX, maxInput: MAX_INPUT });
 }
 function validatePersistedTransition(intent) {
   const hasSigned = Boolean(intent.signed);
   const terminal = intent.terminal;
-  if (!validTransition(intent.state, hasSigned, intent.attempts.length, terminal))
+  if (!validTransition(intent.state, hasSigned, actualAttemptCount(intent), terminal))
     fail("invalid persisted transition");
   validatePersistedErrors(intent, validAttempt);
   validateObservations(intent);
   if (terminal) {
-    if (intent.state !== "terminal" || !intent.attempts.length) fail("invalid persisted terminal");
+    if (intent.state !== "terminal" || !actualAttemptCount(intent))
+      fail("invalid persisted terminal");
     validateStoredReceipt(terminal, intent);
   } else if (intent.state === "terminal") fail("invalid persisted terminal");
-}
-async function loadState(statePath, envelope, identity) {
-  try {
-    if ((await stat(statePath)).size > MAX_JOURNAL_BYTES) fail("journal state exceeds size limit");
-    return { state: JSON.parse(await readFile(statePath, "utf8")), created: false };
-  } catch (error) {
-    if (error?.code !== "ENOENT") fail("invalid journal state");
-    return { state: newState(envelope, identity), created: true };
-  }
 }
 function newState(envelope, identity) {
   return {
@@ -221,7 +207,12 @@ export class CandidateRunJournal {
     await acquireLease(lockPath, token);
     try {
       const statePath = join(directory, JOURNAL);
-      const { state, created } = await loadState(statePath, envelope, identity);
+      const { state, created } = await loadState({
+        statePath,
+        maxBytes: MAX_JOURNAL_BYTES,
+        fail,
+        create: () => newState(envelope, identity),
+      });
       validateState(state, envelope, identity);
       if (created) await persist(statePath, state, failPublish);
       return new CandidateRunJournal({
@@ -253,6 +244,11 @@ export class CandidateRunJournal {
     const intent = this.state.intents.find((entry) => entry.intentId === intentId);
     return intent ? clone(intent) : undefined;
   }
+  actualSendCount(intentId) {
+    const intent = this.state.intents.find((entry) => entry.intentId === intentId);
+    if (!intent) fail("unknown intent");
+    return actualAttemptCount(intent);
+  }
   async close() {
     if (this.closed) return;
     if (this.closing) return this.tail;
@@ -282,7 +278,9 @@ export class CandidateRunJournal {
       )
         fail("sender nonce collision");
       const proposed = clone(this.state);
-      addReservation(proposed, request, this.envelope, this.now, this.#assertBudget.bind(this));
+      addReservation(proposed, request, this.envelope, this.now, (budget, fee, funding, usdc) =>
+        assertBudget({ state: this.state, budget, envelope: this.envelope, fee, funding, usdc }),
+      );
       if (
         this.state.intents.some(
           (entry) =>
@@ -299,7 +297,7 @@ export class CandidateRunJournal {
 
   async saveSigned(intentId, raw, hash) {
     return this.#mutate(async () => {
-      this.#assertSigningAllowed();
+      assertSigningAllowed(this, fail);
       if (!HEX.test(raw) || !validHash(hash)) fail("invalid signed payload");
       const proposed = clone(this.state);
       const intent = findIntent(proposed, intentId);
@@ -316,21 +314,26 @@ export class CandidateRunJournal {
 
   async assertSigningPermit() {
     return this.#mutate(async () => {
-      this.#assertSigningAllowed();
+      assertSigningAllowed(this, fail);
       return true;
     });
   }
 
   async recordAttempt(intentId, { at = this.now(), error = null, unrecoverable = false } = {}) {
     return this.#mutate(async () => {
-      this.#assertSigningAllowed();
+      assertSigningAllowed(this, fail);
       natural(at, "attempt time");
       if (error !== null && (typeof error !== "string" || !error)) fail("invalid attempt error");
       const proposed = clone(this.state);
       const intent = findIntent(proposed, intentId);
       if (!intent.signed) fail("attempt without durable signature");
       if (intent.terminal) fail("attempt after terminal");
-      intent.attempts.push({ at, error, unrecoverable: Boolean(unrecoverable) });
+      intent.attempts.push({
+        at,
+        error,
+        unrecoverable: Boolean(unrecoverable),
+        outcome: "started-or-unknown",
+      });
       if (error && !intent.firstError) intent.firstError = error;
       if (error && unrecoverable && !intent.firstUnrecoverableError)
         intent.firstUnrecoverableError = error;
@@ -343,15 +346,33 @@ export class CandidateRunJournal {
   async attemptWithPermit(intentId, send) {
     if (typeof send !== "function") fail("send callback required");
     return this.#mutate(async () => {
-      this.#assertSigningAllowed();
+      assertSigningAllowed(this, fail);
       const proposed = clone(this.state);
       const intent = findIntent(proposed, intentId);
       if (!intent.signed) fail("attempt without durable signature");
       if (intent.terminal) fail("attempt after terminal");
-      intent.attempts.push({ at: this.now(), error: null, unrecoverable: false });
+      intent.attempts.push({
+        at: this.now(),
+        error: null,
+        unrecoverable: false,
+        outcome: "pre-send",
+      });
       intent.state = "broadcast-attempted";
       await this.#commit(proposed);
-      this.#assertSigningAllowed();
+      try {
+        assertSigningAllowed(this, fail);
+      } catch (error) {
+        const suppressed = clone(this.state);
+        const saved = findIntent(suppressed, intentId);
+        saved.attempts.at(-1).outcome = "suppressed";
+        saved.state = "signed";
+        try {
+          await this.#commit(suppressed);
+        } catch {
+          // The durable pre-send record remains conservatively unknown; keep the permit cause.
+        }
+        throw error;
+      }
       return send();
     });
   }
@@ -384,7 +405,7 @@ export class CandidateRunJournal {
       const proposed = clone(this.state);
       const intent = findIntent(proposed, intentId);
       validateReceipt(receipt, intent);
-      if (!intent.attempts.length) fail("terminal requires broadcast attempt");
+      if (!actualAttemptCount(intent)) fail("terminal requires broadcast attempt");
       if (BigInt(receipt.feeWei) > BigInt(intent.maxFeeWei)) fail("actual fee exceeds reservation");
       if (intent.terminal) {
         if (canonical(intent.terminal) === canonical(serializeReceipt(receipt)))
@@ -401,27 +422,6 @@ export class CandidateRunJournal {
     });
   }
 
-  #assertOpen() {
-    if (this.closed) fail("journal is closed");
-    if (this.poisoned) fail("journal persistence is uncertain");
-  }
-  #assertSigningAllowed() {
-    this.#assertOpen();
-    if (this.state.startedAt === null || this.now() >= this.state.deadlineAt)
-      fail("deadline reached");
-    if (this.state.intents.some((intent) => intent.firstUnrecoverableError))
-      fail("unrecoverable error stops signatures");
-  }
-  #assertBudget(budget, fee, funding, usdc) {
-    if (budget.signedCount + 1 > this.envelope.maxSignedTransactions)
-      fail("signature budget exceeded");
-    if (occupiedFee(this.state) + fee > BigInt(this.envelope.maxFeeWei))
-      fail("fee budget exceeded");
-    if (BigInt(budget.fundingCommittedWei) + funding > BigInt(this.envelope.maxFundingWei))
-      fail("funding budget exceeded");
-    if (BigInt(budget.usdcCommittedMicro) + usdc > BigInt(this.envelope.maxUsdcMicro))
-      fail("USDC budget exceeded");
-  }
   async #commit(next) {
     validateState(next, this.envelope, this.identity);
     try {
@@ -434,9 +434,9 @@ export class CandidateRunJournal {
   }
   async #mutate(operation) {
     if (this.closing) fail("journal is closed");
-    if (this.closed || this.poisoned) this.#assertOpen();
+    if (this.closed || this.poisoned) assertOpen(this, fail);
     const next = this.tail.then(async () => {
-      this.#assertOpen();
+      assertOpen(this, fail);
       await assertLease(join(this.directory, LOCK), this.token);
       return operation();
     });
