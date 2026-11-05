@@ -2,7 +2,7 @@ import { env as workerEnv } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { branchHash, leafHash } from "../src/domain.ts";
 import { handle, type Env } from "../src/server.ts";
-import worker from "../src/worker.ts";
+import { handleInternalTick, default as worker } from "../src/worker.ts";
 
 const zero = `0x${"00".repeat(32)}`;
 const pool = "0x00000000000000000000000000000000000000A1";
@@ -21,6 +21,11 @@ const config = {
 } as Env;
 
 afterEach(() => vi.unstubAllGlobals());
+
+function expectOperatorResponse(response: Response, status: number) {
+  expect(response.status).toBe(status);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+}
 
 describe("proof HTTP boundary", () => {
   it(
@@ -96,20 +101,20 @@ describe("proof HTTP boundary", () => {
       { ...config, OPERATOR_BEARER: "x" },
       ctx,
     );
-    expect(options.status).toBe(405);
+    expectOperatorResponse(options, 405);
     expect(fetch).not.toHaveBeenCalled();
     const get = await worker.fetch(
       new Request("https://proof.test/internal/tick", { headers: { authorization: "Bearer x" } }),
       { ...config, OPERATOR_BEARER: "x" },
       ctx,
     );
-    expect(get.status).toBe(405);
+    expectOperatorResponse(get, 405);
     const forbidden = await worker.fetch(
       new Request("https://proof.test/internal/tick", { method: "POST" }),
       { ...config, OPERATOR_BEARER: "x" },
       ctx,
     );
-    expect(forbidden.status).toBe(401);
+    expectOperatorResponse(forbidden, 401);
     const oversized = await worker.fetch(
       new Request("https://proof.test/internal/tick", {
         method: "POST",
@@ -118,7 +123,7 @@ describe("proof HTTP boundary", () => {
       { ...config, OPERATOR_BEARER: "x" },
       ctx,
     );
-    expect(oversized.status).toBe(413);
+    expectOperatorResponse(oversized, 413);
 
     const streamed = await worker.fetch(
       new Request("https://proof.test/internal/tick", {
@@ -134,8 +139,121 @@ describe("proof HTTP boundary", () => {
       { ...config, OPERATOR_BEARER: "x" },
       ctx,
     );
-    expect(streamed.status).toBe(413);
+    expectOperatorResponse(streamed, 413);
   });
+  it(
+    "rejects an unauthorized dripped request without reading its body",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      let bodyReads = 0;
+      const request = {
+        url: "https://proof.test/internal/tick",
+        method: "POST",
+        headers: new Headers({ authorization: "Bearer wrong" }),
+        get body() {
+          bodyReads += 1;
+          return new ReadableStream({
+            pull() {
+              return new Promise<void>(() => undefined);
+            },
+          });
+        },
+      } as unknown as Request;
+      const response = await Promise.race([
+        worker.fetch(request, { ...config, OPERATOR_BEARER: "x" }, {
+          waitUntil: () => undefined,
+        } as unknown as ExecutionContext),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 25)),
+      ]);
+      expect(response).not.toBe("timeout");
+      expect((response as Response).status).toBe(401);
+      expect((response as Response).headers.get("cache-control")).toBe("no-store");
+      expect(bodyReads).toBe(0);
+    },
+  );
+  it(
+    "times out and cancels an authenticated body without starting provider work",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      let reads = 0;
+      let cancellations = 0;
+      const reader = {
+        read() {
+          reads += 1;
+          return new Promise<ReadableStreamReadResult<Uint8Array>>(() => undefined);
+        },
+        cancel() {
+          cancellations += 1;
+          return new Promise<void>(() => undefined);
+        },
+      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+      const request = {
+        url: "https://proof.test/internal/tick",
+        method: "POST",
+        headers: new Headers({ authorization: "Bearer x" }),
+        body: { getReader: () => reader },
+      } as unknown as Request;
+      const provider = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+      vi.stubGlobal("fetch", provider);
+
+      const response = await handleInternalTick(request, { ...config, OPERATOR_BEARER: "x" }, 25);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(reads).toBe(1);
+      expect(cancellations).toBe(1);
+      expect(provider).not.toHaveBeenCalled();
+    },
+  );
+  it(
+    "does not start a tick when the deadline expires as the body finishes",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      let deadline: () => void = () => undefined;
+      vi.stubGlobal("setTimeout", (callback: TimerHandler) => {
+        deadline = callback as () => void;
+        return 1;
+      });
+      vi.stubGlobal("clearTimeout", () => undefined);
+      const request = {
+        url: "https://proof.test/internal/tick",
+        method: "POST",
+        headers: new Headers({ authorization: "Bearer x" }),
+        body: {
+          getReader: () => ({
+            read: () =>
+              new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+                queueMicrotask(() => {
+                  resolve({ done: true, value: undefined });
+                  queueMicrotask(deadline);
+                });
+              }),
+            cancel: () => Promise.resolve(),
+          }),
+        },
+      } as unknown as Request;
+      const provider = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+      vi.stubGlobal("fetch", provider);
+
+      const response = await handleInternalTick(
+        request,
+        {
+          ...config,
+          POOL_ADDRESS: "0x00000000000000000000000000000000000000A3",
+          OPERATOR_BEARER: "x",
+          PRIMARY_RPC_URL: "https://primary.test",
+          HISTORICAL_RPC_URL: "https://historical.test",
+        },
+        25,
+      );
+
+      expectOperatorResponse(response, 503);
+      expect(provider).not.toHaveBeenCalled();
+    },
+  );
   it(
     "returns the actual post-tick checkpoint without storing the result",
     { timeout: 5000 },
