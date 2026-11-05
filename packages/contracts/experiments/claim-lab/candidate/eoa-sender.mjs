@@ -229,10 +229,14 @@ export class DurableEoaSender {
       );
       if (!sameBytes(hash, intent.signed.hash)) fail("provider returned mismatched hash");
     } catch (error) {
-      await this.journal.recordObservation(intentId, {
-        stage: "broadcast",
-        error: errorText(error),
-      });
+      try {
+        await this.journal.recordObservation(intentId, {
+          stage: "broadcast",
+          error: errorText(error),
+        });
+      } catch {
+        throw error;
+      }
       return { state: "unresolved" };
     }
     return this.reconcile(intentId);

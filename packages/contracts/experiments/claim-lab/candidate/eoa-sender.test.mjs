@@ -399,6 +399,38 @@ test("2 signer lookup and 10 post-attempt deadline changes result in zero signat
   await j2.close();
 });
 
+test("suppression persistence failure preserves the expired permit cause through the sender", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kettigo-eoa-suppression-"));
+  const provider = new FakeProvider();
+  const j = await CandidateRunJournal.open({
+    directory,
+    envelope: ORIGINAL_ENVELOPE,
+    now: () => {
+      const persisted = JSON.parse(readFileSync(join(directory, "journal.json"), "utf8"));
+      const attempt = persisted.intents[0]?.attempts.at(-1);
+      if (attempt?.outcome === "pre-send") {
+        j.failPublish = true;
+        return 1000 + ORIGINAL_ENVELOPE.durationMs;
+      }
+      return 1000;
+    },
+  });
+
+  await assert.rejects(sender(j, provider).submit(request()), /deadline/);
+  assert.equal(provider.sent.length, 0);
+  await assert.rejects(
+    j.recordObservation("eoa-1", { stage: "broadcast", error: "blocked write" }),
+    /uncertain/,
+  );
+  const persisted = JSON.parse(readFileSync(join(directory, "journal.json"), "utf8"));
+  assert.equal(persisted.intents[0].attempts.at(-1).outcome, "pre-send");
+  await j.close();
+
+  const restarted = await CandidateRunJournal.open({ directory, envelope: ORIGINAL_ENVELOPE });
+  assert.equal(restarted.intent("eoa-1").attempts.at(-1).outcome, "pre-send");
+  await restarted.close();
+});
+
 test("positive value cannot bypass the funding cap and USDC commitment is explicit", async () => {
   const provider = new FakeProvider();
   const j = await journal();
