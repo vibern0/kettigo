@@ -15,6 +15,7 @@ import {
   hashTypedData,
   http,
   keccak256,
+  RpcRequestError,
   type Address,
   type Hex,
 } from "viem";
@@ -81,11 +82,24 @@ export class SafeUserOperationRejectedError extends Error {
   }
 }
 
+/** The signed operation is known, but no UserOperation was submitted. */
+export class SafeUserOperationNotSubmittedError extends Error {
+  readonly operation: SafeUserOperationIdentity;
+  constructor(operation: SafeUserOperationIdentity, cause?: unknown) {
+    super("The sponsored transaction was not submitted. Please review and try again.", { cause });
+    this.name = "SafeUserOperationNotSubmittedError";
+    this.operation = operation;
+  }
+}
+
 const SAFE_VERSION = "1.4.1" as const;
 const SAFE_MODULES_VERSION = "0.3.0";
 const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
+const USER_OPERATION_REJECTION_CODES = new Set([
+  -32602, -32500, -32501, -32502, -32503, -32504, -32505, -32507, -32508,
+]);
 const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
 const PASSKEY_DISPATCH_GAS = 100_000n;
 // Sepolia's real P256 assertion needed ~417k for Safe.checkSignatures even
@@ -122,15 +136,39 @@ function sameHash(left: string, right: string) {
   return left.toLowerCase() === right.toLowerCase();
 }
 
-function isBundlerRejection(error: unknown): error is { name: string; code: number } {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { name?: unknown; code?: unknown };
-  return (
-    candidate.name === "RpcRequestError" &&
-    typeof candidate.code === "number" &&
-    candidate.code >= -32508 &&
-    candidate.code <= -32500
-  );
+function submittedRequestMethod(error: RpcRequestError): string | undefined {
+  const request = error.metaMessages?.find((message) => message.startsWith("Request body: "));
+  if (!request) return undefined;
+  try {
+    const body: unknown = JSON.parse(request.slice("Request body: ".length));
+    if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+    const method = (body as { method?: unknown }).method;
+    return typeof method === "string" ? method : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Relay Kit's pinned Safe4337Pack submits through viem with
+ * `eth_sendUserOperation`. Only that authenticated viem request boundary can
+ * prove that an ERC-7769 validation/inclusion response was not accepted.
+ */
+function bundlerRejection(error: unknown): RpcRequestError | undefined {
+  const seen = new Set<object>();
+  let candidate = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (!(candidate instanceof Error) || seen.has(candidate)) return undefined;
+    seen.add(candidate);
+    if (
+      candidate instanceof RpcRequestError &&
+      USER_OPERATION_REJECTION_CODES.has(candidate.code) &&
+      submittedRequestMethod(candidate) === "eth_sendUserOperation"
+    )
+      return candidate;
+    candidate = candidate.cause;
+  }
+  return undefined;
 }
 
 type PasskeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -195,6 +233,8 @@ type PasskeySafeDependencies = {
   ): Promise<Credential>;
   estimateVerifierGas(address: Address): Promise<bigint>;
   sleep(milliseconds: number): Promise<void>;
+  receiptTimeoutMs?: number;
+  receiptPollMs?: number;
 };
 
 type ReceiptWaitOptions = {
@@ -427,7 +467,7 @@ function createSession(
         canonicalReceiptDependencies(relay, deps),
         operation,
       );
-      if (outcome.state !== "pending" && usingCounterfactualRelay) {
+      if (usingCounterfactualRelay) {
         usingCounterfactualRelay = false;
         refreshRequired = true;
       }
@@ -509,9 +549,18 @@ function createSession(
             }
           }
           const signed = normalizePasskeySignature(await signedOperation);
-          const tx = await submitSignedOperation(preparedRelay, signed, deps, diagnostics, options);
-          usingCounterfactualRelay = false;
-          refreshRequired = true;
+          const tx = await submitSignedOperation(
+            preparedRelay,
+            signed,
+            deps,
+            diagnostics,
+            getAddress(metadata.safeAddress),
+            options,
+            () => {
+              usingCounterfactualRelay = false;
+              refreshRequired = true;
+            },
+          );
           return tx;
         },
       };
@@ -528,12 +577,13 @@ function createSession(
         calls,
         deps,
         getAddress(metadata.verifierAddress),
+        getAddress(metadata.safeAddress),
         options,
+        () => {
+          usingCounterfactualRelay = false;
+          refreshRequired = true;
+        },
       );
-      if (usingCounterfactualRelay) {
-        usingCounterfactualRelay = false;
-        refreshRequired = true;
-      }
       return transactionHash;
     },
   };
@@ -544,7 +594,9 @@ async function sendCalls(
   calls: SmartAccountCall[],
   deps: PasskeySafeDependencies,
   verifierAddress: Address,
+  expectedSender: Address,
   options?: SmartTransactionOptions,
+  onAccepted?: () => void,
 ): Promise<Hex> {
   const diagnostics: PasskeyGasDiagnostics = {};
   const operation = await withPasskeyStage(diagnostics, "estimation", () =>
@@ -565,7 +617,15 @@ async function sendCalls(
   const signed = normalizePasskeySignature(
     await withPasskeyStage(diagnostics, "signing", () => relay.signSafeOperation(operation)),
   );
-  return submitSignedOperation(relay, signed, deps, diagnostics, options);
+  return submitSignedOperation(
+    relay,
+    signed,
+    deps,
+    diagnostics,
+    expectedSender,
+    options,
+    onAccepted,
+  );
 }
 
 async function submitSignedOperation(
@@ -573,36 +633,36 @@ async function submitSignedOperation(
   signed: unknown,
   deps: PasskeySafeDependencies,
   diagnostics: PasskeyGasDiagnostics,
+  expectedSender: Address,
   options?: SmartTransactionOptions,
+  onAccepted?: () => void,
 ): Promise<Hex> {
   // Read the final signed gas fields only; never copy identity, calldata,
   // paymaster data, or credential/signature material into diagnostics.
   const operation = signed as SafeOperationLike;
   if (!operation.getUserOperation) throw new Error("Safe did not provide a final UserOperation.");
   const userOperation = operation.getUserOperation();
+  if (!userOperation) throw new Error("Safe did not provide a final UserOperation.");
   const identity = getSafeUserOperationIdentity(userOperation);
-  const gas = userOperation;
-  const fields = {
-    verificationGasLimit: "submittedVerificationGas",
-    callGasLimit: "submittedCallGas",
-    preVerificationGas: "submittedPreVerificationGas",
-    maxFeePerGas: "submittedMaxFeePerGas",
-    maxPriorityFeePerGas: "submittedMaxPriorityFeePerGas",
-  } as const;
-  for (const [field, diagnostic] of Object.entries(fields)) {
-    const value = (gas as Record<string, unknown>)[field];
-    if (typeof value === "bigint") diagnostics[diagnostic] = value.toString();
+  if (identity.sender !== getAddress(expectedSender)) {
+    throw new SafeUserOperationIntegrityError(identity, "The operation is not for this Safe.");
   }
+  recordSubmittedGas(diagnostics, userOperation);
   options?.onSigned?.();
-  await options?.onOperationPrepared?.(identity);
+  try {
+    await awaitSubmissionObserver(options?.onOperationPrepared, identity, deps.receiptTimeoutMs);
+  } catch (error) {
+    throw new SafeUserOperationNotSubmittedError(identity, error);
+  }
   let hash: string;
   try {
     hash = await withPasskeyStage(diagnostics, "submission", () =>
       relay.executeTransaction({ executable: signed }),
     );
   } catch (error) {
-    const wrapped = isBundlerRejection(error)
-      ? new SafeUserOperationRejectedError(identity, error.code, error)
+    const rejection = bundlerRejection(error);
+    const wrapped = rejection
+      ? new SafeUserOperationRejectedError(identity, rejection.code, error)
       : new SafeUserOperationPendingError(identity, error);
     Object.assign(wrapped, {
       passkeyDiagnostics: (error as { passkeyDiagnostics?: unknown }).passkeyDiagnostics,
@@ -615,9 +675,10 @@ async function submitSignedOperation(
       "The relay returned a different operation hash.",
     );
   }
+  onAccepted?.();
   try {
     const outcome = await withPasskeyStage(diagnostics, "receipt", () =>
-      lookupCanonicalUserOperationReceipt(canonicalReceiptDependencies(relay, deps), identity),
+      pollCanonicalUserOperationReceipt(canonicalReceiptDependencies(relay, deps), identity, deps),
     );
     if (outcome.state === "pending") throw new SafeUserOperationPendingError(identity);
     if (outcome.state === "failed")
@@ -631,6 +692,83 @@ async function submitSignedOperation(
       throw error;
     if (error instanceof SafeUserOperationPendingError) throw error;
     throw new SafeUserOperationPendingError(identity, error);
+  }
+}
+
+const submissionTimedOut = Symbol("submission-timed-out");
+
+function recordSubmittedGas(
+  diagnostics: PasskeyGasDiagnostics,
+  operation: UserOperation<"0.7">,
+): void {
+  if (typeof operation.verificationGasLimit === "bigint")
+    diagnostics.submittedVerificationGas = operation.verificationGasLimit.toString();
+  if (typeof operation.callGasLimit === "bigint")
+    diagnostics.submittedCallGas = operation.callGasLimit.toString();
+  if (typeof operation.preVerificationGas === "bigint")
+    diagnostics.submittedPreVerificationGas = operation.preVerificationGas.toString();
+  if (typeof operation.maxFeePerGas === "bigint")
+    diagnostics.submittedMaxFeePerGas = operation.maxFeePerGas.toString();
+  if (typeof operation.maxPriorityFeePerGas === "bigint")
+    diagnostics.submittedMaxPriorityFeePerGas = operation.maxPriorityFeePerGas.toString();
+}
+
+async function withinSubmissionDeadline<T>(
+  callback: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T | typeof submissionTimedOut> {
+  if (timeoutMs <= 0) return submissionTimedOut;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const work = Promise.resolve().then(callback);
+  // A non-cooperative relay or observer can finish after the caller's
+  // deadline; retain its rejection so it never becomes an unhandled error.
+  void work.catch(() => undefined);
+  const timeout = new Promise<typeof submissionTimedOut>((resolve) => {
+    timer = setTimeout(() => resolve(submissionTimedOut), timeoutMs);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function awaitSubmissionObserver(
+  observer: SmartTransactionOptions["onOperationPrepared"],
+  identity: SafeUserOperationIdentity,
+  timeoutMs = DEFAULT_RECEIPT_TIMEOUT_MS,
+): Promise<void> {
+  if (!observer) return;
+  const result = await withinSubmissionDeadline(
+    () => Promise.resolve(observer(identity)),
+    Math.max(0, timeoutMs),
+  );
+  if (result === submissionTimedOut) throw new Error("The transaction review timed out.");
+}
+
+async function pollCanonicalUserOperationReceipt(
+  dependencies: CanonicalReceiptDependencies,
+  identity: SafeUserOperationIdentity,
+  options: Pick<PasskeySafeDependencies, "receiptTimeoutMs" | "receiptPollMs" | "sleep">,
+): Promise<SafeUserOperationReceipt> {
+  const timeoutMs = Math.max(0, options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS);
+  const pollMs = Math.max(0, options.receiptPollMs ?? DEFAULT_RECEIPT_POLL_MS);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const remainingForLookup = deadline - Date.now();
+    if (remainingForLookup <= 0) return Object.freeze({ state: "pending", operation: identity });
+    const outcome = await lookupCanonicalUserOperationReceipt(dependencies, identity, {
+      timeoutMs: remainingForLookup,
+    });
+    if (outcome.state !== "pending") return outcome;
+    const remainingForSleep = deadline - Date.now();
+    if (remainingForSleep <= 0) return outcome;
+    const sleep = await withinSubmissionDeadline(
+      () => options.sleep(Math.min(pollMs, remainingForSleep)),
+      remainingForSleep,
+    );
+    if (sleep === submissionTimedOut)
+      return Object.freeze({ state: "pending", operation: identity });
   }
 }
 

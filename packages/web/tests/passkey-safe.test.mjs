@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { EthSafeSignature } from "@safe-global/protocol-kit";
 import { PimlicoFeeEstimator } from "@safe-global/relay-kit";
-import { encodeAbiParameters, encodeEventTopics, getAddress, hashTypedData } from "viem";
+import {
+  encodeAbiParameters,
+  encodeEventTopics,
+  getAddress,
+  hashTypedData,
+  RpcRequestError,
+} from "viem";
 import { entryPoint07Abi, entryPoint07Address } from "viem/account-abstraction";
 
 import {
@@ -12,6 +19,9 @@ import {
   createPasskeyAccount,
   getSafeUserOperationIdentity,
   restorePasskeyAccount,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
+  SafeUserOperationRejectedError,
   signSafeTypedData,
   waitForUserOperationTransaction,
 } from "../src/lib/passkey-safe.ts";
@@ -547,7 +557,7 @@ test("reports signing before submission and receipt polling finish", async () =>
       signed = true;
     },
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await delay(0);
   assert.equal(signed, true);
   release();
   assert.equal(await pending, `0x${"44".repeat(32)}`);
@@ -587,12 +597,14 @@ test("does not hand off or submit when signing is cancelled", async () => {
 test("reconnects through the deployed Safe after the first mined action", async () => {
   const storage = createStorage();
   const initOptions = [];
-  const callCounts = [0, 0];
+  let firstRelayCalls = 0;
+  let secondRelayCalls = 0;
   const relays = [relay(), relay()];
   for (const [index, instance] of relays.entries()) {
     const original = instance.createTransaction;
     instance.createTransaction = async (...args) => {
-      callCounts[index] += 1;
+      if (index === 0) firstRelayCalls += 1;
+      else secondRelayCalls += 1;
       return original(...args);
     };
   }
@@ -617,7 +629,7 @@ test("reconnects through the deployed Safe after the first mined action", async 
     initOptions[1].customContracts.safeWebAuthnSharedSignerAddress,
     SHARED_SIGNER_ADDRESS,
   );
-  assert.deepEqual(callCounts, [1, 1]);
+  assert.deepEqual([firstRelayCalls, secondRelayCalls], [1, 1]);
 });
 
 test("returns a mined transaction and retries a failed relay refresh before the next action", async () => {
@@ -1146,4 +1158,251 @@ test("a Safe preflight failure is returned during review before any passkey prom
     session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
     /RPC unavailable/,
   );
+});
+
+test("binds the final operation sender before observing or submitting", async () => {
+  const events = [];
+  const instance = relay();
+  instance.signSafeOperation = async () => ({
+    getUserOperation() {
+      return finalUserOperation(getAddress("0x00000000000000000000000000000000000000cc"));
+    },
+  });
+  instance.executeTransaction = async () => {
+    events.push("send");
+    return "0x";
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
+      onOperationPrepared() {
+        events.push("observe");
+      },
+    }),
+    /not for this Safe/i,
+  );
+  assert.deepEqual(events, []);
+});
+
+test("awaits the frozen observer before one submission and stops on observer failure", async () => {
+  const instance = relay();
+  const events = [];
+  const hash = getSafeUserOperationIdentity(finalUserOperation()).userOperationHash;
+  instance.executeTransaction = async () => {
+    events.push("send");
+    return hash;
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
+      async onOperationPrepared(identity) {
+        events.push("observe");
+        assert.equal(Object.isFrozen(identity), true);
+        throw new Error("observer unavailable");
+      },
+    }),
+    (error) =>
+      error instanceof SafeUserOperationNotSubmittedError &&
+      error.operation.userOperationHash === hash,
+  );
+  assert.deepEqual(events, ["observe"]);
+});
+
+test("uses only a genuine eth_sendUserOperation RpcRequestError as a definitive rejection", async () => {
+  const hash = getSafeUserOperationIdentity(finalUserOperation()).userOperationHash;
+  const cases = [
+    {
+      name: "genuine submission rejection",
+      error: new RpcRequestError({
+        body: { method: "eth_sendUserOperation", params: [] },
+        error: { code: -32500, message: "validation failed" },
+        url: "https://bundler.invalid",
+      }),
+      expected: SafeUserOperationRejectedError,
+    },
+    {
+      name: "lookalike rejection",
+      error: { name: "RpcRequestError", code: -32500, message: "validation failed" },
+      expected: SafeUserOperationPendingError,
+    },
+    {
+      name: "unrelated rpc method",
+      error: new RpcRequestError({
+        body: { method: "eth_getBalance", params: [] },
+        error: { code: -32500, message: "validation failed" },
+        url: "https://bundler.invalid",
+      }),
+      expected: SafeUserOperationPendingError,
+    },
+  ];
+  for (const scenario of cases) {
+    const instance = relay();
+    instance.executeTransaction = async () => {
+      throw scenario.error;
+    };
+    const session = await createPasskeyAccount(
+      { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+      dependencies({
+        async initRelay() {
+          return instance;
+        },
+      }),
+    );
+    await assert.rejects(
+      session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+      (error) => error instanceof scenario.expected && error.operation.userOperationHash === hash,
+      scenario.name,
+    );
+  }
+});
+
+test("polls the expected submitted hash until canonical confirmation", async () => {
+  const instance = relay();
+  const expectedHash = getSafeUserOperationIdentity(finalUserOperation()).userOperationHash;
+  const events = [];
+  let receipts = 0;
+  instance.executeTransaction = async () => {
+    events.push("send");
+    return expectedHash;
+  };
+  instance.getUserOperationReceipt = async (hash) => {
+    events.push(`read:${hash}`);
+    receipts += 1;
+    return receipts === 1
+      ? null
+      : {
+          success: true,
+          userOpHash: expectedHash,
+          sender: SAFE_ADDRESS,
+          receipt: { transactionHash: `0x${"44".repeat(32)}` },
+        };
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      receiptTimeoutMs: 50,
+      receiptPollMs: 0,
+      async sleep() {
+        events.push("sleep");
+      },
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+  assert.equal(
+    await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    `0x${"44".repeat(32)}`,
+  );
+  assert.deepEqual(events, ["send", `read:${expectedHash}`, "sleep", `read:${expectedHash}`]);
+});
+
+test("does not poll a returned hash that differs from the signed operation", async () => {
+  const instance = relay();
+  let receiptReads = 0;
+  instance.executeTransaction = async () => `0x${"99".repeat(32)}`;
+  instance.getUserOperationReceipt = async () => {
+    receiptReads += 1;
+    return null;
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    /different operation hash/i,
+  );
+  assert.equal(receiptReads, 0);
+});
+
+test("bounds a non-cooperative polling sleep and preserves the submitted identity", async () => {
+  const instance = relay();
+  const expectedHash = getSafeUserOperationIdentity(finalUserOperation()).userOperationHash;
+  let receiptReads = 0;
+  instance.executeTransaction = async () => expectedHash;
+  instance.getUserOperationReceipt = async () => {
+    receiptReads += 1;
+    return null;
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      receiptTimeoutMs: 15,
+      receiptPollMs: 0,
+      sleep: () => new Promise(() => {}),
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    (error) =>
+      error instanceof SafeUserOperationPendingError &&
+      error.operation.userOperationHash === expectedHash,
+  );
+  assert.equal(receiptReads, 1);
+});
+
+test("a restored counterfactual lookup refreshes the relay without signing or sending", async () => {
+  const metadata = {
+    rawId: RAW_ID,
+    coordinates: COORDINATES,
+    verifierAddress: VERIFIER_ADDRESS,
+    safeAddress: SAFE_ADDRESS,
+  };
+  const firstRelay = relay();
+  const refreshedRelay = relay();
+  let initialCreates = 0;
+  let sends = 0;
+  let initCount = 0;
+  firstRelay.createTransaction = async () => {
+    initialCreates += 1;
+    return relay().createTransaction();
+  };
+  firstRelay.executeTransaction = async () => {
+    sends += 1;
+    return "0x";
+  };
+  const session = await restorePasskeyAccount(
+    { metadata, rpId: "app.kettigo.xyz" },
+    dependencies({
+      async getCode() {
+        return "0x";
+      },
+      async initRelay(options) {
+        initCount += 1;
+        if (initCount === 1) return firstRelay;
+        assert.equal(options.options.safeAddress, SAFE_ADDRESS);
+        return refreshedRelay;
+      },
+    }),
+  );
+  const operation = getSafeUserOperationIdentity(finalUserOperation());
+  assert.equal((await session.lookupUserOperation(operation)).state, "confirmed");
+  assert.equal(initialCreates, 0);
+  assert.equal(sends, 0);
+  await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+  assert.equal(initCount, 2);
 });
