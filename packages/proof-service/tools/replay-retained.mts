@@ -283,7 +283,7 @@ function validate(exported: Retained, trusted: Manifest, supplied: Namespace) {
   )
     throw new Error("retained checkpoint mismatch");
 }
-function migrate(path: string) {
+export function migrate(path: string) {
   const db = new DatabaseSync(path);
   for (const name of ["0001_proof_archive.sql", "0002_checkpoint_state.sql"])
     db.exec(readFileSync(new URL(name, migrations), "utf8"));

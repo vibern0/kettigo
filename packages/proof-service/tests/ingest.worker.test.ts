@@ -4,7 +4,7 @@ import { D1Archive, type BlockHeader, type Checkpoint } from "../src/archive.ts"
 import { ingestOneSlice, type RpcSource } from "../src/ingest.ts";
 import { branchHash, leafHash, type ArchiveLog, type Namespace } from "../src/domain.ts";
 import { FallbackRpc } from "../src/rpc.ts";
-import { drainScheduledSlices } from "../src/worker.ts";
+import { drainScheduledSlices, initializeArchiveForTick } from "../src/worker.ts";
 
 const zero = `0x${"00".repeat(32)}`;
 const env = workerEnv as unknown as { PROOF_DB: D1Database };
@@ -79,6 +79,26 @@ class FixtureRpc implements RpcSource {
 }
 
 describe("finalized RPC ingestion", () => {
+  it("repairs a legacy interrupted scheduler initialization through its scheduler path", async () => {
+    expect.hasAssertions();
+    const n = namespace();
+    const parent = header(0, "a");
+    const archive = new D1Archive(env.PROOF_DB);
+    // Exact old interruption shape: namespace and state existed, but no parent anchor.
+    await env.PROOF_DB
+      .prepare("INSERT INTO namespaces VALUES(?,?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock)
+      .run();
+    await env.PROOF_DB
+      .prepare("INSERT INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
+      .bind(n.chainId, n.pool, n.deploymentBlock, 0, parent.hash, 0, null, new Date().toISOString())
+      .run();
+
+    await initializeArchiveForTick(archive, n, new FixtureRpc([parent], [], n));
+
+    expect(await archive.canonicalBlock(n, 0)).toEqual(parent);
+    expect(await archive.status(n)).toMatchObject({ nextBlock: 1, lastFinalizedHash: parent.hash });
+  });
   it(
     "drains five finalized empty blocks per scheduled minute without exceeding three two-block slices",
     { timeout: 5000 },

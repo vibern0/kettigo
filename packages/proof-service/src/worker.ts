@@ -114,6 +114,36 @@ export async function drainScheduledSlices(
   return state;
 }
 
+/** Scheduler-only initialization keeps the deployment parent anchor recoverable across restarts. */
+export async function initializeArchiveForTick(
+  archive: D1Archive,
+  namespace: ReturnType<typeof validateNamespace>,
+  source: RpcSource,
+  signal?: AbortSignal,
+) {
+  const status = await archive.status(namespace).catch(() => undefined);
+  if (status) {
+    await archive.assertNamespace(namespace);
+    const savedAnchor = await archive.canonicalBlock(namespace, namespace.deploymentBlock - 1);
+    if (savedAnchor) return;
+    // A pre-atomic deployment can have committed state but not its parent anchor.
+    if (status.nextBlock !== namespace.deploymentBlock)
+      throw new Error("initialized archive missing deployment parent anchor");
+    if (namespace.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
+    const anchor = await source.block(namespace.deploymentBlock - 1, signal);
+    if (anchor.number !== namespace.deploymentBlock - 1 || anchor.hash !== status.lastFinalizedHash)
+      throw new Error("deployment parent anchor mismatch");
+    throwIfAborted(signal);
+    await archive.initialize(namespace, anchor.hash);
+    return;
+  }
+  if (namespace.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
+  const anchor = await source.block(namespace.deploymentBlock - 1, signal);
+  if (anchor.number !== namespace.deploymentBlock - 1) throw new Error("deployment parent block mismatch");
+  throwIfAborted(signal);
+  await archive.initialize(namespace, anchor.hash);
+}
+
 function operatorResponse(status: number, headers?: HeadersInit) {
   return new Response(null, { status, headers: { "cache-control": "no-store", ...headers } });
 }
@@ -176,13 +206,7 @@ async function tick(env: Env, signal?: AbortSignal) {
   // Initialization belongs to the scheduler path; it never relies on a client GET.
   const rpc = createRpc(env.PRIMARY_RPC_URL, env.HISTORICAL_RPC_URL, n, c);
   return rpc.withSource(async (source) => {
-    const status = await archive.status(n).catch(() => undefined);
-    if (!status) {
-      if (n.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
-      const anchor = await source.block(n.deploymentBlock - 1, signal);
-      throwIfAborted(signal);
-      await archive.initialize(n, anchor.hash);
-    } else await archive.assertNamespace(n);
+    await initializeArchiveForTick(archive, n, source, signal);
     throwIfAborted(signal);
     return drainScheduledSlices(
       archive,

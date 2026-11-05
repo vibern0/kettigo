@@ -55,20 +55,21 @@ export class D1Archive {
   async initialize(namespace: Namespace, deploymentParentHash = ZERO_HASH): Promise<void> {
     const n = validateNamespace(namespace);
     const anchor = hash32(deploymentParentHash, "deployment parent hash");
-    await this.db
-      .prepare("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,?,?,?)")
-      .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock)
-      .run();
+    // Namespace, checkpoint, and parent anchor must appear together. A scheduler interruption
+    // between individual inserts used to leave a namespace that could never establish its anchor.
+    await this.db.batch([
+      this.db
+        .prepare("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,?,?,?)")
+        .bind(n.chainId, n.pool, n.depth, n.zero, JSON.stringify(n.emptyHashes), n.deploymentBlock),
+      this.db
+        .prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
+        .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, anchor, 0, null, now()),
+      // A rollback to deployment uses this durable anchor instead of guessing zero.
+      this.db
+        .prepare("INSERT OR IGNORE INTO canonical_blocks VALUES(?,?,?,?,?)")
+        .bind(n.chainId, n.pool, n.deploymentBlock - 1, anchor, ZERO_HASH),
+    ]);
     await this.assertNamespace(n);
-    await this.db
-      .prepare("INSERT OR IGNORE INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)")
-      .bind(n.chainId, n.pool, n.deploymentBlock, n.deploymentBlock - 1, anchor, 0, null, now())
-      .run();
-    // A rollback to deployment uses this durable anchor instead of guessing zero.
-    await this.db
-      .prepare("INSERT OR IGNORE INTO canonical_blocks VALUES(?,?,?,?,?)")
-      .bind(n.chainId, n.pool, n.deploymentBlock - 1, anchor, ZERO_HASH)
-      .run();
     const initial = await this.status(n);
     if (initial.nextBlock === n.deploymentBlock && initial.lastFinalizedHash !== anchor)
       throw new Error("deployment parent anchor mismatch");
