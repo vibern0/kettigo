@@ -431,3 +431,91 @@ test("dismissing an unused balance-access Ready preserves pending participation 
   expect(newSend).toHaveBeenCalledTimes(1);
   expect(oldSend).not.toHaveBeenCalled();
 });
+
+test("closing a financial sheet does not discard an initial pending status read", async () => {
+  let resolveMember!: (value: bigint) => void;
+  let resolvePending!: (value: ReturnType<typeof pending>) => void;
+  fixture.version = "2";
+  fixture.walletBalance = 100_000_000n;
+  fixture.reads.mockImplementation(({ functionName }: { functionName: string }) => {
+    if (functionName === "membershipIndexOf") {
+      return new Promise<bigint>((resolve) => {
+        resolveMember = resolve;
+      });
+    }
+    if (functionName === "pendingAdmissionOf") {
+      return new Promise<ReturnType<typeof pending>>((resolve) => {
+        resolvePending = resolve;
+      });
+    }
+    if (functionName === "balanceOf") return fixture.walletBalance;
+    return 0n;
+  });
+
+  mount();
+  await waitFor(() =>
+    expect(
+      fixture.reads.mock.calls.filter(([call]) =>
+        ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
+      ),
+    ).toHaveLength(2),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Close deposit sheet" }).at(-1)!);
+  expect(fixture.send).not.toHaveBeenCalled();
+  resolveMember(0n);
+  resolvePending(pending());
+
+  await screen.findByRole("button", { name: "Review participation" });
+  expect(fixture.send).not.toHaveBeenCalled();
+});
+
+test("a stale initial no-pending status result cannot replace a newer deposit refresh", async () => {
+  let resolveInitialMember!: (value: bigint) => void;
+  let resolveInitialPending!: (value: ReturnType<typeof pending>) => void;
+  let membershipReads = 0;
+  let pendingReads = 0;
+  fixture.version = "2";
+  fixture.walletBalance = 100_000_000n;
+  fixture.reads.mockImplementation(({ functionName }: { functionName: string }) => {
+    if (functionName === "membershipIndexOf") {
+      membershipReads += 1;
+      if (membershipReads === 1) {
+        return new Promise<bigint>((resolve) => {
+          resolveInitialMember = resolve;
+        });
+      }
+      return 0n;
+    }
+    if (functionName === "pendingAdmissionOf") {
+      pendingReads += 1;
+      if (pendingReads === 1) {
+        return new Promise<ReturnType<typeof pending>>((resolve) => {
+          resolveInitialPending = resolve;
+        });
+      }
+      return pending();
+    }
+    if (functionName === "balanceOf") return fixture.walletBalance;
+    return 0n;
+  });
+  fixture.send.mockImplementation(async ({ onSigned }: { onSigned?: () => void } = {}) => {
+    onSigned?.();
+    return "0xdead";
+  });
+
+  mount();
+  await waitFor(() => expect(membershipReads).toBe(1));
+  await waitFor(() => expect(pendingReads).toBe(1));
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await screen.findByRole("button", { name: "Review participation" });
+  resolveInitialMember(0n);
+  resolveInitialPending(pending(false));
+  await new Promise((done) => setTimeout(done, 0));
+
+  expect(screen.getByRole("button", { name: "Review participation" })).toBeTruthy();
+  expect(fixture.send).toHaveBeenCalledTimes(1);
+});

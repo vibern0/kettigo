@@ -77,11 +77,12 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     const [unresolved, setUnresolved] = useState(false);
     const [finalizedPending, setFinalizedPending] = useState<PendingAdmission>();
     const abortRef = useRef<AbortController>();
-    const epoch = useRef(0);
+    const reviewEpoch = useRef(0);
+    const statusEpoch = useRef(0);
     const enabled = hydrated && poolVersion() && Boolean(account && pool && session);
 
     const cancel = () => {
-      epoch.current += 1;
+      reviewEpoch.current += 1;
       abortRef.current?.abort();
       abortRef.current = undefined;
       ready?.admission.cancel();
@@ -91,7 +92,8 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
     useEffect(() => setHydrated(true), []);
     useEffect(
       () => () => {
-        epoch.current += 1;
+        reviewEpoch.current += 1;
+        statusEpoch.current += 1;
         abortRef.current?.abort();
         ready?.admission.cancel();
       },
@@ -103,7 +105,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
       if (!account || !pool || !poolVersion()) return;
       const selectedAccount = getAddress(account);
       const selectedPool = getAddress(pool);
-      const request = epoch.current;
+      const request = ++statusEpoch.current;
       setUnresolved(false);
       try {
         const [nextMember, nextPending] = await Promise.all([
@@ -120,7 +122,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
             args: [selectedAccount],
           }),
         ]);
-        if (request !== epoch.current) return;
+        if (request !== statusEpoch.current) return;
         const currentPending = copyPending(nextPending);
         if (finalizedPending && samePending(finalizedPending, currentPending)) {
           setMember(nextMember);
@@ -132,7 +134,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
         setPending(currentPending);
         setFinalizedPending(undefined);
       } catch {
-        if (request === epoch.current) setUnresolved(true);
+        if (request === statusEpoch.current) setUnresolved(true);
       }
     };
 
@@ -147,7 +149,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
       if (!account || !pool || !session) return;
       onReviewStart();
       cancel();
-      const request = ++epoch.current;
+      const request = ++reviewEpoch.current;
       const controller = new AbortController();
       abortRef.current = controller;
       setBusy(true);
@@ -197,22 +199,22 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
         });
         const review = await coordinator.review(controller.signal);
         if (!review.positive) {
-          if (request === epoch.current)
+          if (request === reviewEpoch.current)
             toast({ tone: "error", title: "No savings are ready to add yet." });
           return;
         }
         const nextReady = await coordinator.prepare(review, controller.signal);
-        if (request !== epoch.current || controller.signal.aborted) {
+        if (request !== reviewEpoch.current || controller.signal.aborted) {
           nextReady.cancel();
           return;
         }
         setReady({ admission: nextReady, preparedAt: Date.now() });
       } catch (error) {
-        if (!controller.signal.aborted && request === epoch.current) {
+        if (!controller.signal.aborted && request === reviewEpoch.current) {
           toast({ tone: "error", title: "Please review your savings again." });
         }
       } finally {
-        if (request === epoch.current) setBusy(false);
+        if (request === reviewEpoch.current) setBusy(false);
       }
     };
 
