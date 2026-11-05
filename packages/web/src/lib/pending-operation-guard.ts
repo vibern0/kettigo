@@ -236,19 +236,40 @@ export function createPendingOperationManager(
     let released = false;
     let active = false;
     let expired = false;
+    let poisoned: PendingOperationRecoveryBlockedError | undefined;
     let releaseHold!: () => void;
     let requestDone: Promise<unknown> = Promise.resolve();
     const hold = new Promise<void>((resolve) => {
       releaseHold = resolve;
     });
+    const assertOwned = (): void => {
+      if (poisoned) throw poisoned;
+      if (!active) blocked("This operation lease is no longer active.");
+    };
+    const persistOrPoison = (record: PendingOperationRecord | null): void => {
+      try {
+        persist(record);
+      } catch (error) {
+        poisoned ??=
+          error instanceof PendingOperationRecoveryBlockedError
+            ? error
+            : new PendingOperationRecoveryBlockedError(
+                "Operation storage could not be written.",
+                undefined,
+                error,
+              );
+        active = false;
+        throw poisoned;
+      }
+    };
     const makeLease = (): PendingOperationLease =>
       Object.freeze({
         readCurrent: read,
         assertActive: () => {
-          if (!active) blocked("This operation lease is no longer active.");
+          assertOwned();
         },
         stagePrepared: (value) => {
-          if (!active) blocked("This operation lease is no longer active.");
+          assertOwned();
           const identity = normalizeIdentity(value, sender);
           const existing = read();
           if (existing && !sameIdentity(existing, identity))
@@ -263,25 +284,25 @@ export function createPendingOperationManager(
             createdAt,
             phase: "prepared" as const,
           });
-          persist(record);
+          persistOrPoison(record);
           return record;
         },
         markAttempted: (value) => {
-          if (!active) blocked("This operation lease is no longer active.");
+          assertOwned();
           const identity = normalizeIdentity(value, sender);
           const existing = read();
           if (!existing || !sameIdentity(existing, identity) || existing.phase !== "prepared")
             throw new PendingOperationRecoveryBlockedError(undefined, existing ?? undefined);
           const record = freeze({ ...existing, phase: "attempted" as const });
-          persist(record);
+          persistOrPoison(record);
           return record;
         },
         clearMatching: (value) => {
-          if (!active) blocked("This operation lease is no longer active.");
+          assertOwned();
           const existing = read();
           const identity = normalizeIdentity(value, sender);
           if (!existing || !sameIdentity(existing, identity)) return false;
-          persist(null);
+          persistOrPoison(null);
           return true;
         },
         release: async () => {

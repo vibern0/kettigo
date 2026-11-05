@@ -168,6 +168,59 @@ test("storage failures and readback mutations fail closed before records become 
   await anotherLease.release();
 });
 
+test("a failed verification permanently revokes its lease without hiding the prepared record", async () => {
+  let raw = null;
+  let obscureNextRead = false;
+  let writes = 0;
+  let removals = 0;
+  const storage = {
+    getItem: () => {
+      if (obscureNextRead) {
+        obscureNextRead = false;
+        return "{}";
+      }
+      return raw;
+    },
+    setItem: (_key, value) => {
+      raw = value;
+      writes += 1;
+      obscureNextRead = true;
+    },
+    removeItem: () => {
+      removals += 1;
+      raw = null;
+    },
+  };
+  const subject = manager(storage);
+  const lease = await subject.acquireReview();
+  let failure;
+  assert.throws(
+    () => lease.stagePrepared(identity()),
+    (error) => {
+      failure = error;
+      return error instanceof PendingOperationRecoveryBlockedError;
+    },
+  );
+  assert.equal(subject.readCurrent().phase, "prepared");
+  assert.throws(
+    () => lease.assertActive(),
+    (error) => error === failure,
+  );
+  assert.throws(
+    () => lease.markAttempted(identity()),
+    (error) => error === failure,
+  );
+  assert.throws(
+    () => lease.clearMatching(identity()),
+    (error) => error === failure,
+  );
+  assert.equal(writes, 1);
+  assert.equal(removals, 0);
+  assert.equal(subject.readCurrent().phase, "prepared");
+  await lease.release();
+  await lease.release();
+});
+
 test("missing, rejected, and delayed lock acquisition never yields a usable late lease", async () => {
   const storage = new SharedStorage();
   await assert.rejects(
