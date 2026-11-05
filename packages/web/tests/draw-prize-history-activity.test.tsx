@@ -296,6 +296,39 @@ test("renders the immutable recovered award without a fresh prize check", async 
   expect(fixture.prepare).not.toHaveBeenCalled();
 });
 
+test("a matching completed Activity record rereads the selected immutable award", async () => {
+  const intent = savedIntent();
+  window.localStorage.setItem(
+    "kettigo:actions",
+    JSON.stringify([
+      {
+        id: "completed-check",
+        label: "Check prize",
+        type: "check",
+        status: "completed",
+        operation: intent.operation,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]),
+  );
+  const reconcile = vi
+    .fn()
+    .mockResolvedValueOnce({ state: "pending", operation: intent.operation })
+    .mockResolvedValueOnce({ state: "checked", drawId: 12n, award: fixture.award });
+  fixture.coordinator.mockReturnValue({
+    pending: () => intent,
+    reconcile,
+    review: vi.fn(),
+    prepare: fixture.prepare,
+  });
+  mount();
+  await viewRound();
+  expect(await screen.findByText("Result checked")).toBeTruthy();
+  expect(reconcile).toHaveBeenCalledTimes(2);
+  expect(fixture.prepare).not.toHaveBeenCalled();
+});
+
 test.each([
   ["rejected", "This check was not approved.", false],
   ["not-submitted", "This check was not sent.", true],
