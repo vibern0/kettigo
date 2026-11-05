@@ -288,7 +288,7 @@ test("rejects every exact policy-record corruption on restart", async () => {
   }
 });
 
-test("rejects wrong fixed capability fields and adapter capability removal after reservation", async () => {
+test("rejects wrong fixed capability fields and adapter identity", async () => {
   const journal = await createJournal();
   const state = journal.snapshot();
   const approval = {
@@ -323,6 +323,12 @@ test("rejects wrong fixed capability fields and adapter capability removal after
     }),
     /policy/,
   );
+  await journal.close();
+});
+
+test("rejects adapter capability removal after reservation", async () => {
+  const journal = await createJournal();
+  const policy = policyFor(journal);
   const fence = adapter(journal, { policy });
   const reservation = await fence.reserve({
     intentId: "remove-adapter-policy",

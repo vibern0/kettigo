@@ -30,8 +30,7 @@ function caps(value) {
   });
 }
 
-/** Builds an inactive, operator-injected Safe-only policy capability. */
-export function createSafePolicyCapability({ approval, journal, expected, now = Date.now } = {}) {
+function validateApprovalReferenceAndExpiry(approval, now) {
   if (
     !approval ||
     Object.keys(approval).length !== 4 ||
@@ -41,6 +40,9 @@ export function createSafePolicyCapability({ approval, journal, expected, now = 
     fail("invalid approval reference");
   if (!Number.isSafeInteger(approval.expiresAt) || now() >= approval.expiresAt)
     fail("approval expired");
+}
+
+function validateJournalRunBinding(journal, approval) {
   if (
     !journal ||
     typeof journal.runId !== "string" ||
@@ -56,9 +58,15 @@ export function createSafePolicyCapability({ approval, journal, expected, now = 
     approval.binding.baseEnvelopeIdentity !== journal.envelopeIdentity
   )
     fail("wrong run binding");
+}
+
+function validateFixedSafeExpectation(expected) {
   if (expected?.chainId !== 11155111 || (expected?.durationMs ?? 7_200_000) !== 7_200_000)
     fail("invalid fixed chain or duration");
-  const capability = {
+}
+
+function buildSafePolicyRecord({ approval, journal, expected }) {
+  return {
     runId: journal.runId,
     baseEnvelopeIdentity: journal.envelopeIdentity,
     safe: address(expected.safe, "Safe"),
@@ -69,8 +77,19 @@ export function createSafePolicyCapability({ approval, journal, expected, now = 
     expiresAt: approval.expiresAt,
     caps: caps(approval.caps),
   };
-  capability.policyIdentity = createHash("sha256").update(canonical(capability)).digest("hex");
-  return Object.freeze(capability);
+}
+
+function policyIdentity(record) {
+  return createHash("sha256").update(canonical(record)).digest("hex");
+}
+
+/** Builds an inactive, operator-injected Safe-only policy capability. */
+export function createSafePolicyCapability({ approval, journal, expected, now = Date.now } = {}) {
+  validateApprovalReferenceAndExpiry(approval, now);
+  validateJournalRunBinding(journal, approval);
+  validateFixedSafeExpectation(expected);
+  const capability = buildSafePolicyRecord({ approval, journal, expected });
+  return Object.freeze({ ...capability, policyIdentity: policyIdentity(capability) });
 }
 
 export function persistedSafePolicy(capability) {
