@@ -235,6 +235,49 @@ test("rejects authoritative contradictory or malformed EntryPoint events", async
   }
 });
 
+test("rejects supplied malformed location metadata on an authoritative event", async () => {
+  for (const location of [{ transactionHash: "" }, { blockHash: "0x1234" }]) {
+    const { dependencies: rpc } = dependencies({
+      async getTransactionReceipt() {
+        return {
+          transactionHash: TRANSACTION_HASH,
+          status: "success",
+          blockHash: BLOCK_HASH,
+          blockNumber: 42n,
+          logs: [{ ...userOperationLog(), ...location }],
+        };
+      },
+    });
+    const result = await outcome(() => lookupCanonicalUserOperationReceipt(rpc, operation));
+    assert.ok(result.error instanceof SafeUserOperationIntegrityError, JSON.stringify(location));
+  }
+});
+
+test("rejects malformed outer receipt status and canonical block shapes", async () => {
+  const cases = [
+    {
+      name: "unknown receipt status",
+      getTransactionReceipt: async () => ({
+        transactionHash: TRANSACTION_HASH,
+        status: "unknown",
+        blockHash: BLOCK_HASH,
+        blockNumber: 42n,
+        logs: [],
+      }),
+    },
+    {
+      name: "block number has the wrong type",
+      getBlock: async () => ({ hash: BLOCK_HASH, number: "42" }),
+    },
+    { name: "block hash is missing", getBlock: async () => ({ number: 42n }) },
+  ];
+  for (const testCase of cases) {
+    const { dependencies: rpc } = dependencies(testCase);
+    const result = await outcome(() => lookupCanonicalUserOperationReceipt(rpc, operation));
+    assert.ok(result.error instanceof SafeUserOperationIntegrityError, testCase.name);
+  }
+});
+
 test("returns pending after the shared deadline without advancing to later RPC stages", async () => {
   const never = () => new Promise(() => {});
   const { dependencies: rpc, calls } = dependencies({ getUserOperationReceipt: never });

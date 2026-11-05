@@ -197,7 +197,7 @@ function validateEventLocation(
   blockNumber: bigint,
 ): void {
   if (
-    log.transactionHash &&
+    log.transactionHash !== undefined &&
     !sameHex(
       hash(log.transactionHash, operation, "The operation event has an invalid transaction hash."),
       transactionHash,
@@ -205,7 +205,7 @@ function validateEventLocation(
   )
     integrity(operation, "The operation event has a different transaction hash.");
   if (
-    log.blockHash &&
+    log.blockHash !== undefined &&
     !sameHex(
       hash(log.blockHash, operation, "The operation event has an invalid block hash."),
       blockHash,
@@ -279,7 +279,9 @@ function validateReceipt(
     )
   )
     integrity(operation, "The chain returned a different transaction hash.");
-  if (receipt.status !== "success") return undefined;
+  if (receipt.status === "reverted") return undefined;
+  if (receipt.status !== "success")
+    integrity(operation, "The chain returned an invalid transaction receipt status.");
   const blockHash = hash(receipt.blockHash, operation, "The chain returned an invalid block hash.");
   if (
     typeof receipt.blockNumber !== "bigint" ||
@@ -295,9 +297,10 @@ function canonicalBlock(
   blockHash: Hex,
   operation: SafeUserOperationIdentity,
 ): boolean {
+  if (block === timedOut || block === null) return false;
+  if (typeof block !== "object" || typeof block.number !== "bigint")
+    integrity(operation, "The chain returned an invalid canonical block.");
   return (
-    block !== timedOut &&
-    block !== null &&
     block.number === receipt.blockNumber &&
     sameHex(hash(block.hash, operation, "The chain returned an invalid block hash."), blockHash)
   );
