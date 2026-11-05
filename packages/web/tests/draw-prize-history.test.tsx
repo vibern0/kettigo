@@ -14,6 +14,8 @@ const fixture = vi.hoisted(() => {
     listDraws: vi.fn(),
     proofFactory: vi.fn(),
     readerFactory: vi.fn(),
+    coordinator: vi.fn(),
+    intentStore: vi.fn(),
     decryptExisting: vi.fn(),
     refresh: vi.fn(),
     session: { address: account, prepareTransaction: vi.fn(), sendTransaction: vi.fn() },
@@ -58,8 +60,18 @@ vi.mock("@/lib/zama", async () => ({
   isZeroEncryptedHandle: (value: string) => value === `0x${"0".repeat(64)}`,
 }));
 vi.mock("@/lib/prize-check-coordinator", () => ({
+  createPrizeCheckCoordinator: fixture.coordinator,
+  createPrizeCheckIntentStore: fixture.intentStore,
   createViemPrizeChainReader: fixture.readerFactory,
   createViemPrizeProofClient: fixture.proofFactory,
+}));
+vi.mock("@/components/ActionCenter", () => ({
+  useActionCenter: () => ({
+    runAction: (_input: unknown, runner: (controls: { update: () => void }) => Promise<void>) => {
+      void runner({ update() {} });
+      return "check";
+    },
+  }),
 }));
 vi.mock("@/lib/morpho-yield", () => ({
   createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
@@ -85,6 +97,8 @@ beforeEach(() => {
   fixture.listDraws.mockReset();
   fixture.proofFactory.mockReset();
   fixture.readerFactory.mockReset();
+  fixture.coordinator.mockReset();
+  fixture.intentStore.mockReset();
   fixture.decryptExisting.mockReset();
   fixture.refresh.mockReset();
   fixture.readerFactory.mockReturnValue({
@@ -188,6 +202,65 @@ test("shows a requested checked round without an archive client", async () => {
   expect(fixture.decryptExisting).toHaveBeenCalledTimes(1);
   expect(fixture.session.prepareTransaction).not.toHaveBeenCalled();
   expect(fixture.session.sendTransaction).not.toHaveBeenCalled();
+});
+
+test("keeps invalid round values away from the chain reader", async () => {
+  fixture.version = "2";
+  fixture.proofUrl = "";
+  mount();
+  await screen.findByText("Your past results");
+  const input = screen.getByRole("spinbutton", { name: "Round number" });
+  fireEvent.change(input, { target: { value: "0" } });
+  expect((screen.getByRole("button", { name: "View round" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+  fireEvent.change(input, { target: { value: "9".repeat(100) } });
+  expect((screen.getByRole("button", { name: "View round" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+  expect(fixture.readerFactory).not.toHaveBeenCalled();
+});
+
+test("keeps a checked result visible when existing account access is unavailable", async () => {
+  fixture.version = "2";
+  fixture.proofUrl = "";
+  fixture.decryptExisting.mockRejectedValue(new Error("access required"));
+  mount();
+  await screen.findByText("Your past results");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  expect(await screen.findByText("Round #12")).toBeTruthy();
+  expect(screen.getByText("Result checked")).toBeTruthy();
+});
+
+test("confirms one prepared prize check from the Confirm click", async () => {
+  fixture.version = "2";
+  fixture.proofUrl = "https://proof.example";
+  const confirm = vi.fn(async () => ({
+    state: "checked" as const,
+    drawId: 12n,
+    award: fixture.award,
+  }));
+  fixture.readerFactory.mockReturnValue({
+    readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+    readChecked: vi.fn(async () => false),
+    readAward: vi.fn(async () => fixture.award),
+  });
+  fixture.coordinator.mockReturnValue({
+    review: vi.fn(async () => ({ state: "ready", drawId: 12n, proof: {} })),
+    prepare: vi.fn(async () => ({ confirm, cancel: vi.fn() })),
+  });
+  mount();
+  await screen.findByText("Your past results");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
 });
 
 test("keeps a late selected-round result out of the newer view", async () => {

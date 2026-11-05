@@ -6,25 +6,31 @@ import { sepolia } from "viem/chains";
 
 import { formatUSDC } from "@/lib/format";
 import {
+  createPrizeCheckCoordinator,
+  createPrizeCheckIntentStore,
   createViemPrizeChainReader,
   createViemPrizeProofClient,
+  type PreparedPrizeCheck,
 } from "@/lib/prize-check-coordinator";
 import { RPC_URL } from "@/lib/contracts";
-import type { PasskeySmartSession } from "@/lib/smart-session";
-import { decryptExistingSmartUint64 } from "@/lib/zama";
+import type { PasskeySmartSession, PreparedSmartTransaction } from "@/lib/smart-session";
+import { decryptExistingSmartUint64, prepareSmartReadSessionCalls } from "@/lib/zama";
+import { useActionCenter } from "@/components/ActionCenter";
 
 const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
 const requestClient = {
   request: (args: { method: string; params: readonly unknown[] }) => client.request(args as never),
 };
 const PAGE_SIZE = 25;
+const UINT256_MAX = (1n << 256n) - 1n;
 
 type ListedDraw = Readonly<{ drawId: bigint }>;
 type Selection =
   | Readonly<{ kind: "loading"; drawId: bigint }>
   | Readonly<{ kind: "unchecked"; drawId: bigint }>
-  | Readonly<{ kind: "checked"; drawId: bigint; award?: bigint }>
-  | Readonly<{ kind: "access"; drawId: bigint }>
+  | Readonly<{ kind: "ready"; drawId: bigint; prepared: PreparedPrizeCheck }>
+  | Readonly<{ kind: "access-ready"; drawId: bigint; prepared: PreparedSmartTransaction }>
+  | Readonly<{ kind: "checked"; drawId: bigint; handle: Hex; award?: bigint; access?: true }>
   | Readonly<{ kind: "unavailable"; drawId: bigint }>;
 
 type PrizeHistoryProps = Readonly<{
@@ -35,35 +41,44 @@ type PrizeHistoryProps = Readonly<{
 }>;
 
 function validRound(value: string): bigint | undefined {
-  if (!/^[1-9][0-9]*$/.test(value)) return undefined;
+  if (!/^[1-9][0-9]*$/.test(value) || value.length > 78) return undefined;
   try {
-    return BigInt(value);
+    const drawId = BigInt(value);
+    return drawId <= UINT256_MAX ? drawId : undefined;
   } catch {
     return undefined;
   }
 }
 
 export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryProps) {
+  const { runAction } = useActionCenter();
   const [draws, setDraws] = useState<readonly ListedDraw[]>([]);
   const [nextCursor, setNextCursor] = useState<bigint>();
   const [historyUnavailable, setHistoryUnavailable] = useState(false);
   const [requestedRound, setRequestedRound] = useState("");
   const [selection, setSelection] = useState<Selection>();
-  const epoch = useRef(0);
-  const abortRef = useRef<AbortController>();
-  const cancel = useCallback(() => {
-    epoch.current += 1;
-    abortRef.current?.abort();
-    abortRef.current = undefined;
+  const listEpoch = useRef(0);
+  const selectionEpoch = useRef(0);
+  const listAbortRef = useRef<AbortController>();
+  const selectionAbortRef = useRef<AbortController>();
+  const cancelList = useCallback(() => {
+    listEpoch.current += 1;
+    listAbortRef.current?.abort();
+    listAbortRef.current = undefined;
+  }, []);
+  const cancelSelection = useCallback(() => {
+    selectionEpoch.current += 1;
+    selectionAbortRef.current?.abort();
+    selectionAbortRef.current = undefined;
   }, []);
 
   const loadPage = useCallback(
     async (cursor?: bigint) => {
       if (!proofUrl) return;
-      cancel();
-      const request = ++epoch.current;
+      cancelList();
+      const request = ++listEpoch.current;
       const controller = new AbortController();
-      abortRef.current = controller;
+      listAbortRef.current = controller;
       try {
         const archive = createViemPrizeProofClient({
           chainId: 11155111,
@@ -77,7 +92,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
           limit: PAGE_SIZE,
           signal: controller.signal,
         });
-        if (request !== epoch.current || controller.signal.aborted) return;
+        if (request !== listEpoch.current || controller.signal.aborted) return;
         if (result.kind !== "draws") {
           setHistoryUnavailable(true);
           return;
@@ -85,18 +100,19 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         setDraws((current) => [...current, ...result.draws]);
         setNextCursor(result.draws.length === PAGE_SIZE ? result.draws.at(-1)?.drawId : undefined);
       } catch {
-        if (request === epoch.current && !controller.signal.aborted) setHistoryUnavailable(true);
+        if (request === listEpoch.current && !controller.signal.aborted)
+          setHistoryUnavailable(true);
       }
     },
-    [account, cancel, pool, proofUrl],
+    [account, cancelList, pool, proofUrl],
   );
 
   const viewRound = useCallback(
     async (drawId: bigint) => {
-      cancel();
-      const request = ++epoch.current;
+      cancelSelection();
+      const request = ++selectionEpoch.current;
       const controller = new AbortController();
-      abortRef.current = controller;
+      selectionAbortRef.current = controller;
       setSelection({ kind: "loading", drawId });
       try {
         const reader = createViemPrizeChainReader(requestClient, getAddress(pool));
@@ -105,7 +121,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
           blockHash,
           signal: controller.signal,
         });
-        if (request !== epoch.current || controller.signal.aborted) return;
+        if (request !== selectionEpoch.current || controller.signal.aborted) return;
         if (!checked) {
           setSelection({ kind: "unchecked", drawId });
           return;
@@ -114,29 +130,131 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
           blockHash,
           signal: controller.signal,
         });
-        if (request !== epoch.current || controller.signal.aborted) return;
+        if (request !== selectionEpoch.current || controller.signal.aborted) return;
         try {
           const award = await decryptExistingSmartUint64(session, handle as Hex, getAddress(pool), {
             signal: controller.signal,
           });
-          if (request === epoch.current && !controller.signal.aborted)
-            setSelection({ kind: "checked", drawId, award });
+          if (request === selectionEpoch.current && !controller.signal.aborted)
+            setSelection({ kind: "checked", drawId, handle: handle as Hex, award });
         } catch {
-          if (request === epoch.current && !controller.signal.aborted)
-            setSelection({ kind: "access", drawId });
+          if (request === selectionEpoch.current && !controller.signal.aborted)
+            setSelection({ kind: "checked", drawId, handle: handle as Hex, access: true });
         }
       } catch {
-        if (request === epoch.current && !controller.signal.aborted)
+        if (request === selectionEpoch.current && !controller.signal.aborted)
           setSelection({ kind: "unavailable", drawId });
       }
     },
-    [account, cancel, pool, session],
+    [account, cancelSelection, pool, session],
   );
 
   useEffect(() => {
     if (proofUrl) void loadPage();
-    return cancel;
-  }, [cancel, loadPage, proofUrl]);
+    return () => {
+      cancelList();
+      cancelSelection();
+    };
+  }, [cancelList, cancelSelection, loadPage, proofUrl]);
+
+  const startCheck = useCallback(async () => {
+    if (!selection || selection.kind !== "unchecked") return;
+    cancelSelection();
+    const controller = new AbortController();
+    selectionAbortRef.current = controller;
+    const request = ++selectionEpoch.current;
+    setSelection({ kind: "loading", drawId: selection.drawId });
+    try {
+      const reader = createViemPrizeChainReader(requestClient, getAddress(pool));
+      const coordinator = createPrizeCheckCoordinator({
+        chainId: 11155111,
+        pool: getAddress(pool),
+        account: getAddress(account),
+        session,
+        readBlockHash: (signal) => reader.readBlockHash({ signal }),
+        readChecked: (drawId, options) => reader.readChecked(drawId, getAddress(account), options),
+        readAward: (drawId, options) => reader.readAward(drawId, getAddress(account), options),
+        getProofClient: () =>
+          createViemPrizeProofClient({
+            chainId: 11155111,
+            pool: getAddress(pool),
+            account: getAddress(account),
+            baseUrl: proofUrl,
+            client: requestClient,
+          }),
+        prepareReadSessionCalls: () => prepareSmartReadSessionCalls(session),
+        intentStore: createPrizeCheckIntentStore(window.localStorage),
+      });
+      const reviewed = await coordinator.review(selection.drawId, controller.signal);
+      if (request !== selectionEpoch.current || controller.signal.aborted) return;
+      if (reviewed.state === "checked") {
+        await viewRound(selection.drawId);
+        return;
+      }
+      if (reviewed.state !== "ready") {
+        setSelection({ kind: "unavailable", drawId: selection.drawId });
+        return;
+      }
+      const prepared = await coordinator.prepare(reviewed, controller.signal);
+      if (request !== selectionEpoch.current || controller.signal.aborted) {
+        prepared.cancel();
+        return;
+      }
+      setSelection({ kind: "ready", drawId: selection.drawId, prepared });
+    } catch {
+      if (request === selectionEpoch.current && !controller.signal.aborted)
+        setSelection({ kind: "unavailable", drawId: selection.drawId });
+    }
+  }, [account, cancelSelection, pool, proofUrl, selection, session, viewRound]);
+
+  const confirmCheck = () => {
+    if (!selection || selection.kind !== "ready") return;
+    const prepared = selection.prepared;
+    runAction(
+      { label: "Check prize", type: "check", account: session.address },
+      async ({ update }) => {
+        update({ status: "waiting-wallet" });
+        const checked = await prepared.confirm();
+        update({ status: "completed" });
+        await viewRound(checked.drawId);
+      },
+    );
+  };
+
+  const reviewAccess = async () => {
+    if (!selection || selection.kind !== "checked" || !selection.access) return;
+    cancelSelection();
+    const request = ++selectionEpoch.current;
+    const controller = new AbortController();
+    selectionAbortRef.current = controller;
+    try {
+      const calls = await prepareSmartReadSessionCalls(session);
+      const prepared = await session.prepareTransaction([...calls], { signal: controller.signal });
+      if (request !== selectionEpoch.current || controller.signal.aborted) {
+        prepared.cancel();
+        return;
+      }
+      setSelection({ kind: "access-ready", drawId: selection.drawId, prepared });
+    } catch {
+      if (request === selectionEpoch.current && !controller.signal.aborted)
+        setSelection({ ...selection });
+    }
+  };
+
+  const confirmAccess = () => {
+    if (!selection || selection.kind !== "access-ready") return;
+    const prepared = selection.prepared;
+    const drawId = selection.drawId;
+    runAction(
+      { label: "Review account access", type: "approval", account: session.address },
+      async ({ update }) => {
+        update({ status: "waiting-wallet" });
+        await prepared.send();
+        update({ status: "completed" });
+        await viewRound(drawId);
+      },
+    );
+  };
 
   const requested = validRound(requestedRound);
   return (
@@ -190,13 +308,25 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         <p className="text-sm text-muted">Checking round #{selection.drawId.toString()}.</p>
       )}
       {selection?.kind === "unchecked" && (
-        <p className="text-sm text-muted">This result is ready to check.</p>
+        <div className="space-y-2">
+          <p className="text-sm text-muted">This result is ready to check.</p>
+          <button className="btn-primary w-full" onClick={() => void startCheck()}>
+            Review check
+          </button>
+        </div>
+      )}
+      {selection?.kind === "ready" && (
+        <button className="btn-primary w-full" onClick={confirmCheck}>
+          Confirm
+        </button>
+      )}
+      {selection?.kind === "access-ready" && (
+        <button className="btn-primary w-full" onClick={confirmAccess}>
+          Confirm
+        </button>
       )}
       {selection?.kind === "unavailable" && (
         <p className="text-sm text-muted">This result is unavailable right now.</p>
-      )}
-      {selection?.kind === "access" && (
-        <p className="text-sm text-muted">This result needs account access to show.</p>
       )}
       {selection?.kind === "checked" && (
         <div className="rounded-2xl border border-white/50 bg-white/35 p-3">
@@ -206,6 +336,14 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
             <p className="font-display text-2xl font-bold text-brand">
               {formatUSDC(selection.award, 6)} USDC
             </p>
+          )}
+          {selection.access && (
+            <div className="mt-2 space-y-2">
+              <p className="text-sm text-muted">This result needs account access to show.</p>
+              <button className="btn-secondary w-full" onClick={() => void reviewAccess()}>
+                Review access
+              </button>
+            </div>
           )}
         </div>
       )}
