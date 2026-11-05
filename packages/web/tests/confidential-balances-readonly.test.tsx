@@ -67,6 +67,20 @@ test("decryptConfidentialBalances propagates missing existing access without a l
   expect(session.signTypedData).not.toHaveBeenCalled();
 });
 
+test("decryptConfidentialBalances treats NotEntitled as one terminal existing-read failure", async () => {
+  const error = new Error("read access denied");
+  error.name = "NotEntitled";
+  fixture.handles = [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`];
+  fixture.existingRead.mockRejectedValueOnce(error);
+
+  await expect(decryptConfidentialBalances(session)).rejects.toBe(error);
+  expect(fixture.existingRead).toHaveBeenCalledTimes(1);
+  expect(fixture.legacyRead).not.toHaveBeenCalled();
+  expect(session.prepareTransaction).not.toHaveBeenCalled();
+  expect(session.sendTransaction).not.toHaveBeenCalled();
+  expect(session.signTypedData).not.toHaveBeenCalled();
+});
+
 test("decryptConfidentialBalances returns zero handles without starting a read session", async () => {
   fixture.handles = [`0x${"00".repeat(32)}`, `0x${"00".repeat(32)}`];
 
