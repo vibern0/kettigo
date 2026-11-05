@@ -1,5 +1,13 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  participationMarker as marker,
+  participationMetadataReadCount,
+  participationProof as proof,
+  pendingAdmission as pending,
+  renderSavingsParticipation,
+  resetParticipationFixture,
+} from "./helpers/savings-participation-fixture";
 
 const fixture = vi.hoisted(() => ({
   account: "0x1111111111111111111111111111111111111111" as const,
@@ -81,54 +89,10 @@ vi.mock("canvas-confetti", () => ({
 import SavingsPage from "@/app/savings/page";
 import { ToastProvider } from "@/components/Toast";
 
-const marker = `0x${"a".repeat(64)}` as const;
-const proof = "0x1234" as const;
-const pending = (requested = true): [`0x${string}`, bigint, `0x${string}`, boolean] => [
-  marker,
-  7n,
-  marker,
-  requested,
-];
-
-function mount() {
-  return render(
-    <ToastProvider>
-      <SavingsPage />
-    </ToastProvider>,
-  );
-}
+const mount = () => renderSavingsParticipation(SavingsPage, ToastProvider);
 
 beforeEach(() => {
-  fixture.version = "legacy1";
-  fixture.pending = [pending()];
-  fixture.membershipIndex = 0n;
-  fixture.walletBalance = 0n;
-  fixture.principal = undefined;
-  fixture.accessState = "ready";
-  fixture.reads.mockReset();
-  fixture.archive.mockReset();
-  fixture.prepare.mockReset();
-  fixture.send.mockReset();
-  fixture.decrypt.mockReset();
-  fixture.encrypt.mockReset();
-  fixture.smartReads.mockReset();
-  fixture.session = { address: fixture.account, prepareTransaction: fixture.prepare };
-  fixture.reads.mockImplementation(async ({ functionName }: { functionName: string }) => {
-    if (functionName === "membershipIndexOf") return fixture.membershipIndex;
-    if (functionName === "pendingAdmissionOf") return fixture.pending.shift() ?? pending();
-    if (functionName === "balanceOf") return fixture.walletBalance;
-    return 0n;
-  });
-  fixture.archive.mockResolvedValue([]);
-  fixture.prepare.mockResolvedValue({ cancel: vi.fn(), send: fixture.send });
-  fixture.send.mockImplementation(async () => {
-    fixture.membershipIndex = 1n;
-    fixture.pending = [pending(false)];
-    return "0xdead";
-  });
-  fixture.decrypt.mockResolvedValue({ clearValue: true, decryptionProof: proof });
-  fixture.encrypt.mockResolvedValue({ handle: marker, inputProof: proof });
-  fixture.smartReads.mockResolvedValue([]);
+  resetParticipationFixture(fixture);
 });
 
 afterEach(cleanup);
@@ -136,11 +100,7 @@ afterEach(cleanup);
 test("legacy Savings makes zero membership and admission reads", async () => {
   mount();
   await new Promise((done) => setTimeout(done, 0));
-  expect(
-    fixture.reads.mock.calls.filter(([call]) =>
-      ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
-    ),
-  ).toHaveLength(0);
+  expect(participationMetadataReadCount(fixture.reads)).toBe(0);
 });
 
 test("a positive pending balance is reviewed before one synchronous participation confirm", async () => {
@@ -456,13 +416,7 @@ test("closing a financial sheet does not discard an initial pending status read"
   });
 
   mount();
-  await waitFor(() =>
-    expect(
-      fixture.reads.mock.calls.filter(([call]) =>
-        ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
-      ),
-    ).toHaveLength(2),
-  );
+  await waitFor(() => expect(participationMetadataReadCount(fixture.reads)).toBe(2));
   fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
   fireEvent.click(screen.getAllByRole("button", { name: "Close deposit sheet" }).at(-1)!);
   expect(fixture.send).not.toHaveBeenCalled();
@@ -548,18 +502,12 @@ test("a pending mode-2 account can withdraw with no displayed balance while arch
   await screen.findByRole("button", { name: "Confirm" });
   expect(fixture.prepare).toHaveBeenCalledTimes(1);
   expect(fixture.send).not.toHaveBeenCalled();
-  const statusReadsBeforeSend = fixture.reads.mock.calls.filter(([call]) =>
-    ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
-  ).length;
+  const statusReadsBeforeSend = participationMetadataReadCount(fixture.reads);
 
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   expect(fixture.send).toHaveBeenCalledTimes(1);
   await waitFor(() =>
-    expect(
-      fixture.reads.mock.calls.filter(([call]) =>
-        ["membershipIndexOf", "pendingAdmissionOf"].includes(call.functionName),
-      ),
-    ).toHaveLength(statusReadsBeforeSend + 2),
+    expect(participationMetadataReadCount(fixture.reads)).toBe(statusReadsBeforeSend + 2),
   );
   expect(fixture.prepare).toHaveBeenCalledTimes(1);
   expect(fixture.decrypt).not.toHaveBeenCalled();
