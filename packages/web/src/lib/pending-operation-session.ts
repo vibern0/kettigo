@@ -113,6 +113,14 @@ export function createGuardedPasskeySession(
   const release = (lease: { release(): Promise<void> }) =>
     void lease.release().catch(() => undefined);
   const timeoutMs = Math.max(1, options.preparationTimeoutMs ?? 30_000);
+  const clearKnownAfterRelease = async (identity: SafeUserOperationIdentity): Promise<void> => {
+    const recovery = await manager().acquireRecovery();
+    try {
+      recovery.clearMatching(identity);
+    } finally {
+      await recovery.release();
+    }
+  };
 
   const guardedOptions = (
     lease: {
@@ -121,7 +129,11 @@ export function createGuardedPasskeySession(
       markAttempted(identity: SafeUserOperationIdentity): PendingOperationRecord;
     },
     caller: SmartTransactionOptions | undefined,
-    staged: { identity?: SafeUserOperationIdentity; attempted?: () => void },
+    staged: {
+      identity?: SafeUserOperationIdentity;
+      attempted?: boolean;
+      signalAttempted?: () => void;
+    },
   ): InternalTransactionOptions => ({
     ...caller,
     __assertPendingOperationLease: () => lease.assertActive(),
@@ -131,7 +143,8 @@ export function createGuardedPasskeySession(
       await caller?.onOperationPrepared?.(identity);
       lease.assertActive();
       staged.identity = operation(lease.markAttempted(identity));
-      staged.attempted?.();
+      staged.attempted = true;
+      staged.signalAttempted?.();
     },
   });
 
@@ -245,8 +258,12 @@ export function createGuardedPasskeySession(
       const attempted = new Promise<void>((resolve) => {
         resolveAttempted = resolve;
       });
-      const staged: { identity?: SafeUserOperationIdentity; attempted?: () => void } = {
-        attempted: resolveAttempted,
+      const staged: {
+        identity?: SafeUserOperationIdentity;
+        attempted?: boolean;
+        signalAttempted?: () => void;
+      } = {
+        signalAttempted: resolveAttempted,
       };
       try {
         lease.assertActive();
@@ -258,14 +275,25 @@ export function createGuardedPasskeySession(
         const handoff = racePreparation(attempted, timeoutMs, undefined).then(() => sent);
         return await Promise.race([sent, handoff]);
       } catch (error) {
-        if (staged.identity) {
+        // A deadline before the attempted handoff is a known no-broadcast
+        // outcome, so clear only this prepared identity while still owned.
+        // `settle` owns all post-attempt terminal cleanup: an uncertain
+        // broadcast result must retain its durable barrier.
+        if (staged.identity && !staged.attempted) {
           try {
             lease.clearMatching(staged.identity);
           } catch {
-            // A cleanup failure remains fail-closed; do not replace the first error.
+            // Preserve the first failure; a failed cleanup remains fail-closed.
           }
         }
-        release(lease);
+        await lease.release();
+        if (error instanceof SafeUserOperationNotSubmittedError && staged.identity) {
+          try {
+            await clearKnownAfterRelease(error.operation);
+          } catch {
+            // The original no-broadcast error and any durable barrier win.
+          }
+        }
         throw error;
       }
     },
