@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPublicClient, getAddress, http, type Address, type Hex } from "viem";
 import { sepolia } from "viem/chains";
 
@@ -382,6 +382,7 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
 
   const reviewAccess = async () => {
     if (!selection || selection.kind !== "checked" || !selection.access) return;
+    const checkedSelection = selection;
     const owner = Symbol("access");
     if (!reviewLease.begin(owner, cancelSelection)) return;
     accessOwnerRef.current = owner;
@@ -397,7 +398,16 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
         reviewLease.release(owner);
         return;
       }
-      if (!reviewLease.ready(owner, prepared.cancel)) {
+      const cancelPreparedAccess = () => {
+        prepared.cancel();
+        if (preparedAccessRef.current === prepared) preparedAccessRef.current = undefined;
+        setSelection((current) =>
+          current?.kind === "access-ready" && current.drawId === checkedSelection.drawId
+            ? checkedSelection
+            : current,
+        );
+      };
+      if (!reviewLease.ready(owner, cancelPreparedAccess)) {
         prepared.cancel();
         return;
       }
@@ -422,7 +432,9 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
       async ({ update }) => {
         update({ status: "waiting-wallet" });
         try {
-          await prepared.send();
+          await prepared.send({
+            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+          });
           update({ status: "completed" });
           if (accessOwnerRef.current) reviewLease.complete(accessOwnerRef.current);
           await viewRound(drawId);
