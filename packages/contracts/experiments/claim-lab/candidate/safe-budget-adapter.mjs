@@ -268,14 +268,16 @@ export class SafeBudgetAdapter {
   async reserve({ intentId, operation, offeredAt }) {
     this.marker("sponsored-created");
     const canonical = this.#validate(operation, false);
-    if (this.policy) {
+    {
       const policy = this.#assertPolicy(canonical, false);
-      if (
-        this.journal.snapshot().intents.filter((intent) => intent.kind === "user-operation")
-          .length >= policy.caps.maxSafeIntents
-      )
-        fail("Safe policy intent cap reached");
-      await this.journal.bindSafePolicy(this.policy);
+      if (policy) {
+        if (
+          this.journal.snapshot().intents.filter((intent) => intent.kind === "user-operation")
+            .length >= policy.caps.maxSafeIntents
+        )
+          fail("Safe policy intent cap reached");
+        await this.journal.bindSafePolicy(this.policy);
+      }
     }
     const fullNonce = BigInt(canonical.nonce);
     if (fullNonce >> 64n !== 0n || fullNonce > BigInt(Number.MAX_SAFE_INTEGER))
@@ -464,9 +466,12 @@ export class SafeBudgetAdapter {
   }
 
   #assertPolicy(canonical, requireSaved = true) {
-    if (!this.policy) return null;
-    const policy = persistedSafePolicy(this.policy);
     const saved = this.journal.snapshot().safePolicy;
+    if (!this.policy) {
+      if (saved) fail("Safe policy capability required");
+      return null;
+    }
+    const policy = persistedSafePolicy(this.policy);
     if (
       this.now() >= policy.expiresAt ||
       policy.safe !== this.expected.safe ||

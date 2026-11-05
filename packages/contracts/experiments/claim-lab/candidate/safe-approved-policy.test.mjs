@@ -260,3 +260,87 @@ test("suppresses an expired policy after durable route attempt and before extern
   assert.equal(journal.intent("expires-route").attempts.at(-1).outcome, "suppressed");
   await journal.close();
 });
+
+test("rejects every exact policy-record corruption on restart", async () => {
+  const cases = [
+    ["caps", (state) => (state.safePolicy.caps.maxSafeIntents = 1)],
+    ["reference", (state) => (state.safePolicy.approvalReference = "other")],
+    ["base", (state) => (state.safePolicy.baseEnvelopeIdentity = "0".repeat(64))],
+    ["run", (state) => (state.safePolicy.runId = "other")],
+    ["unknown", (state) => (state.safePolicy.extra = true)],
+    ["omission", (state) => delete state.safePolicy.caps.maxSafeIntents],
+  ];
+  for (const [, mutate] of cases) {
+    const journal = await createJournal();
+    const policy = policyFor(journal);
+    await adapter(journal, { policy }).reserve({
+      intentId: `corrupt-${Math.random()}`,
+      operation: operation(),
+      offeredAt: 1000,
+    });
+    const directory = journal.directory;
+    await journal.close();
+    const path = join(directory, "journal.json");
+    const state = JSON.parse(await readFile(path, "utf8"));
+    mutate(state);
+    await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+    await assert.rejects(reopenJournal(directory, { safePolicy: policy }));
+  }
+});
+
+test("rejects wrong fixed capability fields and adapter capability removal after reservation", async () => {
+  const journal = await createJournal();
+  const state = journal.snapshot();
+  const approval = {
+    reference: "fixed",
+    expiresAt: 7_201_000,
+    caps,
+    binding: { runId: state.runId, baseEnvelopeIdentity: state.envelopeIdentity },
+  };
+  for (const expected of [
+    { chainId: 1, safe: SAFE, entryPoint: ENTRY_POINT },
+    { chainId: 11155111, safe: SAFE, entryPoint: ENTRY_POINT, durationMs: 1 },
+  ])
+    assert.throws(() =>
+      createSafePolicyCapability({ approval, journal: state, expected, now: () => 1000 }),
+    );
+  const policy = policyFor(journal);
+  const wrongEntryPoint = createSafePolicyCapability({
+    approval,
+    journal: state,
+    expected: {
+      chainId: 11155111,
+      safe: SAFE,
+      entryPoint: "0x0000000000000000000000000000000000000001",
+    },
+    now: () => 1000,
+  });
+  await assert.rejects(
+    adapter(journal, { policy: wrongEntryPoint }).reserve({
+      intentId: "wrong-entry",
+      operation: operation(),
+      offeredAt: 1000,
+    }),
+    /policy/,
+  );
+  const fence = adapter(journal, { policy });
+  const reservation = await fence.reserve({
+    intentId: "remove-adapter-policy",
+    operation: operation(),
+    offeredAt: 1000,
+  });
+  fence.policy = null;
+  await assert.rejects(
+    fence.saveSigned({ reservation, operation: operation({ signature: SIGNATURE }) }),
+    /capability/,
+  );
+  await assert.rejects(
+    adapter(journal).reserve({
+      intentId: "bypass",
+      operation: operation({ nonce: 1n }),
+      offeredAt: 1000,
+    }),
+    /capability/,
+  );
+  await journal.close();
+});
