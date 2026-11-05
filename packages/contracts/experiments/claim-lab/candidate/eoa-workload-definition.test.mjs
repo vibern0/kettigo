@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compileCandidateWorkload, workloadFingerprint } from "./eoa-workload-definition.mjs";
+import {
+  compileCandidateWorkload,
+  validateCompiledCandidateWorkload,
+  workloadFingerprint,
+} from "./eoa-workload-definition.mjs";
 import { envelopeIdentity } from "./journal-values.mjs";
 import { ORIGINAL_ENVELOPE } from "./journal.mjs";
 
@@ -177,4 +181,55 @@ test("canonicalizes complete creation input without retaining mutable aliases", 
   );
   assert.ok(Object.isFrozen(workload.definition.manifest.creations[2].constructor.args[4]));
   assert.equal(workloadFingerprint(workload), workload.fingerprint);
+});
+
+test("uses concrete native targets, nested deposits, funding tags, and ABI arities", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  assert.equal(action("bootstrap-eth").target, workload.definition.actors.sponsor);
+  assert.equal(action("bootstrap-eth").operation.signature, "nativeTransfer()");
+  assert.equal(action("bootstrap-eth").operation.value, "1000000000000000");
+  assert.equal(action("bootstrap-eth").operation.args.length, 0);
+  assert.equal(action("fund-eth-eoa-00").target, workload.definition.actors.eoaParticipants[0]);
+  assert.equal(
+    action("eoa-00-deposit").operation.args[0][1].signature,
+    "confidentialTransferAndCall(address,bytes32,bytes,bytes)",
+  );
+  assert.equal(action("safe-initial-deposit").operation.signature, "safeBatch(bytes[])");
+  assert.equal(action("prize-fund-A").operation.args[3].encoded.value, "5000000");
+  assert.equal(
+    action("prize-fund-A").operation.args[3].tag,
+    "0x5052495a455f46554e44494e475f44415441",
+  );
+  assert.equal(action("initial-batch-settle").operation.args.length, 4);
+  assert.equal(action("initial-batch-process-safe").operation.args.length, 2);
+  assert.equal(action("initial-batch-finalize-safe").operation.args.length, 3);
+  assert.equal(action("check-stage33-eoa-00").operation.args.length, 8);
+});
+
+test("enforces all admission and claim barriers rather than array order", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  assert.ok(action("prize-fund-A").dependencies.includes("reserve-wrap"));
+  assert.ok(action("eoa-07-approve").dependencies.includes("safe-stage-8-check"));
+  assert.ok(action("check-stage8-eoa-05").dependencies.includes("check-stage8-eoa-04"));
+  assert.ok(action("check-stage33-eoa-08").dependencies.includes("check-stage33-eoa-00"));
+  assert.ok(action("final-request-eoa-00").dependencies.includes("claim-stage8-eoa-06"));
+  assert.ok(action("final-request-eoa-31").dependencies.includes("claim-stage33-eoa-00"));
+  assert.ok(action("safe-withdrawal-request").dependencies.includes("check-stage33-eoa-31"));
+  assert.ok(action("final-batch-close").dependencies.includes("safe-withdrawal-request"));
+});
+
+test("deep freezes the graph and rejects a recomputed tampered compiled workload", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  assert.ok(Object.isFrozen(workload.actions[0].operation.args));
+  assert.ok(
+    Object.isFrozen(
+      workload.actions.find((entry) => entry.id === "eoa-00-deposit").operation.args[0][1],
+    ),
+  );
+  const tampered = JSON.parse(JSON.stringify(workload));
+  tampered.actions[0].target = tampered.definition.actors.safeParticipant;
+  assert.throws(() => validateCompiledCandidateWorkload(tampered), /differs|invalid/i);
+  assert.equal(validateCompiledCandidateWorkload(workload).fingerprint, workload.fingerprint);
 });

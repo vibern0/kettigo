@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { getAddress } from "ethers";
 
 import { validateStaticRunDefinition } from "./static-run-definition.mjs";
+import { canonical } from "./journal-values.mjs";
 
-const PHASES = Object.freeze(["bootstrap", "deploy", "deposit", "draw", "exit", "final"]);
+const PHASES = Object.freeze(["setup", "deposit", "draw", "queue", "final"]);
 const SAFE_ACTIONS = Object.freeze([
   "safe-initial-deposit",
   "safe-initial-admission",
@@ -31,20 +32,7 @@ const exact = (value, keys) =>
   plain(value) &&
   Object.keys(value).length === keys.length &&
   keys.every((key) => Object.hasOwn(value, key));
-const canonical = (value) => {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (plain(value))
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((key) => [key, canonical(value[key])]),
-    );
-  return value;
-};
-const digest = (value) =>
-  `0x${createHash("sha256")
-    .update(JSON.stringify(canonical(value)))
-    .digest("hex")}`;
+const digest = (value) => `0x${createHash("sha256").update(canonical(value)).digest("hex")}`;
 
 export function compileCandidateWorkload(definition, manifest) {
   const staticDefinition = validateStaticRunDefinition(definition);
@@ -57,7 +45,7 @@ export function compileCandidateWorkload(definition, manifest) {
     definition: normalizedDefinition(staticDefinition, normalizedManifest),
     actions,
   });
-  return Object.freeze({
+  return deepFreeze({
     ...template,
     counts: actionCounts(actions),
     totals: actionTotals(actions),
@@ -74,6 +62,27 @@ export function workloadFingerprint(workload) {
   });
 }
 
+/** Reject a caller-supplied graph unless it is the exact graph derived from its
+ * closed StaticA definition and creation manifest.  This is deliberately not a
+ * general graph validator: C must never bless substituted instructions by
+ * merely recomputing a hash. */
+export function validateCompiledCandidateWorkload(workload) {
+  if (!plain(workload) || !plain(workload.definition) || !plain(workload.definition.manifest))
+    fail("invalid compiled workload");
+  const { manifest, policy, ...definition } = workload.definition;
+  const expected = compileCandidateWorkload({ version: 1, ...definition }, manifest);
+  if (canonical(workload) !== canonical(expected))
+    fail("compiled workload differs from definition");
+  return expected;
+}
+
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  Object.values(value).forEach((entry) => deepFreeze(entry, seen));
+  return Object.freeze(value);
+}
+
 function buildActions(definition, manifest) {
   const actions = [];
   const principal = (index) => (index === 0 ? "3000000" : index === 1 ? "1000000" : "2000000");
@@ -81,9 +90,9 @@ function buildActions(definition, manifest) {
   const add = (id, phase, actorRole, targetRole, operation, dependencies = [], extra = {}) => {
     const actor =
       actorRole === "participant" ? participant(extra.actorIndex) : definition.actors[actorRole];
-    const target = targetRole === "creation" ? null : definition.contracts[targetRole] || actor;
+    const target = resolveTarget(definition, targetRole, extra.actorIndex);
     actions.push(
-      Object.freeze({
+      deepFreeze({
         id,
         phase,
         kind: actorRole === "safeParticipant" ? "externalSafe" : "eoa",
@@ -93,23 +102,23 @@ function buildActions(definition, manifest) {
         actorIndex: actorRole === "participant" ? extra.actorIndex : null,
         targetRole,
         target,
-        operation: Object.freeze(operation),
-        dependencies: Object.freeze([...dependencies]),
+        operation,
+        dependencies: [...dependencies],
         concurrencyGroup: extra.concurrencyGroup || "serial",
-        allocation: Object.freeze(extra.allocation || { id: null, usdcMicro: "0", valueWei: "0" }),
-        refs: Object.freeze(extra.refs || {}),
-        provenance: Object.freeze(extra.provenance || null),
+        allocation: extra.allocation || { id: null, usdcMicro: "0", valueWei: "0" },
+        refs: extra.refs || {},
+        provenance: extra.provenance || null,
       }),
     );
   };
-  const call = (signature, args) => ({ signature, args: Object.freeze(args) });
+  const call = (signature, args, value = "0") => ({ signature, args, value });
   const transfer = (recipient, amount) => call("transfer(address,uint256)", [recipient, amount]);
   add(
     "bootstrap-eth",
     "setup",
     "bootstrapOperator",
     "sponsor",
-    call("transfer(address,uint256)", [definition.actors.sponsor, "1000000000000000"]),
+    call("nativeTransfer()", [], "1000000000000000"),
     [],
     { allocation: { id: "bootstrap-eth", usdcMicro: "0", valueWei: "1000000000000000" } },
   );
@@ -157,7 +166,12 @@ function buildActions(definition, manifest) {
       ["configure-morpho"],
       {
         actorIndex: index,
-        allocation: { id: `eth-eoa-${index}`, usdcMicro: "0", valueWei: "20000000000000" },
+        allocation: {
+          id: "bootstrap-eth",
+          usdcMicro: "0",
+          valueWei: "20000000000000",
+          provenance: "bootstrap-eth",
+        },
       },
     );
   for (let index = 0; index < 32; index += 1)
@@ -169,7 +183,12 @@ function buildActions(definition, manifest) {
       transfer(participant(index), principal(index)),
       [`fund-eth-eoa-${String(index).padStart(2, "0")}`],
       {
-        allocation: { id: "bootstrap-usdc-78", usdcMicro: "0", valueWei: "0" },
+        allocation: {
+          id: "bootstrap-usdc-78",
+          usdcMicro: "0",
+          valueWei: "0",
+          provenance: "bootstrap-usdc-78/principal",
+        },
         refs: { recipient: participant(index), principal: principal(index) },
       },
     );
@@ -180,7 +199,14 @@ function buildActions(definition, manifest) {
     "underlying",
     transfer(definition.actors.safeParticipant, "2000000"),
     ["fund-usdc-eoa-31"],
-    { allocation: { id: "bootstrap-usdc-78", usdcMicro: "0", valueWei: "0" } },
+    {
+      allocation: {
+        id: "bootstrap-usdc-78",
+        usdcMicro: "0",
+        valueWei: "0",
+        provenance: "bootstrap-usdc-78/safe",
+      },
+    },
   );
   addSafeInitial(add, call, definition);
   add(
@@ -190,12 +216,12 @@ function buildActions(definition, manifest) {
     "wrapper",
     call("confidentialTransferAndCall(address,bytes32,bytes,bytes)", [
       definition.contracts.candidatePool,
-      { ref: "enc-reserve-A" },
-      { ref: "proof-reserve-A" },
-      "PRIZE_FUNDING_DATA:5000000",
+      sdkRef("prize-fund-A", "wrapper", definition.actors.sponsor, "5000000", "prize"),
+      sdkProofRef("prize-fund-A"),
+      prizeFundingData("5000000"),
     ]),
-    ["safe-initial-admission"],
-    { allocation: { id: "prize-A", usdcMicro: "0", valueWei: "0" } },
+    ["safe-initial-admission", "reserve-wrap"],
+    prizeAllocation("A", "5000000"),
   );
   add("close-draw-A", "draw", "sponsor", "candidatePool", call("closeDraw()", []), [
     "prize-fund-A",
@@ -218,11 +244,12 @@ function buildActions(definition, manifest) {
     "wrapper",
     call("confidentialTransferAndCall(address,bytes32,bytes,bytes)", [
       definition.contracts.candidatePool,
-      { ref: "enc-reserve-B" },
-      { ref: "proof-reserve-B" },
-      "PRIZE_FUNDING_DATA:5000000",
+      sdkRef("prize-fund-B", "wrapper", definition.actors.sponsor, "5000000", "prize"),
+      sdkProofRef("prize-fund-B"),
+      prizeFundingData("5000000"),
     ]),
-    ["safe-wallet-claim"],
+    ["safe-wallet-claim", "reserve-wrap"],
+    prizeAllocation("B", "5000000"),
   );
   add("close-draw-B", "draw", "sponsor", "candidatePool", call("closeDraw()", []), [
     "prize-fund-B",
@@ -240,7 +267,21 @@ function buildActions(definition, manifest) {
       call(
         signature,
         index === 1
-          ? [{ ref: "morpho-request-initial.requestId" }, { ref: "decrypt" }, { ref: "proof" }]
+          ? [
+              resultRef("morpho-request-initial", "unwrapRequestId", "bytes32"),
+              discoveryRef(
+                "morpho-request-initial",
+                definition.actors.safeParticipant,
+                "clearAmount",
+                "uint64",
+              ),
+              discoveryRef(
+                "morpho-request-initial",
+                definition.actors.safeParticipant,
+                "proof",
+                "bytes",
+              ),
+            ]
           : [],
       ),
       [index ? ["morpho-request-initial", "morpho-finalize-initial"][index - 1] : "close-draw-B"],
@@ -272,17 +313,15 @@ function buildActions(definition, manifest) {
           "processWithdrawal(uint256,address)",
           "finalizeUnwrap(bytes32,uint64,bytes)",
         ][index],
-        [{ ref: "initial-batch" }],
+        initialQueueArgs(index, definition),
       ),
       [
-        index
-          ? [
-              "safe-exit-membership",
-              "initial-batch-close",
-              "initial-batch-settle",
-              "initial-batch-process-safe",
-            ][index - 1]
-          : "safe-exit-membership",
+        [
+          "safe-exit-membership",
+          "initial-batch-close",
+          "initial-batch-settle",
+          "initial-batch-process-safe",
+        ][index],
       ],
     ),
   );
@@ -297,7 +336,14 @@ function buildActions(definition, manifest) {
         ? ["initial-batch-finalize-safe", "safe-exit-membership"]
         : index < 7
           ? ["safe-rejoin-admission"]
-          : ["close-draw-8"],
+          : [
+              "close-draw-8",
+              "safe-stage-8-check",
+              ...Array.from(
+                { length: 7 },
+                (_, member) => `check-stage8-eoa-${String(member).padStart(2, "0")}`,
+              ),
+            ],
       index === 0 ? "slot-0" : index < 7 ? "stage-8" : "stage-33",
     );
   add(
@@ -305,7 +351,7 @@ function buildActions(definition, manifest) {
     "deposit",
     "safeParticipant",
     "wrapper",
-    call("multicall(bytes[])", [{ ref: "safe-rejoin-wrap-and-deposit" }]),
+    safeDepositTemplate(definition, "safe-rejoin-deposit", "2000000"),
     ["eoa-00-admit", "initial-batch-finalize-safe"],
   );
   add(
@@ -315,9 +361,9 @@ function buildActions(definition, manifest) {
     "candidatePool",
     call("finalizeAdmission(address,uint256,bool,bytes)", [
       definition.actors.safeParticipant,
-      { ref: "nonce" },
+      resultRef("safe-rejoin-deposit", "admissionNonce", "uint256"),
       true,
-      { ref: "proof" },
+      resultRef("safe-rejoin-deposit", "publicProof", "bytes"),
     ]),
     ["safe-rejoin-deposit"],
   );
@@ -341,18 +387,166 @@ function buildActions(definition, manifest) {
   addFinal(add, call, definition);
   return Object.freeze(actions);
 }
+function resolveTarget(definition, role, participantIndex) {
+  if (role === "creation") return null;
+  if (role === "participant") {
+    if (!Number.isInteger(participantIndex) || participantIndex < 0 || participantIndex > 31)
+      fail("invalid participant target");
+    return definition.actors.eoaParticipants[participantIndex];
+  }
+  if (role === "sponsor") return definition.actors.sponsor;
+  if (!Object.hasOwn(definition.contracts, role)) fail("unknown target role");
+  return definition.contracts[role];
+}
+function resultRef(producer, field, abiType) {
+  return { kind: "result", producer, field, abiType, constraints: ["producer-complete"] };
+}
+function discoveryRef(producer, beneficiary, field, abiType) {
+  return {
+    kind: "discovery",
+    producer,
+    beneficiary,
+    field,
+    abiType,
+    constraints: ["immutable-read"],
+  };
+}
+function proofRef(draw, beneficiary, field) {
+  return {
+    kind: "historicalProof",
+    producer: draw,
+    beneficiary,
+    field,
+    abiType: "bytes32[]",
+    constraints: ["depth-32", "immutable-draw"],
+  };
+}
+function sdkRef(producer, contractRole, actor, amount, purpose) {
+  return {
+    kind: "sdkInput",
+    producer,
+    contractRole,
+    actor,
+    amount,
+    purpose,
+    abiType: "bytes32",
+    constraints: ["checksummed-contract", "checksummed-actor", "uint64"],
+  };
+}
+function sdkProofRef(producer) {
+  return {
+    kind: "sdkProof",
+    producer,
+    field: "inputProof",
+    abiType: "bytes",
+    constraints: ["same-sdk-input"],
+  };
+}
+function prizeFundingData(amount) {
+  return {
+    kind: "abiBytes",
+    tag: "0x5052495a455f46554e44494e475f44415441",
+    encoded: { abiType: "uint64", value: amount },
+  };
+}
+function prizeAllocation(stage, amount) {
+  return {
+    id: "bootstrap-usdc-78",
+    usdcMicro: "0",
+    valueWei: "0",
+    provenance: `bootstrap-usdc-78/prize-${stage}`,
+    suballocationMicro: amount,
+  };
+}
+function depositTemplate(definition, producer, actor, amount) {
+  return {
+    signature: "multicall(bytes[])",
+    args: [
+      [
+        { signature: "wrap(address,uint256)", args: [actor, amount] },
+        {
+          signature: "confidentialTransferAndCall(address,bytes32,bytes,bytes)",
+          args: [
+            definition.contracts.candidatePool,
+            sdkRef(producer, "wrapper", actor, amount, "deposit"),
+            sdkProofRef(producer),
+            { kind: "delegateData", abiType: "bytes" },
+          ],
+        },
+      ],
+    ],
+    value: "0",
+  };
+}
+function safeDepositTemplate(definition, producer, amount) {
+  const actor = definition.actors.safeParticipant;
+  return {
+    signature: "safeBatch(bytes[])",
+    args: [
+      [
+        {
+          target: definition.contracts.underlying,
+          signature: "approve(address,uint256)",
+          args: [definition.contracts.wrapper, amount],
+        },
+        {
+          target: definition.contracts.wrapper,
+          ...depositTemplate(definition, producer, actor, amount),
+        },
+      ],
+    ],
+    value: "0",
+  };
+}
+function initialQueueArgs(index, definition) {
+  const batch = resultRef("safe-exit-membership", "initialBatchId", "uint256");
+  if (index === 0) return [batch];
+  if (index === 1)
+    return [
+      batch,
+      discoveryRef(
+        "initial-batch-close",
+        definition.actors.safeParticipant,
+        "clearTotal",
+        "uint64",
+      ),
+      discoveryRef(
+        "initial-batch-close",
+        definition.actors.safeParticipant,
+        "clearMorphoRestore",
+        "uint64",
+      ),
+      discoveryRef(
+        "initial-batch-close",
+        definition.actors.safeParticipant,
+        "settlementProof",
+        "bytes",
+      ),
+    ];
+  if (index === 2) return [batch, definition.actors.safeParticipant];
+  return [
+    resultRef("initial-batch-process-safe", "unwrapRequestId", "bytes32"),
+    discoveryRef(
+      "initial-batch-process-safe",
+      definition.actors.safeParticipant,
+      "clearAmount",
+      "uint64",
+    ),
+    discoveryRef("initial-batch-process-safe", definition.actors.safeParticipant, "proof", "bytes"),
+  ];
+}
 function checkTemplate(draw, actor) {
   return {
     signature: "checkPrize(uint256,address,uint256,uint64,bytes32,bytes32[],bytes32[],bytes32[])",
     args: Object.freeze([
-      { ref: `${draw}.drawId` },
+      resultRef(draw, "drawId", "uint256"),
       actor,
-      { ref: "slot.index" },
-      { ref: "slot.generation" },
-      { ref: "balance.handle" },
-      { ref: `proof32:${draw}:hashes` },
-      { ref: `proof32:${draw}:sums` },
-      { ref: `proof32:${draw}:parents` },
+      discoveryRef(draw, actor, "slotIndex", "uint256"),
+      discoveryRef(draw, actor, "slotGeneration", "uint64"),
+      discoveryRef(draw, actor, "balanceHandle", "bytes32"),
+      proofRef(draw, actor, "siblingHashes"),
+      proofRef(draw, actor, "siblingSums"),
+      proofRef(draw, actor, "parentSums"),
     ]),
   };
 }
@@ -362,7 +556,7 @@ function addSafeInitial(add, call, definition) {
     "deposit",
     "safeParticipant",
     "wrapper",
-    call("multicall(bytes[])", [{ ref: "safe-initial-wrap-and-deposit" }]),
+    safeDepositTemplate(definition, "safe-initial-deposit", "2000000"),
     ["fund-usdc-safe"],
   );
   add(
@@ -372,9 +566,9 @@ function addSafeInitial(add, call, definition) {
     "candidatePool",
     call("finalizeAdmission(address,uint256,bool,bytes)", [
       definition.actors.safeParticipant,
-      { ref: "nonce" },
+      resultRef("safe-initial-deposit", "admissionNonce", "uint256"),
       true,
-      { ref: "proof" },
+      resultRef("safe-initial-deposit", "publicProof", "bytes"),
     ]),
     ["safe-initial-deposit"],
   );
@@ -396,12 +590,12 @@ function addParticipantDeposit(add, call, definition, index, amount, dependencie
     "deposit",
     "participant",
     "wrapper",
-    call("multicall(bytes[])", [{ ref: `wrap-and-deposit:${id}:${amount}` }]),
+    depositTemplate(definition, `eoa-${id}-deposit`, actor, amount),
     [`eoa-${id}-approve`],
     {
       actorIndex: index,
       concurrencyGroup: group,
-      refs: { encryptedInput: { producer: `eoa-${id}-deposit`, type: "externalEuint64" } },
+      refs: { encryptedInput: sdkRef(`eoa-${id}-deposit`, "wrapper", actor, amount, "deposit") },
     },
   );
   add(
@@ -411,9 +605,9 @@ function addParticipantDeposit(add, call, definition, index, amount, dependencie
     "candidatePool",
     call("finalizeAdmission(address,uint256,bool,bytes)", [
       actor,
-      { ref: `eoa-${id}-deposit.nonce` },
+      resultRef(`eoa-${id}-deposit`, "admissionNonce", "uint256"),
       true,
-      { ref: `eoa-${id}-deposit.publicProof` },
+      resultRef(`eoa-${id}-deposit`, "publicProof", "bytes"),
     ]),
     [`eoa-${id}-deposit`],
     { actorIndex: index, concurrencyGroup: group },
@@ -426,7 +620,7 @@ function addReserveStages(add, call, definition) {
     "sponsor",
     "underlying",
     call("approve(address,uint256)", [definition.contracts.wrapper, "12000000"]),
-    ["safe-reinvest"],
+    ["safe-initial-admission"],
   );
   add(
     "reserve-wrap",
@@ -447,11 +641,24 @@ function addReserveStages(add, call, definition) {
       "wrapper",
       call("confidentialTransferAndCall(address,bytes32,bytes,bytes)", [
         definition.contracts.candidatePool,
-        { ref: `enc-${stage}` },
-        { ref: `proof-${stage}` },
-        `PRIZE_FUNDING_DATA:${amount}`,
+        sdkRef(`prize-fund-${stage}`, "wrapper", definition.actors.sponsor, amount, "prize"),
+        sdkProofRef(`prize-fund-${stage}`),
+        prizeFundingData(amount),
       ]),
-      ["reserve-wrap", before],
+      [
+        "reserve-wrap",
+        before,
+        ...(stage === "8"
+          ? ["safe-reinvest"]
+          : [
+              "safe-stage-8-check",
+              ...Array.from(
+                { length: 7 },
+                (_, member) => `check-stage8-eoa-${String(member).padStart(2, "0")}`,
+              ),
+            ]),
+      ],
+      prizeAllocation(stage, amount),
     );
     add(`close-draw-${stage}`, "draw", "sponsor", "candidatePool", call("closeDraw()", []), [
       `prize-fund-${stage}`,
@@ -465,7 +672,18 @@ function addReserveStages(add, call, definition) {
       "participant",
       "candidatePool",
       checkTemplate("close-draw-8", definition.actors.eoaParticipants[index]),
-      ["close-draw-8"],
+      [
+        "close-draw-8",
+        ...(index >= 1 && index < 5 ? ["check-stage8-eoa-00"] : []),
+        ...(index >= 5
+          ? [
+              "check-stage8-eoa-01",
+              "check-stage8-eoa-02",
+              "check-stage8-eoa-03",
+              "check-stage8-eoa-04",
+            ]
+          : []),
+      ],
       {
         actorIndex: index,
         concurrencyGroup: index === 0 ? "stage8-1" : index < 5 ? "stage8-4" : "stage8-2",
@@ -501,7 +719,13 @@ function addReserveStages(add, call, definition) {
       "participant",
       "candidatePool",
       checkTemplate("close-draw-33", definition.actors.eoaParticipants[index]),
-      ["close-draw-33"],
+      [
+        "close-draw-33",
+        ...Array.from(
+          { length: Math.floor(index / 8) * 8 },
+          (_, member) => `check-stage33-eoa-${String(member).padStart(2, "0")}`,
+        ),
+      ],
       { actorIndex: index, concurrencyGroup: `stage33-${Math.floor(index / 8)}` },
     );
     add(
@@ -545,10 +769,34 @@ function addFinal(add, call, definition) {
       "participant",
       "candidatePool",
       call("requestWithdrawal(bytes32,bytes)", [
-        { ref: `enc-full-principal-${id}` },
-        { ref: `proof-full-principal-${id}` },
+        sdkRef(
+          `final-request-eoa-${id}`,
+          "candidatePool",
+          definition.actors.eoaParticipants[index],
+          index === 0 ? "3000000" : index === 1 ? "1000000" : "2000000",
+          "withdrawal",
+        ),
+        sdkProofRef(`final-request-eoa-${id}`),
       ]),
-      [`claim-stage33-eoa-${id}`],
+      [
+        "safe-conditional-wallet-claim",
+        ...Array.from(
+          { length: 7 },
+          (_, member) => `check-stage8-eoa-${String(member).padStart(2, "0")}`,
+        ),
+        ...Array.from(
+          { length: 7 },
+          (_, member) => `claim-stage8-eoa-${String(member).padStart(2, "0")}`,
+        ),
+        ...Array.from(
+          { length: 32 },
+          (_, member) => `check-stage33-eoa-${String(member).padStart(2, "0")}`,
+        ),
+        ...Array.from(
+          { length: 32 },
+          (_, member) => `claim-stage33-eoa-${String(member).padStart(2, "0")}`,
+        ),
+      ],
       { actorIndex: index, concurrencyGroup: "final-requests" },
     );
   }
@@ -558,17 +806,35 @@ function addFinal(add, call, definition) {
     "safeParticipant",
     "candidatePool",
     call("requestWithdrawal(bytes32,bytes)", [
-      { ref: "enc-safe-principal" },
-      { ref: "proof-safe-principal" },
+      sdkRef(
+        "safe-withdrawal-request",
+        "candidatePool",
+        definition.actors.safeParticipant,
+        "2000000",
+        "withdrawal",
+      ),
+      sdkProofRef("safe-withdrawal-request"),
     ]),
-    ["safe-conditional-wallet-claim"],
+    [
+      "safe-conditional-wallet-claim",
+      ...Array.from(
+        { length: 7 },
+        (_, member) => `check-stage8-eoa-${String(member).padStart(2, "0")}`,
+      ),
+      ...Array.from(
+        { length: 32 },
+        (_, member) => `check-stage33-eoa-${String(member).padStart(2, "0")}`,
+      ),
+    ],
   );
   add(
     "final-batch-close",
     "final",
     "sponsor",
     "candidatePool",
-    call("closeWithdrawalBatch(uint256)", [{ ref: "final-batch" }]),
+    call("closeWithdrawalBatch(uint256)", [
+      resultRef("safe-withdrawal-request", "batchId", "uint256"),
+    ]),
     [
       "safe-withdrawal-request",
       ...Array.from(
@@ -583,10 +849,10 @@ function addFinal(add, call, definition) {
     "sponsor",
     "candidatePool",
     call("settleWithdrawalBatch(uint256,uint64,uint64,bytes)", [
-      { ref: "final-batch" },
-      { ref: "clear-total" },
-      { ref: "clear-morpho" },
-      { ref: "proof" },
+      resultRef("final-batch-close", "batchId", "uint256"),
+      discoveryRef("final-batch-close", definition.actors.sponsor, "clearTotal", "uint64"),
+      discoveryRef("final-batch-close", definition.actors.sponsor, "clearMorphoRestore", "uint64"),
+      discoveryRef("final-batch-close", definition.actors.sponsor, "settlementProof", "bytes"),
     ]),
     ["final-batch-close"],
   );
@@ -599,7 +865,10 @@ function addFinal(add, call, definition) {
       "final",
       "sponsor",
       "candidatePool",
-      call("processWithdrawal(uint256,address)", [{ ref: "final-batch" }, account]),
+      call("processWithdrawal(uint256,address)", [
+        resultRef("final-batch-close", "batchId", "uint256"),
+        account,
+      ]),
       ["final-batch-settle"],
       { concurrencyGroup: "final-process" },
     );
@@ -609,9 +878,9 @@ function addFinal(add, call, definition) {
       "sponsor",
       "wrapper",
       call("finalizeUnwrap(bytes32,uint64,bytes)", [
-        { ref: `final-process-${id}.requestId` },
-        { ref: `decrypt-${id}` },
-        { ref: `proof-${id}` },
+        resultRef(`final-process-${id}`, "unwrapRequestId", "bytes32"),
+        discoveryRef(`final-process-${id}`, account, "clearAmount", "uint64"),
+        discoveryRef(`final-process-${id}`, account, "proof", "bytes"),
       ]),
       [`final-process-${id}`],
       { concurrencyGroup: "final-finalize" },
@@ -825,6 +1094,56 @@ function validateActions(actions) {
     visited.add(id);
   };
   actions.forEach((entry) => visit(entry.id));
+  const expectedPhases = { setup: 71, deposit: 96, draw: 88, queue: 7, final: 100 };
+  for (const [phase, count] of Object.entries(expectedPhases))
+    if (actions.filter((entry) => entry.kind === "eoa" && entry.phase === phase).length !== count)
+      fail("invalid phase composition");
+  for (const entry of actions) {
+    if (!PHASES.includes(entry.phase) || typeof entry.operation.signature !== "string")
+      fail("invalid action template");
+    for (const ref of findRefs(entry.operation)) {
+      if (
+        ![
+          "result",
+          "discovery",
+          "historicalProof",
+          "sdkInput",
+          "sdkProof",
+          "delegateData",
+          "abiBytes",
+        ].includes(ref.kind)
+      )
+        fail("untyped reference");
+      if (["sdkInput", "sdkProof", "delegateData", "abiBytes"].includes(ref.kind)) continue;
+      if (
+        !byId.has(ref.producer) ||
+        ref.producer === entry.id ||
+        !dependsOn(entry.id, ref.producer, byId)
+      )
+        fail(`unscoped reference producer ${entry.id}:${ref.producer}`);
+    }
+  }
+}
+function findRefs(value, found = []) {
+  if (Array.isArray(value)) value.forEach((entry) => findRefs(entry, found));
+  else if (plain(value)) {
+    if (typeof value.kind === "string" && value.abiType) found.push(value);
+    else Object.values(value).forEach((entry) => findRefs(entry, found));
+  }
+  return found;
+}
+function dependsOn(id, producer, byId) {
+  const pending = [...byId.get(id).dependencies];
+  const seen = new Set();
+  while (pending.length) {
+    const dependency = pending.pop();
+    if (dependency === producer) return true;
+    if (!seen.has(dependency)) {
+      seen.add(dependency);
+      pending.push(...byId.get(dependency).dependencies);
+    }
+  }
+  return false;
 }
 function addEoaDeposits(add, start, end) {
   for (let index = start; index < end; index += 1) {
