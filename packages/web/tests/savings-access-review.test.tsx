@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
   encrypt: vi.fn(),
   walletBalance: 100_000_000n,
   principal: undefined as bigint | undefined,
+  pool: "0x3333333333333333333333333333333333333333" as `0x${string}`,
   session: undefined as { address: `0x${string}`; prepareTransaction: typeof vi.fn } | undefined,
 }));
 
@@ -28,7 +29,9 @@ vi.mock("@/lib/contracts", async (original) => ({
   CONTRACTS: {
     usdc: fixture.account,
     confidentialUsdc: "0x2222222222222222222222222222222222222222",
-    confidentialPrizePool: "0x3333333333333333333333333333333333333333",
+    get confidentialPrizePool() {
+      return fixture.pool;
+    },
   },
 }));
 vi.mock("@/lib/wallet-context", () => ({
@@ -82,6 +85,7 @@ beforeEach(() => {
   fixture.encrypt.mockReset();
   fixture.walletBalance = 100_000_000n;
   fixture.principal = undefined;
+  fixture.pool = "0x3333333333333333333333333333333333333333";
   fixture.session = { address: fixture.account, prepareTransaction: fixture.prepare };
   fixture.readCalls.mockResolvedValue([{ to: fixture.account, data: "0x" }]);
   fixture.encrypt.mockResolvedValue({ handle: `0x${"1".repeat(64)}`, inputProof: "0x" });
@@ -163,4 +167,99 @@ test("an in-flight deposit preparation is aborted and its late prepared transact
   resolveDeposit({ cancel: lateCancel, send: fixture.send });
   await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
   await screen.findByRole("button", { name: "Confirm" });
+});
+
+test("editing a deposit amount cancels its unused Ready review", async () => {
+  const cancel = vi.fn();
+  fixture.prepare.mockResolvedValue({ cancel, send: fixture.send });
+  mount();
+  await screen.findByText("100.00 USDC");
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "11" } });
+  await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
+
+test("replacing the account aborts an in-flight review and cancels its late result", async () => {
+  let resolve!: (value: { cancel: () => void; send: typeof fixture.send }) => void;
+  const lateCancel = vi.fn();
+  fixture.prepare.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  const view = mount();
+  await screen.findByText("100.00 USDC");
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  const signal = fixture.prepare.mock.calls[0]?.[1]?.signal as AbortSignal;
+  fixture.session = {
+    address: "0x4444444444444444444444444444444444444444",
+    prepareTransaction: fixture.prepare,
+  };
+  view.rerender(
+    <ToastProvider>
+      <SavingsPage />
+    </ToastProvider>,
+  );
+  await waitFor(() => expect(signal.aborted).toBe(true));
+  resolve({ cancel: lateCancel, send: fixture.send });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
+});
+
+test("unmounting a pending review cancels its late result and a new pool mount prepares independently", async () => {
+  let resolve!: (value: { cancel: () => void; send: typeof fixture.send }) => void;
+  const lateCancel = vi.fn();
+  fixture.prepare
+    .mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    )
+    .mockResolvedValueOnce({ cancel() {}, send: fixture.send });
+  const view = mount();
+  await screen.findByText("100.00 USDC");
+  fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review deposit" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(1));
+  const signal = fixture.prepare.mock.calls[0]?.[1]?.signal as AbortSignal;
+  view.unmount();
+  fixture.pool = "0x5555555555555555555555555555555555555555";
+  mount();
+  await waitFor(() => expect(signal.aborted).toBe(true));
+  resolve({ cancel: lateCancel, send: fixture.send });
+  await waitFor(() => expect(lateCancel).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  await screen.findByRole("button", { name: "Confirm" });
+  expect(fixture.prepare).toHaveBeenCalledTimes(2);
+});
+
+test("an expired access Ready review cancels without sending and a fresh review can become Ready", async () => {
+  const cancel = vi.fn();
+  const now = vi.spyOn(Date, "now").mockReturnValue(0);
+  fixture.prepare.mockResolvedValue({ cancel, send: fixture.send });
+  try {
+    mount();
+    await new Promise((done) => setTimeout(done, 0));
+    fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+    await screen.findByRole("button", { name: "Confirm" });
+    now.mockReturnValue(61_000);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Please review access again.")).toBeTruthy();
+    now.mockReturnValue(62_000);
+    fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+    await screen.findByRole("button", { name: "Confirm" });
+    expect(fixture.prepare).toHaveBeenCalledTimes(2);
+  } finally {
+    now.mockRestore();
+  }
 });
