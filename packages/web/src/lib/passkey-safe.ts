@@ -433,21 +433,31 @@ function createSession(
   let usingCounterfactualRelay = counterfactual;
   let refreshRequired = false;
 
-  async function ensureDeployedRelay(): Promise<void> {
+  async function refreshDeploymentState(): Promise<void> {
     if (!refreshRequired) return;
+    const code = await withinSubmissionDeadline(
+      () => deps.getCode(getAddress(metadata.safeAddress)),
+      deps.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
+    );
+    if (code === submissionTimedOut) return;
+    if (!code || code === "0x") {
+      refreshRequired = false;
+      return;
+    }
     const refreshedRelay = await prepareDeployedRelay(
       await deps.initRelay(
         relayOptions(metadata, { safeAddress: getAddress(metadata.safeAddress) }, rpId, deps),
       ),
     );
     relay = refreshedRelay;
+    usingCounterfactualRelay = false;
     refreshRequired = false;
   }
 
   return {
     address: getAddress(metadata.safeAddress),
     signTypedData: async (typedData) => {
-      await ensureDeployedRelay();
+      await refreshDeploymentState();
       return signSafeTypedData(relay.protocolKit, typedData);
     },
     lookupUserOperation: async (operation) => {
@@ -467,10 +477,7 @@ function createSession(
         canonicalReceiptDependencies(relay, deps),
         operation,
       );
-      if (usingCounterfactualRelay) {
-        usingCounterfactualRelay = false;
-        refreshRequired = true;
-      }
+      if (usingCounterfactualRelay) refreshRequired = true;
       return outcome;
     },
     prepareTransaction: async (calls) => {
@@ -557,8 +564,7 @@ function createSession(
             getAddress(metadata.safeAddress),
             options,
             () => {
-              usingCounterfactualRelay = false;
-              refreshRequired = true;
+              if (usingCounterfactualRelay) refreshRequired = true;
             },
           );
           return tx;
@@ -571,7 +577,7 @@ function createSession(
       // valid passkey assertion fail AA24. Refreshing before signing avoids a
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
-      await ensureDeployedRelay();
+      await refreshDeploymentState();
       const transactionHash = await sendCalls(
         relay,
         calls,
@@ -580,8 +586,7 @@ function createSession(
         getAddress(metadata.safeAddress),
         options,
         () => {
-          usingCounterfactualRelay = false;
-          refreshRequired = true;
+          if (usingCounterfactualRelay) refreshRequired = true;
         },
       );
       return transactionHash;
@@ -648,17 +653,30 @@ async function submitSignedOperation(
     throw new SafeUserOperationIntegrityError(identity, "The operation is not for this Safe.");
   }
   recordSubmittedGas(diagnostics, userOperation);
-  options?.onSigned?.();
+  const deadline = Date.now() + Math.max(0, deps.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS);
   try {
-    await awaitSubmissionObserver(options?.onOperationPrepared, identity, deps.receiptTimeoutMs);
+    options?.onSigned?.();
+    await awaitSubmissionObserver(
+      options?.onOperationPrepared,
+      identity,
+      remainingSubmissionDeadline(deadline),
+    );
   } catch (error) {
     throw new SafeUserOperationNotSubmittedError(identity, error);
   }
+  if (remainingSubmissionDeadline(deadline) <= 0)
+    throw new SafeUserOperationNotSubmittedError(identity);
   let hash: string;
   try {
-    hash = await withPasskeyStage(diagnostics, "submission", () =>
-      relay.executeTransaction({ executable: signed }),
+    const sent = await withinSubmissionDeadline(
+      () =>
+        withPasskeyStage(diagnostics, "submission", () =>
+          relay.executeTransaction({ executable: signed }),
+        ),
+      remainingSubmissionDeadline(deadline),
     );
+    if (sent === submissionTimedOut) throw new Error("The sponsored transaction is still pending.");
+    hash = sent;
   } catch (error) {
     const rejection = bundlerRejection(error);
     const wrapped = rejection
@@ -678,7 +696,12 @@ async function submitSignedOperation(
   onAccepted?.();
   try {
     const outcome = await withPasskeyStage(diagnostics, "receipt", () =>
-      pollCanonicalUserOperationReceipt(canonicalReceiptDependencies(relay, deps), identity, deps),
+      pollCanonicalUserOperationReceipt(
+        canonicalReceiptDependencies(relay, deps),
+        identity,
+        deps,
+        deadline,
+      ),
     );
     if (outcome.state === "pending") throw new SafeUserOperationPendingError(identity);
     if (outcome.state === "failed")
@@ -696,6 +719,10 @@ async function submitSignedOperation(
 }
 
 const submissionTimedOut = Symbol("submission-timed-out");
+
+function remainingSubmissionDeadline(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
+}
 
 function recordSubmittedGas(
   diagnostics: PasskeyGasDiagnostics,
@@ -750,10 +777,9 @@ async function pollCanonicalUserOperationReceipt(
   dependencies: CanonicalReceiptDependencies,
   identity: SafeUserOperationIdentity,
   options: Pick<PasskeySafeDependencies, "receiptTimeoutMs" | "receiptPollMs" | "sleep">,
+  deadline = Date.now() + Math.max(0, options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS),
 ): Promise<SafeUserOperationReceipt> {
-  const timeoutMs = Math.max(0, options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS);
   const pollMs = Math.max(0, options.receiptPollMs ?? DEFAULT_RECEIPT_POLL_MS);
-  const deadline = Date.now() + timeoutMs;
   while (true) {
     const remainingForLookup = deadline - Date.now();
     if (remainingForLookup <= 0) return Object.freeze({ state: "pending", operation: identity });

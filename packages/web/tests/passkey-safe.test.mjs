@@ -612,6 +612,9 @@ test("reconnects through the deployed Safe after the first mined action", async 
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage },
     dependencies({
+      async getCode() {
+        return "0x6000";
+      },
       async initRelay(options) {
         initOptions.push(options);
         return relays[initOptions.length - 1];
@@ -644,6 +647,9 @@ test("returns a mined transaction and retries a failed relay refresh before the 
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage },
     dependencies({
+      async getCode() {
+        return "0x6000";
+      },
       async initRelay() {
         initCount += 1;
         if (initCount === 1) return relay();
@@ -1365,7 +1371,7 @@ test("bounds a non-cooperative polling sleep and preserves the submitted identit
   assert.equal(receiptReads, 1);
 });
 
-test("a restored counterfactual lookup refreshes the relay without signing or sending", async () => {
+test("a restored counterfactual lookup selects a deployed relay only after code is observed", async () => {
   const metadata = {
     rawId: RAW_ID,
     coordinates: COORDINATES,
@@ -1389,7 +1395,7 @@ test("a restored counterfactual lookup refreshes the relay without signing or se
     { metadata, rpId: "app.kettigo.xyz" },
     dependencies({
       async getCode() {
-        return "0x";
+        return "0x6000";
       },
       async initRelay(options) {
         initCount += 1;
@@ -1404,5 +1410,71 @@ test("a restored counterfactual lookup refreshes the relay without signing or se
   assert.equal(initialCreates, 0);
   assert.equal(sends, 0);
   await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
-  assert.equal(initCount, 2);
+  assert.equal(initCount, 3);
+});
+
+test("bounds a stalled send once and keeps its identity pending without late polling", async () => {
+  const instance = relay();
+  const expectedHash = getSafeUserOperationIdentity(finalUserOperation()).userOperationHash;
+  let resolveSend;
+  let receiptReads = 0;
+  let sends = 0;
+  instance.executeTransaction = async () => {
+    sends += 1;
+    return new Promise((resolve) => {
+      resolveSend = resolve;
+    });
+  };
+  instance.getUserOperationReceipt = async () => {
+    receiptReads += 1;
+    return null;
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      receiptTimeoutMs: 15,
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    (error) =>
+      error instanceof SafeUserOperationPendingError &&
+      error.operation.userOperationHash === expectedHash,
+  );
+  resolveSend(expectedHash);
+  await delay(0);
+  assert.equal(sends, 1);
+  assert.equal(receiptReads, 0);
+});
+
+test("onSigned failure retains identity and prevents execution", async () => {
+  const instance = relay();
+  const expectedHash = getSafeUserOperationIdentity(finalUserOperation()).userOperationHash;
+  let sends = 0;
+  instance.executeTransaction = async () => {
+    sends += 1;
+    return expectedHash;
+  };
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
+  );
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
+      onSigned() {
+        throw new Error("persist failed");
+      },
+    }),
+    (error) =>
+      error instanceof SafeUserOperationNotSubmittedError &&
+      error.operation.userOperationHash === expectedHash,
+  );
+  assert.equal(sends, 0);
 });
