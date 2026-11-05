@@ -77,8 +77,29 @@ vi.mock("@/lib/zama", async () => ({
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn(), reportClientError: vi.fn() }));
 
 import SavingsPage from "@/app/savings/page";
-import { ActionCenterProvider } from "@/components/ActionCenter";
+import { ActionCenterProvider, useActionCenter } from "@/components/ActionCenter";
 import { ToastProvider } from "@/components/Toast";
+import {
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "@/lib/passkey-operation";
+
+function ActionStatusProbe() {
+  const { actions } = useActionCenter();
+  return <output data-testid="action-statuses">{JSON.stringify(actions)}</output>;
+}
+
+function renderSavingsActivity() {
+  return render(
+    <ToastProvider>
+      <ActionCenterProvider>
+        <SavingsPage />
+        <ActionStatusProbe />
+      </ActionCenterProvider>
+    </ToastProvider>,
+  );
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -267,5 +288,66 @@ test.each(["membership", "pending"] as const)(
     await screen.findByText("Your savings status needs a refresh.");
     expect(screen.queryByRole("button", { name: "Review participation" })).toBeNull();
     expect(fixture.send).toHaveBeenCalledTimes(1);
+  },
+);
+
+test.each([
+  [
+    "rejected",
+    (operation: {
+      chainId: 11155111;
+      entryPoint: typeof entryPoint07Address;
+      sender: typeof fixture.account;
+      userOperationHash: `0x${string}`;
+    }) => new SafeUserOperationRejectedError(operation, 4001, new Error("rejection secret")),
+    "rejected",
+  ],
+  [
+    "known-not-submitted",
+    (operation: {
+      chainId: 11155111;
+      entryPoint: typeof entryPoint07Address;
+      sender: typeof fixture.account;
+      userOperationHash: `0x${string}`;
+    }) => new SafeUserOperationNotSubmittedError(operation, new Error("submission secret")),
+    "not-submitted",
+  ],
+  [
+    "inner-failed",
+    (operation: {
+      chainId: 11155111;
+      entryPoint: typeof entryPoint07Address;
+      sender: typeof fixture.account;
+      userOperationHash: `0x${string}`;
+    }) => new SafeUserOperationFailedError(operation),
+    "failed",
+  ],
+] as const)(
+  "a %s participation terminal error stays terminal without a canonical-success hold",
+  async (_kind, terminalError, expectedStatus) => {
+    fixture.version = "2";
+    fixture.send.mockImplementation(({ onOperationPrepared }) => {
+      const operation = {
+        chainId: 11155111 as const,
+        entryPoint: entryPoint07Address,
+        sender: fixture.account,
+        userOperationHash: `0x${"e".repeat(64)}` as const,
+      };
+      onOperationPrepared(operation);
+      throw terminalError(operation);
+    });
+    renderSavingsActivity();
+    fireEvent.click(await screen.findByRole("button", { name: "Review participation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("action-statuses").textContent).toContain(
+        `\"status\":\"${expectedStatus}\"`,
+      ),
+    );
+    expect(fixture.prepare).toHaveBeenCalledTimes(1);
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Your savings status needs a refresh.")).toBeNull();
+    expect(document.body.textContent).not.toContain("rejection secret");
+    expect(document.body.textContent).not.toContain("submission secret");
   },
 );

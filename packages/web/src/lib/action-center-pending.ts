@@ -9,6 +9,7 @@ import {
 } from "./action-center-model.ts";
 import type { PendingOperationRecoveryResult, PendingOperationRecord } from "./smart-session";
 import {
+  SafeUserOperationFailedError,
   SafeUserOperationNotSubmittedError,
   SafeUserOperationRejectedError,
 } from "./passkey-operation.ts";
@@ -81,6 +82,12 @@ export function patchForRunnerError(
     return { status: "rejected", error: "Approval was not completed." };
   if (error instanceof SafeUserOperationNotSubmittedError)
     return { status: "not-submitted", error: "This action was not sent. Review it again." };
+  if (error instanceof SafeUserOperationFailedError)
+    return {
+      status: "failed",
+      txHash: error.transactionHash,
+      error: "This action did not go through.",
+    };
   if (
     action.status === "submitted" ||
     action.status === "confirming" ||
