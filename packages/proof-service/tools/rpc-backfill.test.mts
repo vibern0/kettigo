@@ -8,17 +8,11 @@ import { D1Archive, type BlockHeader } from "../src/archive.ts";
 import { type RpcSource } from "../src/ingest.ts";
 import { branchHash, leafHash, type ArchiveLog, type Namespace, type Node } from "../src/domain.ts";
 import { depth32Fixture, zero } from "../tests/fixtures.ts";
-import {
-  SqliteD1,
-  exportArchive,
-  migrate,
-  restoreCanonical,
-  restoreSqlSnapshot,
-  writeSqlSnapshot,
-} from "./replay-retained.mts";
+import { SqliteD1, migrate } from "./replay-retained.mts";
 import { runRpcBackfill } from "./rpc-backfill.mts";
 import { FallbackRpc } from "../src/rpc.ts";
 import { initializeArchiveForTick } from "../src/worker.ts";
+import { createRepairedArchive, restoreRepairedArchive } from "./rpc-backfill.restore.fixture.mts";
 
 const hash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 const headers = (target: number): BlockHeader[] =>
@@ -306,60 +300,19 @@ test("native SQLite restart repairs the only legacy scheduler interruption shape
 
 test("repaired native archive retains a depth-32 proof through canonical and SQL restores", async () => {
   const directory = mkdtempSync("/tmp/kettigo-rpc-backfill-repair-restore-");
-  const { namespace, block, logs } = depth32Fixture();
-  const source = join(directory, "repaired.sqlite");
-  const db = migrate(source);
-  db.prepare("INSERT INTO namespaces VALUES(?,?,?,?,?,?)").run(
-    namespace.chainId,
-    namespace.pool,
-    namespace.depth,
-    namespace.zero,
-    JSON.stringify(namespace.emptyHashes),
-    namespace.deploymentBlock,
-  );
-  db.prepare("INSERT INTO ingestion_state VALUES(?,?,?,?,?,?,?,?)").run(
-    namespace.chainId,
-    namespace.pool,
-    namespace.deploymentBlock,
-    0,
-    zero,
-    0,
-    null,
-    new Date().toISOString(),
-  );
-  const archive = new D1Archive(new SqliteD1(db));
-  await initializeArchiveForTick(
-    archive,
-    namespace,
-    new FixtureRpc([{ number: 0, hash: zero, parentHash: zero }, block], new Map(), namespace),
-  );
-  await archive.ingest(namespace, await archive.status(namespace), logs, [block]);
+  const { archive, db, namespace, source } = await createRepairedArchive(directory);
   const original = await archive.proof(
     namespace,
     "1",
     "0x1111111111111111111111111111111111111111",
   );
   assert.ok(original);
-  const retained = exportArchive(db, namespace);
-  const canonical = join(directory, "canonical.json");
-  const manifest = join(directory, "canonical.manifest.json");
-  writeFileSync(canonical, JSON.stringify(retained));
-  writeFileSync(manifest, JSON.stringify(retained.manifest));
-  const sql = join(directory, "repaired.sql");
-  const sqlManifest = join(directory, "repaired.sql.manifest.json");
-  writeSqlSnapshot(source, sql, sqlManifest, namespace);
-  db.close();
-
-  const canonicalTarget = join(directory, "canonical.sqlite");
-  await restoreCanonical(canonical, manifest, canonicalTarget, namespace);
-  const sqlTarget = join(directory, "sql.sqlite");
-  await restoreSqlSnapshot(sql, sqlManifest, sqlTarget, namespace);
-  for (const target of [canonicalTarget, sqlTarget]) {
-    const restored = new D1Archive(new SqliteD1(new DatabaseSync(target, { readOnly: true })));
+  const restoredArchive = await restoreRepairedArchive(directory, source, db, namespace);
+  for (const restored of restoredArchive.archives) {
     assert.deepEqual(await restored.status(namespace), {
-      nextBlock: retained.manifest.checkpoint.nextBlock,
-      lastFinalizedBlock: retained.manifest.checkpoint.lastFinalizedBlock,
-      lastFinalizedHash: retained.manifest.checkpoint.lastFinalizedHash,
+      nextBlock: restoredArchive.checkpoint.nextBlock,
+      lastFinalizedBlock: restoredArchive.checkpoint.lastFinalizedBlock,
+      lastFinalizedHash: restoredArchive.checkpoint.lastFinalizedHash,
       revision: 1,
       disabledReason: undefined,
     });
