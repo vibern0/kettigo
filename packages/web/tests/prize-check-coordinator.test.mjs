@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createPrizeCheckCoordinator,
   createPrizeCheckIntentStore,
   createViemPrizeChainReader,
 } from "../src/lib/prize-check-coordinator.ts";
@@ -12,124 +11,15 @@ import {
   SafeUserOperationNotSubmittedError,
   SafeUserOperationRejectedError,
 } from "../src/lib/passkey-operation.ts";
-
-const ACCOUNT = "0x1111111111111111111111111111111111111111";
-const POOL = "0x2222222222222222222222222222222222222222";
-const HASH = `0x${"aa".repeat(32)}`;
-const OP_HASH = `0x${"bb".repeat(32)}`;
-const ENTRY_POINT = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
-
-function identity() {
-  return {
-    chainId: 11155111,
-    entryPoint: ENTRY_POINT,
-    sender: ACCOUNT,
-    userOperationHash: OP_HASH,
-  };
-}
-
-function proof() {
-  return {
-    drawId: 4n,
-    rootHash: HASH,
-    rootSum: HASH,
-    ticket: HASH,
-    upperBound: 2n,
-    closeBlockNumber: 10n,
-    closeLogIndex: 1,
-    chainId: 11155111n,
-    pool: POOL,
-    blockHash: HASH,
-    account: ACCOUNT,
-    index: 1n,
-    generation: 3n,
-    balance: HASH,
-    siblingHashes: Array(32).fill(HASH),
-    siblingSums: Array(32).fill(HASH),
-    parentSums: Array(32).fill(HASH),
-  };
-}
-
-function fixture(overrides = {}) {
-  let checked = false;
-  let award = HASH;
-  let proofs = 0;
-  let sends = 0;
-  let saved = null;
-  const prepared = {
-    cancel() {},
-    send: (options) => {
-      sends += 1;
-      return Promise.resolve().then(async () => {
-        await options?.onOperationPrepared?.(identity());
-        checked = true;
-        return HASH;
-      });
-    },
-  };
-  const coordinator = createPrizeCheckCoordinator({
-    chainId: 11155111,
-    pool: POOL,
-    account: ACCOUNT,
-    session: {
-      address: ACCOUNT,
-      prepareTransaction: async () => prepared,
-      lookupUserOperation: async () => ({
-        state: "confirmed",
-        operation: identity(),
-        transactionHash: HASH,
-        blockNumber: 20n,
-        blockHash: HASH,
-      }),
-    },
-    readChecked: async () => checked,
-    readAward: async () => award,
-    readBlockHash: async () => HASH,
-    getProofClient: () => ({
-      getProof: async () => {
-        proofs += 1;
-        return { kind: "proof", proof: proof() };
-      },
-    }),
-    prepareReadSessionCalls: async () => [],
-    intentStore: {
-      save: async (value) => {
-        saved = value;
-      },
-      read: () => saved,
-      clear: async () => {
-        saved = null;
-      },
-    },
-    ...overrides,
-  });
-  return {
-    coordinator,
-    prepared,
-    setChecked: (value) => {
-      checked = value;
-    },
-    setAward: (value) => {
-      award = value;
-    },
-    getProofs: () => proofs,
-    getSends: () => sends,
-  };
-}
-
-function memoryStorage(initial = null) {
-  let value = initial;
-  return {
-    getItem: () => value,
-    setItem: (_key, next) => {
-      value = next;
-    },
-    removeItem: () => {
-      value = null;
-    },
-    raw: () => value,
-  };
-}
+import {
+  ACCOUNT,
+  HASH,
+  OP_HASH,
+  POOL,
+  identity,
+  fixture,
+  memoryStorage,
+} from "./prize-check-coordinator-fixtures.mjs";
 
 test("rejects corrupt saved intent rather than overwriting it", async () => {
   const storage = memoryStorage("{bad");
