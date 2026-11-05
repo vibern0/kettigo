@@ -5,6 +5,8 @@ import {
   delay,
   dependencies,
   finalUserOperation,
+  getAddress,
+  entryPoint07Address,
   SAFE_ADDRESS,
   test,
   VERIFIER_ADDRESS,
@@ -14,6 +16,7 @@ import {
 } from "./passkey-safe-fixtures.mjs";
 
 import { createGuardedPasskeySession } from "../src/lib/pending-operation-session.ts";
+import { createPendingOperationManager } from "../src/lib/pending-operation-guard.ts";
 import {
   createPasskeyAccount,
   restorePasskeyAccount,
@@ -220,4 +223,82 @@ test("offchain typed signing remains independent while a direct operation lease 
   finish();
   await delay(0);
   assert.equal(typedSigns, 1);
+});
+
+test("a completion clears only its captured staged identity", async () => {
+  const storage = createStorage();
+  const locks = createLocks();
+  const first = `0x${"11".repeat(32)}`;
+  const newer = `0x${"22".repeat(32)}`;
+  let complete;
+  const raw = {
+    address: SAFE_ADDRESS,
+    async signTypedData() {
+      return "0x";
+    },
+    async prepareTransaction() {
+      throw new Error("not used");
+    },
+    async sendTransaction(_calls, options) {
+      await options.onOperationPrepared({
+        chainId: 11155111,
+        entryPoint: getAddress(entryPoint07Address),
+        sender: SAFE_ADDRESS,
+        userOperationHash: first,
+      });
+      return new Promise((resolve) => {
+        complete = () => resolve(first);
+      });
+    },
+  };
+  const guarded = createGuardedPasskeySession(raw, { storage, locks });
+  const sending = guarded.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+  await delay(0);
+  const manager = createPendingOperationManager({ sender: SAFE_ADDRESS, storage, locks });
+  storage.setItem(
+    manager.storageKey,
+    JSON.stringify({
+      version: 1,
+      chainId: 11155111,
+      entryPoint: getAddress(entryPoint07Address),
+      sender: SAFE_ADDRESS,
+      userOperationHash: newer,
+      createdAt: 1,
+      phase: "attempted",
+    }),
+  );
+  complete();
+  await sending;
+  assert.equal(guarded.getPendingOperation().userOperationHash, newer);
+});
+
+test("a broadcast direct operation keeps raw receipt waiting after the preparation deadline", async () => {
+  const storage = createStorage();
+  const locks = createLocks();
+  let reads = 0;
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage },
+    dependencies({
+      pendingOperationLocks: locks,
+      preparationTimeoutMs: 10,
+      receiptTimeoutMs: 100,
+      receiptPollMs: 0,
+      async initRelay() {
+        const instance = relay();
+        instance.getUserOperationReceipt = async () => {
+          reads += 1;
+          return reads === 1 ? null : relay().getUserOperationReceipt();
+        };
+        return instance;
+      },
+      async sleep() {
+        await delay(20);
+      },
+    }),
+  );
+  assert.equal(
+    await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    `0x${"44".repeat(32)}`,
+  );
+  assert.equal(reads, 2);
 });

@@ -62,11 +62,14 @@ function operation(record: PendingOperationRecord): SafeUserOperationIdentity {
 function clearKnown(
   lease: { clearMatching(identity: SafeUserOperationIdentity): boolean },
   error: unknown,
+  staged: SafeUserOperationIdentity | undefined,
 ): void {
   if (
     error instanceof SafeUserOperationNotSubmittedError ||
     error instanceof SafeUserOperationRejectedError ||
-    error instanceof SafeUserOperationFailedError
+    (error instanceof SafeUserOperationFailedError &&
+      staged &&
+      error.operation.userOperationHash.toLowerCase() === staged.userOperationHash.toLowerCase())
   )
     lease.clearMatching(error.operation);
 }
@@ -118,15 +121,17 @@ export function createGuardedPasskeySession(
       markAttempted(identity: SafeUserOperationIdentity): PendingOperationRecord;
     },
     caller: SmartTransactionOptions | undefined,
+    staged: { identity?: SafeUserOperationIdentity; attempted?: () => void },
   ): InternalTransactionOptions => ({
     ...caller,
     __assertPendingOperationLease: () => lease.assertActive(),
     onOperationPrepared: async (identity) => {
       lease.assertActive();
-      lease.stagePrepared(identity);
+      staged.identity = operation(lease.stagePrepared(identity));
       await caller?.onOperationPrepared?.(identity);
       lease.assertActive();
-      lease.markAttempted(identity);
+      staged.identity = operation(lease.markAttempted(identity));
+      staged.attempted?.();
     },
   });
 
@@ -136,15 +141,17 @@ export function createGuardedPasskeySession(
       release(): Promise<void>;
     },
     result: Promise<Hex>,
+    staged: { identity?: SafeUserOperationIdentity },
   ): Promise<Hex> => {
     try {
       const hash = await result;
-      const record = manager().readCurrent();
-      if (record) lease.clearMatching(operation(record));
+      if (!staged.identity)
+        throw new PendingOperationRecoveryBlockedError("The operation was never durably staged.");
+      lease.clearMatching(staged.identity);
       return hash;
     } catch (error) {
       try {
-        clearKnown(lease, error);
+        clearKnown(lease, error, staged.identity);
       } catch {
         // The original transaction error is more useful and the guard remains fail-closed.
       }
@@ -220,9 +227,10 @@ export function createGuardedPasskeySession(
           try {
             lease.assertActive();
             // This invocation intentionally happens before any await: WebAuthn needs the click stack.
-            const sent = prepared.send(guardedOptions(lease, transactionOptions));
+            const staged: { identity?: SafeUserOperationIdentity } = {};
+            const sent = prepared.send(guardedOptions(lease, transactionOptions, staged));
             active = false;
-            return settle(lease, sent);
+            return settle(lease, sent, staged);
           } catch (error) {
             active = false;
             release(lease);
@@ -233,14 +241,30 @@ export function createGuardedPasskeySession(
     },
     sendTransaction: async (calls, transactionOptions) => {
       const lease = await manager().acquireReview();
+      let resolveAttempted!: () => void;
+      const attempted = new Promise<void>((resolve) => {
+        resolveAttempted = resolve;
+      });
+      const staged: { identity?: SafeUserOperationIdentity; attempted?: () => void } = {
+        attempted: resolveAttempted,
+      };
       try {
         lease.assertActive();
         const sent = settle(
           lease,
-          raw.sendTransaction(calls, guardedOptions(lease, transactionOptions)),
+          raw.sendTransaction(calls, guardedOptions(lease, transactionOptions, staged)),
+          staged,
         );
-        return await racePreparation(sent, timeoutMs, undefined);
+        const handoff = racePreparation(attempted, timeoutMs, undefined).then(() => sent);
+        return await Promise.race([sent, handoff]);
       } catch (error) {
+        if (staged.identity) {
+          try {
+            lease.clearMatching(staged.identity);
+          } catch {
+            // A cleanup failure remains fail-closed; do not replace the first error.
+          }
+        }
         release(lease);
         throw error;
       }
