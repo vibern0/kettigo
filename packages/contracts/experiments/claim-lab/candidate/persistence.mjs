@@ -9,7 +9,7 @@ function fail(message) {
 }
 
 export async function persist(path, state, failPublish) {
-  if (failPublish) fail("persist failed");
+  if (failPublish === true) fail("persist failed");
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   let handle;
   try {

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireLease, assertLease, persist, releaseLease } from "./persistence.mjs";
 import {
@@ -9,6 +9,11 @@ import {
   validateReceipt,
   validateStoredReceipt,
 } from "./receipt.mjs";
+import {
+  validatePersistedCaps,
+  validatePersistedUniqueness,
+  validateRecomputedBudget,
+} from "./budget-validation.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -28,6 +33,11 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const HEX = /^0x(?:[0-9a-fA-F]{2})*$/;
 const UINT = /^(0|[1-9][0-9]*)$/;
+const MAX_INTENT_ID = 256;
+const MAX_INPUT = 262_144;
+const MAX_RAW = 524_288;
+const MAX_ERROR = 2_048;
+const MAX_JOURNAL_BYTES = 2_000_000;
 
 function fail(message) {
   throw new Error(`candidate journal: ${message}`);
@@ -48,7 +58,11 @@ function validHash(value) {
   return typeof value === "string" && HASH.test(value);
 }
 function decimalMicro(value) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/.test(value))
+  if (
+    typeof value !== "string" ||
+    value.length > 80 ||
+    !/^(0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/.test(value)
+  )
     fail("invalid USDC commitment");
   const [whole, fraction = ""] = value.split(".");
   return BigInt(whole) * 1_000_000n + BigInt(`${fraction}000000`.slice(0, 6));
@@ -83,6 +97,8 @@ function validateState(state, envelope, identity) {
   validateStateStructure(state, envelope);
   for (const intent of state.intents) validatePersistedIntent(intent);
   validateRecomputedBudget(state);
+  validatePersistedCaps(state, envelope);
+  validatePersistedUniqueness(state);
 }
 function validateStateIdentity(state, envelope, identity) {
   if (
@@ -105,21 +121,32 @@ function validateStateStructure(state, envelope) {
     fail("invalid journal structure");
 }
 function validatePersistedIntent(intent) {
+  if (!validPersistedIntentFields(intent)) fail("invalid persisted intent");
   if (
-    !intent ||
-    typeof intent.intentId !== "string" ||
-    !validAddress(intent.sender) ||
-    !isNatural(intent.nonce) ||
-    !validHash(intent.unsignedDigest) ||
-    !isNatural(intent.offeredAt) ||
-    !validTarget(intent.to, intent.input) ||
-    !validIntentBudget(intent) ||
-    !Array.isArray(intent.attempts)
+    intent.signed &&
+    (!HEX.test(intent.signed.raw) ||
+      intent.signed.raw.length > MAX_RAW ||
+      !validHash(intent.signed.hash))
   )
-    fail("invalid persisted intent");
-  if (intent.signed && (!HEX.test(intent.signed.raw) || !validHash(intent.signed.hash)))
     fail("invalid persisted signature");
   validatePersistedTransition(intent);
+}
+function validPersistedIntentFields(intent) {
+  return (
+    Boolean(intent) &&
+    [
+      typeof intent.intentId === "string" &&
+        Boolean(intent.intentId) &&
+        intent.intentId.length <= MAX_INTENT_ID,
+      validAddress(intent.sender),
+      isNatural(intent.nonce),
+      validHash(intent.unsignedDigest),
+      isNatural(intent.offeredAt),
+      validTarget(intent.to, intent.input),
+      validIntentBudget(intent),
+      Array.isArray(intent.attempts),
+    ].every(Boolean)
+  );
 }
 function validClock(state, envelope) {
   return state.startedAt === null
@@ -144,6 +171,7 @@ function validTarget(to, input) {
   return (
     (validAddress(to) || to === null) &&
     typeof input === "string" &&
+    input.length <= MAX_INPUT &&
     HEX.test(input) &&
     (to !== null || input !== "0x")
   );
@@ -151,11 +179,7 @@ function validTarget(to, input) {
 function validatePersistedTransition(intent) {
   const hasSigned = Boolean(intent.signed);
   const terminal = intent.terminal;
-  if (
-    !["reserved", "signed", "broadcast-attempted", "terminal"].includes(intent.state) ||
-    (intent.state === "reserved" && hasSigned) ||
-    (intent.state !== "reserved" && !hasSigned)
-  )
+  if (!validTransition(intent.state, hasSigned, intent.attempts.length, terminal))
     fail("invalid persisted transition");
   validateAttempts(intent);
   if (terminal) {
@@ -163,46 +187,41 @@ function validatePersistedTransition(intent) {
     validateStoredReceipt(terminal, intent);
   } else if (intent.state === "terminal") fail("invalid persisted terminal");
 }
+function validTransition(state, signed, attempts, terminal) {
+  return (
+    {
+      reserved: !signed && attempts === 0 && !terminal,
+      signed: signed && attempts === 0 && !terminal,
+      "broadcast-attempted": signed && attempts > 0 && !terminal,
+      terminal: signed && attempts > 0 && Boolean(terminal),
+    }[state] === true
+  );
+}
 function validateAttempts(intent) {
   let first = null;
   let unrecoverable = null;
   for (const attempt of intent.attempts) {
-    if (
-      !attempt ||
-      !isNatural(attempt.at) ||
-      (![null, undefined].includes(attempt.error) &&
-        (typeof attempt.error !== "string" || !attempt.error)) ||
-      typeof attempt.unrecoverable !== "boolean"
-    )
-      fail("invalid persisted attempt");
+    if (!validAttempt(attempt)) fail("invalid persisted attempt");
     if (attempt.error && !first) first = attempt.error;
     if (attempt.error && attempt.unrecoverable && !unrecoverable) unrecoverable = attempt.error;
   }
   if (intent.firstError !== first || intent.firstUnrecoverableError !== unrecoverable)
     fail("invalid persisted errors");
 }
-function validateRecomputedBudget(state) {
-  const expected = budgetZero();
-  for (const intent of state.intents) {
-    expected.signedCount += 1;
-    expected.feeReservedWei = (
-      BigInt(expected.feeReservedWei) + BigInt(intent.maxFeeWei)
-    ).toString();
-    expected.fundingCommittedWei = (
-      BigInt(expected.fundingCommittedWei) + BigInt(intent.fundingWei)
-    ).toString();
-    expected.usdcCommittedMicro = (
-      BigInt(expected.usdcCommittedMicro) + BigInt(intent.usdcCommitmentMicro)
-    ).toString();
-    if (intent.terminal)
-      expected.feeActualWei = (
-        BigInt(expected.feeActualWei) + BigInt(intent.terminal.feeWei)
-      ).toString();
-  }
-  if (canonical(expected) !== canonical(state.budget)) fail("invalid persisted budget");
+function validAttempt(attempt) {
+  return (
+    Boolean(attempt) &&
+    isNatural(attempt.at) &&
+    (attempt.error === null ||
+      (typeof attempt.error === "string" &&
+        Boolean(attempt.error) &&
+        attempt.error.length <= MAX_ERROR)) &&
+    typeof attempt.unrecoverable === "boolean"
+  );
 }
 async function loadState(statePath, envelope, identity) {
   try {
+    if ((await stat(statePath)).size > MAX_JOURNAL_BYTES) fail("journal state exceeds size limit");
     return { state: JSON.parse(await readFile(statePath, "utf8")), created: false };
   } catch (error) {
     if (error?.code !== "ENOENT") fail("invalid journal state");
@@ -369,7 +388,7 @@ export class CandidateRunJournal {
   }
 
   #assertOpen() {
-    if (this.closed || this.closing) fail("journal is closed");
+    if (this.closed) fail("journal is closed");
     if (this.poisoned) fail("journal persistence is uncertain");
   }
   #assertSigningAllowed() {
@@ -400,7 +419,8 @@ export class CandidateRunJournal {
     this.state = next;
   }
   async #mutate(operation) {
-    if (this.closed || this.closing || this.poisoned) this.#assertOpen();
+    if (this.closing) fail("journal is closed");
+    if (this.closed || this.poisoned) this.#assertOpen();
     const next = this.tail.then(async () => {
       this.#assertOpen();
       await assertLease(join(this.directory, LOCK), this.token);

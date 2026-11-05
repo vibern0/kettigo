@@ -172,6 +172,16 @@ test("serializes concurrent reservations and blocks stale writes after close", a
   await assert.rejects(journal.recordTerminal("intent-1", {}), /closed/);
 });
 
+test("drains work admitted before close while rejecting work admitted after close", async () => {
+  const journal = await open(await directory());
+  const admitted = journal.reserve(request());
+  const closing = journal.close();
+  await assert.doesNotReject(admitted);
+  await assert.rejects(journal.reserve(request(2)), /closed/);
+  await closing;
+  assert.equal(journal.snapshot().intents.length, 1);
+});
+
 test("accepts nonce zero and contract creation while preserving exact creation receipts", async () => {
   const journal = await open(await directory());
   const creation = { ...request(), nonce: 0, offeredAt: 0, to: null, input: "0x6000" };
@@ -254,9 +264,71 @@ test("rejects a tampered restart deadline and recomputed budget", async () => {
 });
 
 test("poisons future writes when persistence fails after publication", async () => {
-  const journal = await open(await directory());
+  const dir = await directory();
+  const journal = await open(dir);
   journal.failPublish = "after-rename";
   await assert.rejects(journal.reserve(request()), /persist failed/);
+  const published = JSON.parse(await readFile(join(dir, "journal.json"), "utf8"));
+  assert.equal(published.intents.length, 1);
   await assert.rejects(journal.reserve(request(2)), /uncertain/);
   await journal.close();
+});
+
+test("rejects impossible transitions, duplicate persisted identities, and self-consistent cap tampering", async () => {
+  const dir = await directory();
+  const journal = await open(dir);
+  await journal.reserve(request());
+  await journal.close();
+  const path = join(dir, "journal.json");
+  const state = JSON.parse(await readFile(path, "utf8"));
+  state.intents[0].state = "signed";
+  state.intents[0].attempts.push({ at: 1001, error: null, unrecoverable: false });
+  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+  await assert.rejects(open(dir), /transition/);
+  state.intents[0].state = "reserved";
+  state.intents[0].attempts = [];
+  state.intents.push({ ...state.intents[0], intentId: "intent-2" });
+  state.budget.signedCount = 2;
+  state.budget.feeReservedWei = "200";
+  state.budget.fundingCommittedWei = "20";
+  state.budget.usdcCommittedMicro = "2500000";
+  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+  await assert.rejects(open(dir), /duplicate/);
+  state.intents.pop();
+  state.intents[0].maxGasPriceWei = "100001";
+  state.budget.feeReservedWei = "100";
+  state.budget.fundingCommittedWei = "10";
+  state.budget.usdcCommittedMicro = "1250000";
+  state.budget.signedCount = 1;
+  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+  await assert.rejects(open(dir), /approved cap/);
+});
+
+test("rejects self-consistent fee, funding, and USDC cap overruns on restart", async () => {
+  for (const [field, budget] of [
+    ["maxFeeWei", "feeReservedWei"],
+    ["fundingWei", "fundingCommittedWei"],
+    ["usdcCommitmentMicro", "usdcCommittedMicro"],
+  ]) {
+    const dir = await directory();
+    const envelope = {
+      ...ORIGINAL_ENVELOPE,
+      maxFeeWei: "100",
+      maxFundingWei: "10",
+      maxUsdcMicro: "1250000",
+    };
+    const journal = await CandidateRunJournal.open({ directory: dir, envelope, now: () => 1000 });
+    await journal.reserve(request());
+    await journal.close();
+    const path = join(dir, "journal.json");
+    const state = JSON.parse(await readFile(path, "utf8"));
+    state.intents[0][field] =
+      field === "usdcCommitmentMicro" ? "1250001" : field === "fundingWei" ? "11" : "101";
+    state.budget[budget] = state.intents[0][field];
+    await writeFile(path, JSON.stringify(state), { mode: 0o600 });
+    await assert.rejects(
+      CandidateRunJournal.open({ directory: dir, envelope, now: () => 1000 }),
+      /approved cap/,
+    );
+  }
 });
