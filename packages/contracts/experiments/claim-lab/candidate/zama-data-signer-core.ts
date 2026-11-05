@@ -1,4 +1,4 @@
-import { getAddress } from "ethers";
+import { getAddress } from "viem";
 
 import type {
   ContractAbi,
@@ -24,7 +24,7 @@ export class CandidateDataSignerCore implements GenericSigner {
   readonly typedDataSigner: TypedDataSigner;
 
   constructor(address: string, typedDataSigner: TypedDataSigner, createStore: AccountStoreFactory) {
-    this.account = { address: getAddress(address) as WalletAccount["address"], chainId: CHAIN_ID };
+    this.account = { address: getAddress(address), chainId: CHAIN_ID };
     this.typedDataSigner = typedDataSigner;
     this.walletAccount = createStore(this.account);
   }

@@ -32,8 +32,9 @@ const action = (id, phase, actorRole, targetRole, dependencies = [], allocationI
   });
 const digest = (value) => `0x${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 
-export function compileCandidateWorkload(definition) {
+export function compileCandidateWorkload(definition, manifest) {
   validateDefinition(definition);
+  validateManifest(definition, manifest);
   const actions = [];
   const add = (...args) => actions.push(action(...args));
   add("bootstrap-eth", "bootstrap", "bootstrapOperator", "sponsor", [], "bootstrap-eth");
@@ -140,7 +141,7 @@ export function compileCandidateWorkload(definition) {
   const template = Object.freeze({
     version: 1,
     phaseIds: PHASES,
-    definition: normalizedDefinition(definition),
+    definition: normalizedDefinition(definition, manifest),
     actions,
   });
   return Object.freeze({
@@ -192,10 +193,14 @@ function addDeployments(add) {
     );
 }
 function validateHashes(values, label) {
-  if (!Array.isArray(values) || values.some((value) => !/^0x[0-9a-fA-F]{64}$/.test(value)))
+  if (
+    !Array.isArray(values) ||
+    values.length === 0 ||
+    values.some((value) => !/^0x[0-9a-fA-F]{64}$/.test(value))
+  )
     fail(`invalid ${label}`);
 }
-function normalizedDefinition(definition) {
+function normalizedDefinition(definition, manifest) {
   return Object.freeze({
     actors: Object.freeze({
       ...definition.actors,
@@ -217,7 +222,40 @@ function normalizedDefinition(definition) {
       [...definition.deploymentCreationHashes].map((value) => value.toLowerCase()),
     ),
     phaseIds: Object.freeze([...definition.workloadIds]),
+    manifest: Object.freeze({
+      chainId: manifest.chainId,
+      creations: Object.freeze(
+        manifest.creations.map((creation) => Object.freeze({ ...creation })),
+      ),
+    }),
   });
+}
+function validateManifest(definition, manifest) {
+  if (
+    !manifest ||
+    Object.getPrototypeOf(manifest) !== Object.prototype ||
+    manifest.chainId !== 11155111 ||
+    !Array.isArray(manifest.creations) ||
+    manifest.creations.length !== 3
+  )
+    fail("invalid creation manifest");
+  const roles = ["wrapper", "pool", "adapter"];
+  for (const [index, creation] of manifest.creations.entries()) {
+    if (
+      !creation ||
+      Object.getPrototypeOf(creation) !== Object.prototype ||
+      creation.role !== roles[index] ||
+      typeof creation.sourceId !== "string" ||
+      !creation.sourceId ||
+      !/^0x[0-9a-fA-F]{64}$/.test(creation.compilerBuildHash) ||
+      !/^0x[0-9a-fA-F]{64}$/.test(creation.creationBytecodeHash) ||
+      creation.inputDigest.toLowerCase() !== definition.creationInputDigests[index].toLowerCase() ||
+      !creation.constructor ||
+      typeof creation.constructor.signature !== "string" ||
+      !Array.isArray(creation.constructor.args)
+    )
+      fail("invalid creation manifest");
+  }
 }
 function validateActions(actions) {
   if (

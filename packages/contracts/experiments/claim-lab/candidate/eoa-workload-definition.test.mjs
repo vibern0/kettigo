@@ -31,9 +31,22 @@ function definition() {
     initialFundingWorkloadIds: ["bootstrap-eth", "bootstrap-usdc"],
   };
 }
+function manifest() {
+  return {
+    chainId: 11155111,
+    creations: ["wrapper", "pool", "adapter"].map((role, index) => ({
+      role,
+      sourceId: `contracts/${role}.sol:${role}`,
+      compilerBuildHash: hash(index + 10),
+      creationBytecodeHash: hash(index + 20),
+      inputDigest: hash(index + 1),
+      constructor: { signature: `${role}(address)`, args: [hex(53)] },
+    })),
+  };
+}
 
 test("compiles the fixed 375-action graph without putting actions in StaticA phase IDs", () => {
-  const workload = compileCandidateWorkload(definition());
+  const workload = compileCandidateWorkload(definition(), manifest());
   assert.equal(workload.actions.length, 375);
   assert.equal(workload.counts.eoa, 362);
   assert.equal(workload.counts.safe, 13);
@@ -46,7 +59,7 @@ test("compiles the fixed 375-action graph without putting actions in StaticA pha
 });
 
 test("keeps the Safe exit/reuse/rejoin ordering and rejects a changed static template", () => {
-  const workload = compileCandidateWorkload(definition());
+  const workload = compileCandidateWorkload(definition(), manifest());
   const index = (id) => workload.actions.findIndex((action) => action.id === id);
   assert.ok(index("safe-exit-membership") < index("eoa00-reuse-slot-0"));
   assert.ok(index("eoa00-reuse-slot-0") < index("safe-rejoin-slot-1"));
@@ -55,5 +68,23 @@ test("keeps the Safe exit/reuse/rejoin ordering and rejects a changed static tem
   assert.ok(index("morpho-initial-6") < index("safe-exit-membership"));
   const changed = definition();
   changed.creationInputDigests[0] = hash(99);
-  assert.notEqual(compileCandidateWorkload(changed).fingerprint, workload.fingerprint);
+  const changedManifest = manifest();
+  changedManifest.creations[0].inputDigest = hash(99);
+  assert.notEqual(
+    compileCandidateWorkload(changed, changedManifest).fingerprint,
+    workload.fingerprint,
+  );
+});
+
+test("rejects incomplete registry provenance rather than compiling a hash-only workload", () => {
+  const incomplete = definition();
+  incomplete.creationInputDigests = [];
+  assert.throws(() => compileCandidateWorkload(incomplete, manifest()), /creation/i);
+});
+
+test("rejects missing or mismatched creation manifest records", () => {
+  assert.throws(() => compileCandidateWorkload(definition()), /manifest/i);
+  const wrong = manifest();
+  wrong.creations[0].inputDigest = hash(99);
+  assert.throws(() => compileCandidateWorkload(definition(), wrong), /manifest/i);
 });

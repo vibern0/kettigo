@@ -2,7 +2,7 @@ import { createConfig, createWalletAccountStore, memoryStorage, ZamaSDK } from "
 import { sepolia } from "@zama-fhe/sdk/chains";
 import { EthersProvider } from "@zama-fhe/sdk/ethers";
 import { node } from "@zama-fhe/sdk/node";
-import { getAddress, type Provider } from "ethers";
+import { type Provider } from "ethers";
 import { CandidateDataSignerCore, type TypedDataSigner } from "./zama-data-signer-core.ts";
 
 const CHAIN_ID = 11155111;
