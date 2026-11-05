@@ -33,6 +33,16 @@ function transaction(value, hash) {
     blockNumber: value.blockNumber,
   };
 }
+function validateCanonicalReceiptLink(receipt, transaction, block, hash) {
+  if (!block || block.number !== receipt.blockNumber || !same(receipt.hash, hash))
+    fail("receipt mismatch");
+  if (!same(receipt.blockHash, block.hash) || transaction.blockHash !== receipt.blockHash)
+    fail("receipt mismatch");
+  if (transaction.blockNumber !== receipt.blockNumber) fail("receipt mismatch");
+  if (address(receipt.from, "receipt sender") !== transaction.from) fail("receipt mismatch");
+  if ((receipt.to === null ? null : getAddress(receipt.to)) !== transaction.to)
+    fail("receipt mismatch");
+}
 export class EthersV6EoaProviderAdapter {
   constructor(provider) {
     if (!provider) fail("provider required");
@@ -65,17 +75,7 @@ export class EthersV6EoaProviderAdapter {
     const tx = await this.getTransaction(hash);
     if (!tx || receipt.blockNumber == null || receipt.blockHash == null) fail("pending receipt");
     const block = await this.getBlock(receipt.blockNumber);
-    if (
-      !block ||
-      block.number !== receipt.blockNumber ||
-      !same(receipt.hash, hash) ||
-      !same(receipt.blockHash, block.hash) ||
-      tx.blockHash !== receipt.blockHash ||
-      tx.blockNumber !== receipt.blockNumber ||
-      address(receipt.from, "receipt sender") !== tx.from ||
-      (receipt.to === null ? null : getAddress(receipt.to)) !== tx.to
-    )
-      fail("receipt mismatch");
+    validateCanonicalReceiptLink(receipt, tx, block, hash);
     return {
       hash,
       status: receipt.status,

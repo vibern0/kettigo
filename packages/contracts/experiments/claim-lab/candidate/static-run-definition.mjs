@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import process from "node:process";
+import { Buffer } from "node:buffer";
 import { getAddress, isAddress } from "ethers";
 
 import { ORIGINAL_ENVELOPE } from "./journal.mjs";
