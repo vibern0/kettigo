@@ -36,7 +36,14 @@ type Selection =
       pending: (drawId: bigint) => PrizeCheckIntent | null;
     }>
   | Readonly<{ kind: "access-ready"; drawId: bigint; prepared: PreparedSmartTransaction }>
-  | Readonly<{ kind: "checked"; drawId: bigint; handle: Hex; award?: bigint; access?: true }>
+  | Readonly<{
+      kind: "checked";
+      drawId: bigint;
+      handle: Hex;
+      award?: bigint;
+      access?: true;
+      unavailable?: true;
+    }>
   | Readonly<{
       kind:
         | "pending"
@@ -80,6 +87,8 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
   const listAbortRef = useRef<AbortController>();
   const selectionAbortRef = useRef<AbortController>();
   const confirmingCheckRef = useRef<PreparedPrizeCheck>();
+  const preparedAccessRef = useRef<PreparedSmartTransaction>();
+  const confirmingAccessRef = useRef<PreparedSmartTransaction>();
   const recoveredActionRef = useRef<string>();
   const cancelList = useCallback(() => {
     listEpoch.current += 1;
@@ -90,6 +99,9 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
     selectionEpoch.current += 1;
     selectionAbortRef.current?.abort();
     selectionAbortRef.current = undefined;
+    if (preparedAccessRef.current && preparedAccessRef.current !== confirmingAccessRef.current)
+      preparedAccessRef.current.cancel();
+    preparedAccessRef.current = undefined;
   }, []);
   const createCoordinator = useCallback(() => {
     const reader = createViemPrizeChainReader(requestClient, getAddress(pool));
@@ -181,14 +193,13 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
                   );
                   if (request === selectionEpoch.current && !controller.signal.aborted)
                     setSelection({ kind: "checked", drawId, handle: recovered.award, award });
-                } catch {
+                } catch (error) {
                   if (request === selectionEpoch.current && !controller.signal.aborted)
-                    setSelection({
-                      kind: "checked",
-                      drawId,
-                      handle: recovered.award,
-                      access: true,
-                    });
+                    setSelection(
+                      isAccessRequired(error)
+                        ? { kind: "checked", drawId, handle: recovered.award, access: true }
+                        : { kind: "checked", drawId, handle: recovered.award, unavailable: true },
+                    );
                 }
               } else if (recovered.state === "pending") setSelection({ kind: "pending", drawId });
               else setSelection({ kind: "failed", drawId });
@@ -212,9 +223,13 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
           });
           if (request === selectionEpoch.current && !controller.signal.aborted)
             setSelection({ kind: "checked", drawId, handle: handle as Hex, award });
-        } catch {
+        } catch (error) {
           if (request === selectionEpoch.current && !controller.signal.aborted)
-            setSelection({ kind: "checked", drawId, handle: handle as Hex, access: true });
+            setSelection(
+              isAccessRequired(error)
+                ? { kind: "checked", drawId, handle: handle as Hex, access: true }
+                : { kind: "checked", drawId, handle: handle as Hex, unavailable: true },
+            );
         }
       } catch {
         if (request === selectionEpoch.current && !controller.signal.aborted)
@@ -355,6 +370,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         prepared.cancel();
         return;
       }
+      preparedAccessRef.current = prepared;
       setSelection({ kind: "access-ready", drawId: selection.drawId, prepared });
     } catch {
       if (request === selectionEpoch.current && !controller.signal.aborted)
@@ -366,13 +382,20 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
     if (!selection || selection.kind !== "access-ready") return;
     const prepared = selection.prepared;
     const drawId = selection.drawId;
+    if (confirmingAccessRef.current === prepared) return;
+    confirmingAccessRef.current = prepared;
     runAction(
       { label: "Review account access", type: "approval", account: session.address },
       async ({ update }) => {
         update({ status: "waiting-wallet" });
-        await prepared.send();
-        update({ status: "completed" });
-        await viewRound(drawId);
+        try {
+          await prepared.send();
+          update({ status: "completed" });
+          await viewRound(drawId);
+        } finally {
+          if (confirmingAccessRef.current === prepared) confirmingAccessRef.current = undefined;
+          if (preparedAccessRef.current === prepared) preparedAccessRef.current = undefined;
+        }
       },
     );
   };
@@ -499,8 +522,20 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
               </button>
             </div>
           )}
+          {selection.unavailable && (
+            <p className="mt-2 text-sm text-muted">This result cannot be shown right now.</p>
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+function isAccessRequired(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ZAMA_READ_SESSION_ACCESS_REQUIRED"
   );
 }

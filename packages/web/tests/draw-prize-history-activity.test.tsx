@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { entryPoint07Address } from "viem/account-abstraction";
+import { ZamaReadSessionAccessRequiredError } from "@/lib/zama-session-manager";
 
 const fixture = vi.hoisted(() => {
   const account = "0x1111111111111111111111111111111111111111" as const;
@@ -21,6 +22,7 @@ const fixture = vi.hoisted(() => {
     readerFactory: vi.fn(),
     proofFactory: vi.fn(),
     decrypt: vi.fn(),
+    readCalls: vi.fn(),
     session: undefined as any,
   };
 });
@@ -60,6 +62,7 @@ vi.mock("@/lib/zama", async () => ({
   asChecksumAddress: (await vi.importActual<typeof import("viem")>("viem")).getAddress,
   decryptExistingSmartUint64: fixture.decrypt,
   decryptSmartUint64: fixture.decrypt,
+  prepareSmartReadSessionCalls: fixture.readCalls,
   isZeroEncryptedHandle: (value: string) => value === `0x${"0".repeat(64)}`,
 }));
 vi.mock("@/lib/prize-check-coordinator", () => ({
@@ -141,7 +144,9 @@ beforeEach(() => {
   fixture.readerFactory.mockReset();
   fixture.proofFactory.mockReset();
   fixture.decrypt.mockReset();
+  fixture.readCalls.mockReset();
   fixture.decrypt.mockResolvedValue(5_000_000n);
+  fixture.readCalls.mockResolvedValue([]);
   fixture.pending.mockReturnValue(null);
   fixture.recover.mockResolvedValue({ state: "pending" });
   fixture.session = {
@@ -379,4 +384,78 @@ test("never applies an unrelated saved round to the selected outcome", async () 
   expect(await screen.findByRole("button", { name: "Review check" })).toBeTruthy();
   expect(reconcile).not.toHaveBeenCalled();
   expect(fixture.prepare).not.toHaveBeenCalled();
+});
+
+test("reviews missing historical access once and retries the same checked result", async () => {
+  const send = vi.fn(async () => `0x${"a".repeat(64)}` as const);
+  fixture.readerFactory.mockReturnValue({
+    readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+    readChecked: vi.fn(async () => true),
+    readAward: vi.fn(async () => fixture.award),
+  });
+  fixture.decrypt
+    .mockRejectedValueOnce(new ZamaReadSessionAccessRequiredError())
+    .mockResolvedValueOnce(5_000_000n);
+  fixture.prepare.mockResolvedValue({ cancel: vi.fn(), send });
+
+  mount();
+  await viewRound();
+  expect(await screen.findByRole("button", { name: "Review access" })).toBeTruthy();
+  expect(fixture.readCalls).not.toHaveBeenCalled();
+  expect(fixture.prepare).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  expect(fixture.readCalls).toHaveBeenCalledTimes(1);
+  expect(fixture.prepare).toHaveBeenCalledTimes(1);
+  expect(fixture.coordinator).not.toHaveBeenCalled();
+  expect(await screen.findByText("5.000000 USDC")).toBeTruthy();
+});
+
+test("cancels an unused historical access review without losing the checked result", async () => {
+  const cancel = vi.fn();
+  fixture.readerFactory.mockReturnValue({
+    readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+    readChecked: vi.fn(async () => true),
+    readAward: vi.fn(async () => fixture.award),
+  });
+  fixture.decrypt.mockRejectedValue(new ZamaReadSessionAccessRequiredError());
+  fixture.prepare.mockResolvedValue({ cancel, send: fixture.send });
+
+  mount();
+  await viewRound();
+  fireEvent.click(await screen.findByRole("button", { name: "Review access" }));
+  expect(await screen.findByRole("button", { name: "Confirm" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+
+  await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+  expect(fixture.send).not.toHaveBeenCalled();
+  expect(await screen.findByRole("button", { name: "Review access" })).toBeTruthy();
+  fixture.prepare.mockRejectedValueOnce(new Error("review unavailable"));
+  fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(2));
+  expect(await screen.findByRole("button", { name: "Review access" })).toBeTruthy();
+  expect(fixture.send).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Review check" })).toBeNull();
+});
+
+test("keeps a NotEntitled historical read terminal without offering an access review", async () => {
+  const notEntitled = Object.assign(new Error("raw SDK error"), { name: "NotEntitled" });
+  fixture.readerFactory.mockReturnValue({
+    readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+    readChecked: vi.fn(async () => true),
+    readAward: vi.fn(async () => fixture.award),
+  });
+  fixture.decrypt.mockRejectedValue(notEntitled);
+
+  mount();
+  await viewRound();
+  expect(await screen.findByText("This result cannot be shown right now.")).toBeTruthy();
+  expect(screen.getByText("Result checked")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Review access" })).toBeNull();
+  expect(fixture.decrypt).toHaveBeenCalledTimes(1);
+  expect(fixture.readCalls).not.toHaveBeenCalled();
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(screen.queryByText("raw SDK error")).toBeNull();
 });
