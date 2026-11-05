@@ -11,10 +11,17 @@ import {
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { D1Archive, type Checkpoint } from "../src/archive.ts";
-import { type RpcSource, ingestOneSlice, throwIfAborted } from "../src/ingest.ts";
+import { type RpcSource, ingestOneSlice } from "../src/ingest.ts";
 import { createRpc } from "../src/rpc.ts";
 import { hash32, validateNamespace, type Namespace } from "../src/domain.ts";
 import { SqliteD1, migrate } from "./replay-retained.mts";
+import {
+  Deadline,
+  DeadlineRpc,
+  FixedTargetRpc,
+  requireCanonicalTarget,
+  validateBackfillOptions,
+} from "./backfill-guard.mts";
 
 export type BackfillTarget = { chainId: string; number: number; hash: string };
 export type BackfillOptions = {
@@ -40,41 +47,6 @@ const publishAbsent = (temporary: string, output: string) => {
   linkSync(temporary, output);
   unlinkSync(temporary);
 };
-class Deadline {
-  readonly controller = new AbortController();
-  readonly expiresAt: number;
-  readonly timer: ReturnType<typeof setTimeout>;
-  constructor(deadlineMs: number) {
-    this.expiresAt = Date.now() + deadlineMs;
-    this.timer = setTimeout(
-      () => this.controller.abort(new Error("backfill deadline exceeded")),
-      deadlineMs,
-    );
-  }
-  check() {
-    if (Date.now() >= this.expiresAt && !this.controller.signal.aborted)
-      this.controller.abort(new Error("backfill deadline exceeded"));
-    throwIfAborted(this.controller.signal);
-  }
-  async wait<T>(operation: () => Promise<T>) {
-    this.check();
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<never>((_, reject) => {
-      onAbort = () => reject(this.controller.signal.reason);
-      this.controller.signal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      const value = await Promise.race([Promise.resolve().then(operation), aborted]);
-      this.check();
-      return value;
-    } finally {
-      if (onAbort) this.controller.signal.removeEventListener("abort", onAbort);
-    }
-  }
-  close() {
-    clearTimeout(this.timer);
-  }
-}
 const count = (db: DatabaseSync, table: string, n: Namespace) =>
   Number(
     (
@@ -86,87 +58,9 @@ const count = (db: DatabaseSync, table: string, n: Namespace) =>
     ).count,
   );
 
-class DeadlineRpc implements RpcSource {
-  constructor(
-    readonly source: RpcSource,
-    readonly deadline: Deadline,
-  ) {}
-  chainId(signal?: AbortSignal) {
-    return this.deadline.wait(() => this.source.chainId(signal));
-  }
-  finalizedHead(signal?: AbortSignal) {
-    return this.deadline.wait(() => this.source.finalizedHead(signal));
-  }
-  latestHead(signal?: AbortSignal) {
-    return this.deadline.wait(() => this.source.latestHead(signal));
-  }
-  block(number: number, signal?: AbortSignal) {
-    return this.deadline.wait(() => this.source.block(number, signal));
-  }
-  logs(from: number, to: number, signal?: AbortSignal) {
-    return this.deadline.wait(() => this.source.logs(from, to, signal));
-  }
-  receiptLogs(block: Parameters<RpcSource["receiptLogs"]>[0], signal?: AbortSignal) {
-    return this.deadline.wait(() => this.source.receiptLogs(block, signal));
-  }
-  drawSnapshot(...args: Parameters<RpcSource["drawSnapshot"]>) {
-    return this.deadline.wait(() => this.source.drawSnapshot(...args));
-  }
-  membershipRoot(...args: Parameters<RpcSource["membershipRoot"]>) {
-    return this.deadline.wait(() => this.source.membershipRoot(...args));
-  }
-}
-class FixedTargetRpc extends DeadlineRpc {
-  constructor(
-    source: RpcSource,
-    readonly target: BackfillTarget,
-    deadline: Deadline,
-  ) {
-    super(source, deadline);
-  }
-  finalizedHead(_signal?: AbortSignal) {
-    this.deadline.check();
-    return Promise.resolve({ number: this.target.number, hash: this.target.hash });
-  }
-}
-
-function validate(options: BackfillOptions) {
-  const n = validateNamespace(options.namespace);
-  if (n.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
-  if (n.chainId !== "11155111" || options.target.chainId !== n.chainId)
-    throw new Error("backfill requires Ethereum Sepolia namespace and target");
-  if (!Number.isSafeInteger(options.target.number) || options.target.number < n.deploymentBlock)
-    throw new Error("invalid fixed target block");
-  hash32(options.target.hash, "fixed target hash");
-  if (
-    !Number.isSafeInteger(options.maxBlocksPerSlice) ||
-    options.maxBlocksPerSlice < 1 ||
-    options.maxBlocksPerSlice > 2
-  )
-    throw new Error("invalid max blocks per slice");
-  if (!Number.isSafeInteger(options.maxSlices) || options.maxSlices < 1)
-    throw new Error("invalid max slices");
-  if (!Number.isSafeInteger(options.deadlineMs) || options.deadlineMs < 1)
-    throw new Error("invalid deadline");
-  if (existsSync(options.output)) throw new Error("backfill output already exists");
-  return n;
-}
-
-async function requireCanonicalTarget(
-  source: RpcSource,
-  target: BackfillTarget,
-  signal: AbortSignal,
-) {
-  const head = await source.finalizedHead(signal);
-  if (head.number < target.number) throw new Error("fixed target is not confirmed by source");
-  const actual = await source.block(target.number, signal);
-  if (actual.number !== target.number || hash32(actual.hash) !== hash32(target.hash))
-    throw new Error("fixed target canonicality changed");
-}
-
 /** Builds a complete local archive only after a confirmed target and its hash have been independently pinned. */
 export async function runRpcBackfill(options: BackfillOptions): Promise<BackfillResult> {
-  const n = validate(options);
+  const n = validateBackfillOptions(options);
   const deadline = new Deadline(options.deadlineMs);
   const source = new DeadlineRpc(options.source, deadline);
   const temporary = tempPath(options.output);
