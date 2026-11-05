@@ -56,8 +56,9 @@ export function resolveSelectedPoolScope(url: URL, env: ScopeEnv): ScopeSelectio
 
   const scope =
     requested.id === "candidate-v2" ? candidateScope(env) : legacyScope(requested.id, env);
-  return scope
-    ? { ok: true, scope }
+  const validated = validateSelectedPoolScope(scope);
+  return validated
+    ? { ok: true, scope: validated }
     : { ok: false, status: 400, code: "unavailable_savings_scope" };
 }
 
@@ -165,6 +166,7 @@ export function validateSelectedPoolScope(value: unknown): SelectedPoolScope | u
     return undefined;
   }
   if (typeof value.onboardingEnabled !== "boolean") return undefined;
+  if (!hasExpectedRawScopeFields(value, id)) return undefined;
   const scope = buildScope({
     id,
     usdc: stringValue(value.usdc),
@@ -184,7 +186,7 @@ function hasExpectedScopeRoles(scope: SelectedPoolScope): boolean {
     return (
       scope.mode === "v2" &&
       !Object.values(LEGACY_SCOPES).some(
-        (legacy) => scope.wrapper === legacy.wrapper && scope.pool === legacy.pool,
+        (legacy) => scope.wrapper === legacy.wrapper || scope.pool === legacy.pool,
       )
     );
   }
@@ -196,6 +198,16 @@ function hasExpectedScopeRoles(scope: SelectedPoolScope): boolean {
     scope.proofServiceUrl === "" &&
     scope.proofNamespace === "" &&
     !scope.onboardingEnabled
+  );
+}
+
+function hasExpectedRawScopeFields(value: ScopeInput, id: PoolScopeId): boolean {
+  if (id === "candidate-v2") return value.mode === "v2";
+  return (
+    value.mode === "legacy1" &&
+    value.proofServiceUrl === "" &&
+    value.proofNamespace === "" &&
+    value.onboardingEnabled === false
   );
 }
 

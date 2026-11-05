@@ -55,8 +55,13 @@ export function Providers({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => setHydrated(true), []);
-  if (!hydrated || !SELECTED_SCOPE) return <UnavailableSavings />;
+  if (!hydrated) return <LoadingSavings />;
+  if (!SELECTED_SCOPE) return <UnavailableSavings />;
   return <ActiveProviders>{children}</ActiveProviders>;
+}
+
+function LoadingSavings() {
+  return <main className="px-5 py-12">Loading savings…</main>;
 }
 
 function UnavailableSavings() {

@@ -32,6 +32,7 @@ vi.mock("@/lib/contracts", async (original) => ({
   },
 }));
 vi.mock("@/lib/runtime-config", () => ({
+  SELECTED_SCOPE: { mode: "v2", proofServiceUrl: "" },
   publicConfig: (name: string, fallback?: string) =>
     name === "NEXT_PUBLIC_POOL_VERSION"
       ? "2"

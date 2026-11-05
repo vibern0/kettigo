@@ -69,3 +69,23 @@ test("does not accept tuple fields from the selector URL", () => {
   assert.equal(result.scope.rpcUrl, "https://rpc.example");
   assert.equal(result.scope.onboardingEnabled, false);
 });
+
+test("keeps candidate unavailable when it reuses a retained legacy role", () => {
+  const result = resolveSelectedPoolScope(
+    new URL("https://app.example/savings?savings=candidate-v2"),
+    {
+      ...env,
+      NEXT_PUBLIC_CANDIDATE_V2_RPC_URL: "https://candidate-rpc.example",
+      NEXT_PUBLIC_CANDIDATE_V2_USDC_ADDRESS: "0x1111111111111111111111111111111111111111",
+      NEXT_PUBLIC_CANDIDATE_V2_CONFIDENTIAL_USDC_ADDRESS:
+        "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a",
+      NEXT_PUBLIC_CANDIDATE_V2_CONFIDENTIAL_PRIZE_POOL_ADDRESS:
+        "0x3333333333333333333333333333333333333333",
+      NEXT_PUBLIC_CANDIDATE_V2_PROOF_SERVICE_URL: "https://proof.example",
+      NEXT_PUBLIC_CANDIDATE_V2_PROOF_NAMESPACE: "candidate",
+      NEXT_PUBLIC_CANDIDATE_V2_ONBOARDING_ENABLED: "true",
+    },
+  );
+
+  assert.deepEqual(result, { ok: false, status: 400, code: "unavailable_savings_scope" });
+});

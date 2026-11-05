@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createRef } from "react";
 import {
@@ -41,8 +41,10 @@ vi.mock("viem", async (original) => ({
   }),
 }));
 vi.mock("@/lib/runtime-config", () => ({
-  publicConfig: (name: string, fallback?: string) =>
-    name === "NEXT_PUBLIC_POOL_VERSION" ? fixture.version : (fallback ?? ""),
+  get SELECTED_SCOPE() {
+    return { mode: fixture.version === "2" ? "v2" : "legacy1" };
+  },
+  publicConfig: () => "",
 }));
 vi.mock("@/lib/contracts", async (original) => ({
   ...(await original<typeof import("@/lib/contracts")>()),
@@ -97,8 +99,6 @@ const mount = () => renderSavingsParticipation(SavingsPage, ToastProvider);
 beforeEach(() => {
   resetParticipationFixture(fixture);
 });
-
-afterEach(cleanup);
 
 test("legacy Savings makes zero membership and admission reads", async () => {
   mount();

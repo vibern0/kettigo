@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { validateSelectedPoolScope } from "../worker/selected-pool-scope.ts";
-import { readSelectedPoolScope } from "../src/lib/runtime-config.ts";
+import { readSelectedPoolScope, selectedScopeForDocument } from "../src/lib/runtime-config.ts";
 
 const legacy = {
   id: "legacy-e65",
@@ -43,7 +43,43 @@ test("rejects candidate tuples with inconsistent roles", () => {
   );
 });
 
+test("rejects a candidate that reuses either legacy contract role", () => {
+  const candidate = {
+    ...legacy,
+    id: "candidate-v2",
+    mode: "v2",
+    proofServiceUrl: "https://proof.example",
+    proofNamespace: "candidate",
+    onboardingEnabled: true,
+  };
+  assert.equal(validateSelectedPoolScope(candidate), undefined);
+  assert.equal(
+    validateSelectedPoolScope({
+      ...candidate,
+      wrapper: "0x1111111111111111111111111111111111111111",
+    }),
+    undefined,
+  );
+});
+
+test("rejects legacy proof and onboarding fields instead of normalizing them", () => {
+  assert.equal(
+    validateSelectedPoolScope({ ...legacy, proofServiceUrl: "https://proof.example" }),
+    undefined,
+  );
+  assert.equal(validateSelectedPoolScope({ ...legacy, proofNamespace: "legacy" }), undefined);
+  assert.equal(validateSelectedPoolScope({ ...legacy, onboardingEnabled: true }), undefined);
+});
+
 test("does not fill a partial browser bootstrap from fallback values", () => {
   assert.equal(readSelectedPoolScope({ selectedPoolScope: { ...legacy, rpcUrl: "" } }), undefined);
   assert.equal(readSelectedPoolScope({ NEXT_PUBLIC_RPC_URL: "https://rpc.example" }), undefined);
+});
+
+test("uses fallback only when bootstrap is absent", () => {
+  assert.equal(selectedScopeForDocument(undefined, legacy), legacy);
+  assert.equal(
+    selectedScopeForDocument({ selectedPoolScope: { ...legacy, rpcUrl: "" } }, legacy),
+    undefined,
+  );
 });

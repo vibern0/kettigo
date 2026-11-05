@@ -37,7 +37,7 @@ function staticSelectedScope(): SelectedPoolScope | undefined {
     proofNamespace: process.env.NEXT_PUBLIC_CANDIDATE_V2_PROOF_NAMESPACE,
     onboardingEnabled,
   });
-  if (candidate && process.env.NEXT_PUBLIC_POOL_VERSION === "2") return candidate;
+  if (process.env.NEXT_PUBLIC_POOL_VERSION === "2") return candidate;
 
   const shared = {
     chainId: 11155111,
@@ -62,8 +62,15 @@ export function readSelectedPoolScope(runtimeConfig: unknown): SelectedPoolScope
   return validateSelectedPoolScope(Reflect.get(runtimeConfig, "selectedPoolScope"));
 }
 
+export function selectedScopeForDocument(
+  runtimeConfig: unknown | undefined,
+  fallback: SelectedPoolScope | undefined,
+): SelectedPoolScope | undefined {
+  return runtimeConfig === undefined ? fallback : readSelectedPoolScope(runtimeConfig);
+}
+
 /** The immutable trusted scope for this document, or no available scope. */
 export const SELECTED_SCOPE: SelectedPoolScope | undefined =
   typeof window === "undefined"
     ? staticSelectedScope()
-    : readSelectedPoolScope(window.__KETTIGO_CONFIG__);
+    : selectedScopeForDocument(window.__KETTIGO_CONFIG__, staticSelectedScope());

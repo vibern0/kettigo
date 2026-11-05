@@ -50,6 +50,9 @@ vi.mock("@/lib/contracts", async (original) => ({
   },
 }));
 vi.mock("@/lib/runtime-config", () => ({
+  get SELECTED_SCOPE() {
+    return { mode: fixture.mode === "legacy1" ? "legacy1" : "v2", proofServiceUrl: "" };
+  },
   publicConfig: (name: string, fallback?: string) =>
     name === "NEXT_PUBLIC_POOL_VERSION" ? fixture.mode : (fallback ?? ""),
 }));
