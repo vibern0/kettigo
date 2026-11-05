@@ -35,34 +35,6 @@ const COORDINATES = {
   y: `0x${"22".repeat(32)}`,
 };
 
-test("derives the canonical EntryPoint v0.7 hash from all final signed operation fields", () => {
-  const identity = getSafeUserOperationIdentity({
-    sender: SAFE_ADDRESS,
-    nonce: 7n,
-    factory: getAddress("0x00000000000000000000000000000000000000f1"),
-    factoryData: "0x1234",
-    callData: "0x5678",
-    callGasLimit: 55_555n,
-    verificationGasLimit: 66_666n,
-    preVerificationGas: 77_777n,
-    maxFeePerGas: 88_888n,
-    maxPriorityFeePerGas: 99_999n,
-    paymaster: getAddress("0x00000000000000000000000000000000000000f2"),
-    paymasterData: "0xabcd",
-    paymasterVerificationGasLimit: 12_345n,
-    paymasterPostOpGasLimit: 23_456n,
-    signature: "0xdeadbeef",
-  });
-
-  assert.deepEqual(identity, {
-    chainId: 11155111,
-    entryPoint: getAddress("0x0000000071727De22E5E9d8BAf0edAc6f37da032"),
-    sender: SAFE_ADDRESS,
-    userOperationHash: "0x2384393c9cca16213837b028ad53417f4787c3a323e8d82d534f7f2151d3d77b",
-  });
-  assert.equal(Object.isFrozen(identity), true);
-});
-
 test("anchors a successful operation to its EntryPoint v0.7 event and canonical block", async () => {
   const operation = Object.freeze({
     chainId: 11155111,
@@ -208,166 +180,6 @@ function relay(address = SAFE_ADDRESS, safeProvider) {
     },
   };
 }
-
-test("adds passkey verification gas before paymaster sponsorship", async () => {
-  let sponsoredVerificationGas;
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() {
-      return { maxFeePerGas: 1n };
-    },
-    async postEstimateUserOperationGas(input) {
-      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
-      return {
-        verificationGasLimit: input.userOperation.verificationGasLimit,
-        paymasterData: "0x1234",
-      };
-    },
-  });
-
-  assert.deepEqual(await estimator.preEstimateUserOperationGas({}), { maxFeePerGas: 1n });
-  const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 613_085n },
-  });
-
-  assert.equal(sponsoredVerificationGas, 766_357n);
-  assert.equal(result.verificationGasLimit, 766_357n);
-  assert.equal(result.paymasterData, "0x1234");
-});
-
-test("covers real Sepolia passkey validation before paymaster sponsorship", async () => {
-  let sponsoredVerificationGas;
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() {
-      return {};
-    },
-    async postEstimateUserOperationGas(input) {
-      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
-      return { verificationGasLimit: sponsoredVerificationGas };
-    },
-  });
-
-  // Captured production estimate: 308,778. The same real signature failed
-  // validation with 358,778 gas and succeeded with 450,000 gas on Sepolia.
-  for (const verificationGasLimit of [200_000n, 308_778n, 450_000n]) {
-    const result = await estimator.postEstimateUserOperationGas({
-      userOperation: { verificationGasLimit },
-    });
-
-    assert.equal(sponsoredVerificationGas, 600_000n);
-    assert.equal(result.verificationGasLimit, 600_000n);
-  }
-});
-
-test("does not alter sponsor-signed gas fields", async () => {
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() {
-      return {};
-    },
-    async postEstimateUserOperationGas() {
-      return {
-        verificationGasLimit: 420_000n,
-        paymasterData: "0x1234",
-      };
-    },
-  });
-
-  await assert.rejects(
-    estimator.postEstimateUserOperationGas({
-      userOperation: { verificationGasLimit: 413_085n },
-    }),
-    /insufficient verification gas/i,
-  );
-});
-
-test("preserves the full passkey margin above the verification floor", async () => {
-  let sponsoredVerificationGas;
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() {
-      return {};
-    },
-    async postEstimateUserOperationGas(input) {
-      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
-      return { verificationGasLimit: sponsoredVerificationGas };
-    },
-  });
-
-  const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 700_000n },
-  });
-
-  assert.equal(sponsoredVerificationGas, 875_000n);
-  assert.equal(result.verificationGasLimit, 875_000n);
-});
-
-test("sponsors the observed Samsung passkey deployment estimate without a local ceiling", async () => {
-  let sponsoredVerificationGas;
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() {
-      return {};
-    },
-    async postEstimateUserOperationGas(input) {
-      sponsoredVerificationGas = input.userOperation.verificationGasLimit;
-      return { verificationGasLimit: sponsoredVerificationGas, paymasterData: "0x1234" };
-    },
-  });
-
-  const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 2_968_567n },
-  });
-  assert.equal(sponsoredVerificationGas, 3_710_709n);
-  assert.equal(result.verificationGasLimit, 3_710_709n);
-  assert.equal(result.paymasterData, "0x1234");
-});
-
-test("a measured verifier cost can raise the budget above the fallback and bundler estimate", async () => {
-  const diagnostics = {};
-  const estimator = createPasskeyFeeEstimator(
-    {
-      async preEstimateUserOperationGas() {
-        return {};
-      },
-      async postEstimateUserOperationGas(input) {
-        assert.equal(input.userOperation.verificationGasLimit, 912_500n);
-        return { verificationGasLimit: 950_000n };
-      },
-    },
-    { estimateVerifierGas: async () => 650_000n, diagnostics },
-  );
-  await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 308_778n },
-  });
-  assert.equal(diagnostics.verifierProbe, "measured");
-  assert.equal(diagnostics.verifierGas, "650000");
-  assert.equal(diagnostics.bundlerVerificationGas, "308778");
-  assert.equal(diagnostics.requestedVerificationGas, "912500");
-  assert.equal(diagnostics.sponsoredVerificationGas, "950000");
-});
-
-test("a probe outage preserves the proven fallback without blocking sponsorship", async () => {
-  const diagnostics = {};
-  const estimator = createPasskeyFeeEstimator(
-    {
-      async preEstimateUserOperationGas() {
-        return {};
-      },
-      async postEstimateUserOperationGas(input) {
-        return { verificationGasLimit: input.userOperation.verificationGasLimit };
-      },
-    },
-    {
-      estimateVerifierGas: async () => {
-        throw new Error("offline https://rpc.example/?apikey=secret");
-      },
-      diagnostics,
-    },
-  );
-  const result = await estimator.postEstimateUserOperationGas({
-    userOperation: { verificationGasLimit: 308_778n },
-  });
-  assert.equal(result.verificationGasLimit, 600_000n);
-  assert.equal(diagnostics.verifierProbe, "fallback");
-  assert.doesNotMatch(JSON.stringify(diagnostics), /secret|https/);
-});
 
 function dependencies(overrides = {}) {
   return {
@@ -1515,4 +1327,81 @@ test("preparation refreshes recovered counterfactual deployment mode from observ
     const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
     prepared.cancel();
   }
+});
+
+test("failed deployment probes stop preparation and permit an explicit retry", async () => {
+  for (const probe of [
+    async () => {
+      throw new Error("rpc unavailable");
+    },
+    () => new Promise(() => {}),
+  ]) {
+    let probeCount = 0;
+    let signingCalls = 0;
+    let transactionCalls = 0;
+    const session = await createPasskeyAccount(
+      { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+      dependencies({
+        receiptTimeoutMs: 10,
+        async getCode() {
+          probeCount += 1;
+          if (probeCount === 1) return probe();
+          return "0x6000";
+        },
+        async initRelay(options) {
+          const instance = relay();
+          instance.createTransaction = async (...args) => {
+            transactionCalls += 1;
+            return relay().createTransaction(...args);
+          };
+          instance.signSafeOperation = async (operation) => {
+            signingCalls += 1;
+            await options.signer.getFn({});
+            return operation;
+          };
+          return instance;
+        },
+      }),
+    );
+    await session.lookupUserOperation(getSafeUserOperationIdentity(finalUserOperation()));
+    await assert.rejects(session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]));
+    assert.equal(transactionCalls, 0);
+    assert.equal(signingCalls, 0);
+    const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+    prepared.cancel();
+    assert.equal(transactionCalls, 1);
+  }
+});
+
+test("counterfactual recovery switches to deployed mode only after code appears", async () => {
+  let codeReads = 0;
+  let preparedWithDeployedRelay = false;
+  const metadata = {
+    rawId: RAW_ID,
+    coordinates: COORDINATES,
+    verifierAddress: VERIFIER_ADDRESS,
+    safeAddress: SAFE_ADDRESS,
+  };
+  const session = await restorePasskeyAccount(
+    { metadata, rpId: "app.kettigo.xyz" },
+    dependencies({
+      async getCode() {
+        codeReads += 1;
+        return codeReads === 1 ? "0x" : "0x6000";
+      },
+      async initRelay(options) {
+        const instance = relay();
+        if (codeReads > 1) preparedWithDeployedRelay = "safeAddress" in options.options;
+        instance.signSafeOperation = async (operation) => {
+          await options.signer.getFn({});
+          return operation;
+        };
+        return instance;
+      },
+    }),
+  );
+  await session.lookupUserOperation(getSafeUserOperationIdentity(finalUserOperation()));
+  const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
+  prepared.cancel();
+  assert.equal(preparedWithDeployedRelay, true);
 });

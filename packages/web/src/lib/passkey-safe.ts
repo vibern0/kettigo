@@ -7,7 +7,7 @@ import Safe, {
   type ExtractedPasskeyData,
   type PasskeyArgType,
 } from "@safe-global/protocol-kit";
-import { PimlicoFeeEstimator, Safe4337Pack } from "@safe-global/relay-kit";
+import { Safe4337Pack } from "@safe-global/relay-kit";
 import { getSafeWebAuthnShareSignerDeployment } from "@safe-global/safe-modules-deployments";
 import {
   createPublicClient,
@@ -19,11 +19,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import {
-  entryPoint07Address,
-  getUserOperationHash,
-  type UserOperation,
-} from "viem/account-abstraction";
+import { entryPoint07Address, type UserOperation } from "viem/account-abstraction";
 import { sepolia } from "viem/chains";
 import {
   lookupCanonicalUserOperationReceipt,
@@ -32,6 +28,15 @@ import {
   type EthereumBlock,
   type EthereumReceipt,
 } from "./canonical-user-operation-receipt.ts";
+import {
+  getSafeUserOperationIdentity,
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
+  SafeUserOperationRejectedError,
+  sameHash,
+} from "./passkey-operation.ts";
+import { createPasskeyFeeEstimator } from "./passkey-fee-estimator.ts";
 
 import { writePasskeyMetadata, type PasskeyMetadata } from "./passkey-metadata.ts";
 import { createKettigoCredential, getKettigoCredential } from "./passkey-webauthn.ts";
@@ -50,47 +55,14 @@ import type {
 } from "./smart-session.ts";
 export type { SafeUserOperationIdentity, SafeUserOperationReceipt } from "./smart-session.ts";
 export { SafeUserOperationIntegrityError } from "./canonical-user-operation-receipt.ts";
-
-export class SafeUserOperationPendingError extends Error {
-  readonly operation: SafeUserOperationIdentity;
-  constructor(operation: SafeUserOperationIdentity, cause?: unknown) {
-    super("The sponsored transaction is still pending. Please try again.", { cause });
-    this.name = "SafeUserOperationPendingError";
-    this.operation = operation;
-  }
-}
-
-export class SafeUserOperationFailedError extends Error {
-  readonly operation: SafeUserOperationIdentity;
-  readonly transactionHash?: Hex;
-  constructor(operation: SafeUserOperationIdentity, transactionHash?: Hex) {
-    super("The sponsored transaction failed.");
-    this.name = "SafeUserOperationFailedError";
-    this.operation = operation;
-    this.transactionHash = transactionHash;
-  }
-}
-
-export class SafeUserOperationRejectedError extends Error {
-  readonly operation: SafeUserOperationIdentity;
-  readonly code: number;
-  constructor(operation: SafeUserOperationIdentity, code: number, cause?: unknown) {
-    super("The sponsored transaction was rejected before submission.", { cause });
-    this.name = "SafeUserOperationRejectedError";
-    this.operation = operation;
-    this.code = code;
-  }
-}
-
-/** The signed operation is known, but no UserOperation was submitted. */
-export class SafeUserOperationNotSubmittedError extends Error {
-  readonly operation: SafeUserOperationIdentity;
-  constructor(operation: SafeUserOperationIdentity, cause?: unknown) {
-    super("The sponsored transaction was not submitted. Please review and try again.", { cause });
-    this.name = "SafeUserOperationNotSubmittedError";
-    this.operation = operation;
-  }
-}
+export {
+  getSafeUserOperationIdentity,
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
+  SafeUserOperationRejectedError,
+} from "./passkey-operation.ts";
+export { createPasskeyFeeEstimator } from "./passkey-fee-estimator.ts";
 
 const SAFE_VERSION = "1.4.1" as const;
 const SAFE_MODULES_VERSION = "0.3.0";
@@ -100,13 +72,6 @@ const DEFAULT_RECEIPT_POLL_MS = 1_500;
 const USER_OPERATION_REJECTION_CODES = new Set([
   -32602, -32500, -32501, -32502, -32503, -32504, -32505, -32507, -32508,
 ]);
-const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
-const PASSKEY_DISPATCH_GAS = 100_000n;
-// Sepolia's real P256 assertion needed ~417k for Safe.checkSignatures even
-// though the dummy-signature estimate was ~309k. The captured operation failed
-// validateUserOp at 358,778 gas and passed at 450k; leave headroom for the
-// complete validation path and signature-dependent verifier cost.
-const PASSKEY_MIN_VERIFICATION_GAS = 600_000n;
 const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
 const PIMLICO_API_KEY = publicConfig(
   "NEXT_PUBLIC_PIMLICO_API_KEY",
@@ -114,27 +79,6 @@ const PIMLICO_API_KEY = publicConfig(
 );
 const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
 const SHARED_SIGNER_ADDRESS = sharedSignerAddress();
-
-export function getSafeUserOperationIdentity(
-  userOperation: UserOperation<"0.7">,
-): SafeUserOperationIdentity {
-  const sender = getAddress(userOperation.sender);
-  return Object.freeze({
-    chainId: sepolia.id,
-    entryPoint: getAddress(entryPoint07Address),
-    sender,
-    userOperationHash: getUserOperationHash({
-      chainId: sepolia.id,
-      entryPointAddress: getAddress(entryPoint07Address),
-      entryPointVersion: "0.7",
-      userOperation: { ...userOperation, sender },
-    }),
-  });
-}
-
-function sameHash(left: string, right: string) {
-  return left.toLowerCase() === right.toLowerCase();
-}
 
 function submittedRequestMethod(error: RpcRequestError): string | undefined {
   const request = error.metaMessages?.find((message) => message.startsWith("Request body: "));
@@ -318,75 +262,6 @@ export function buildPasskeySigner(
     coordinates: metadata.coordinates,
     verifierAddress: getAddress(metadata.verifierAddress),
     getFn: (options) => dependencies.getCredential(metadata.rawId, rpId, options),
-  };
-}
-
-type PimlicoFeeEstimatorLike = Pick<
-  PimlicoFeeEstimator,
-  "preEstimateUserOperationGas" | "postEstimateUserOperationGas"
->;
-
-export function createPasskeyFeeEstimator(
-  baseEstimator: PimlicoFeeEstimatorLike = new PimlicoFeeEstimator(),
-  options: {
-    estimateVerifierGas?: () => Promise<bigint>;
-    diagnostics?: PasskeyGasDiagnostics;
-  } = {},
-) {
-  const diagnostics = options.diagnostics ?? {};
-  return {
-    preEstimateUserOperationGas: (
-      input: Parameters<PimlicoFeeEstimator["preEstimateUserOperationGas"]>[0],
-    ) => baseEstimator.preEstimateUserOperationGas(input),
-    async postEstimateUserOperationGas(
-      input: Parameters<PimlicoFeeEstimator["postEstimateUserOperationGas"]>[0],
-    ) {
-      // Let the bundler and paymaster validate their network's limits. Account
-      // deployment estimates can exceed a locally assumed verification ceiling.
-      const bundlerGas = BigInt(input.userOperation.verificationGasLimit);
-      diagnostics.bundlerVerificationGas = bundlerGas.toString();
-      const proportionalMargin = (bundlerGas + 3n) / 4n;
-      const estimatedVerificationGas =
-        bundlerGas +
-        (proportionalMargin > PASSKEY_VERIFICATION_GAS_MARGIN
-          ? proportionalMargin
-          : PASSKEY_VERIFICATION_GAS_MARGIN);
-      let measuredVerificationGas = 0n;
-      diagnostics.verifierProbe = "fallback";
-      if (options.estimateVerifierGas) {
-        try {
-          const verifierGas = await options.estimateVerifierGas();
-          if (verifierGas <= 0n) throw new Error("Invalid verifier gas estimate.");
-          diagnostics.verifierGas = verifierGas.toString();
-          diagnostics.verifierProbe = "measured";
-          // Account for WebAuthn/Safe dispatch and signature-dependent P256 work.
-          measuredVerificationGas = verifierGas + (verifierGas + 3n) / 4n + PASSKEY_DISPATCH_GAS;
-        } catch {
-          // Probe availability must not prevent the proven fallback from working.
-        }
-      }
-      const minimumVerificationGas = [
-        PASSKEY_MIN_VERIFICATION_GAS,
-        estimatedVerificationGas,
-        measuredVerificationGas,
-      ].reduce((maximum, value) => (value > maximum ? value : maximum));
-      diagnostics.requestedVerificationGas = minimumVerificationGas.toString();
-      diagnostics.phase = "sponsorship";
-      const sponsored = await baseEstimator.postEstimateUserOperationGas({
-        ...input,
-        userOperation: {
-          ...input.userOperation,
-          verificationGasLimit: minimumVerificationGas,
-        },
-      });
-      const sponsoredVerificationGas =
-        sponsored.verificationGasLimit == null ? 0n : BigInt(sponsored.verificationGasLimit);
-      diagnostics.sponsoredVerificationGas = sponsoredVerificationGas.toString();
-      if (sponsoredVerificationGas < minimumVerificationGas) {
-        throw new Error("The paymaster returned insufficient verification gas for the passkey.");
-      }
-      return sponsored;
-    },
   };
 }
 
