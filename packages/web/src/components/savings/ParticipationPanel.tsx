@@ -266,7 +266,7 @@ export const ParticipationPanel = forwardRef<ParticipationPanelHandle, Participa
                 type="button"
                 className="btn-primary w-full"
                 disabled={busy}
-                onClick={() => void begin}
+                onClick={() => void begin()}
               >
                 {busy ? "Reviewing…" : "Review participation"}
               </button>
