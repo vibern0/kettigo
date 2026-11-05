@@ -25,9 +25,9 @@ import {
 import { reportClientToast } from "@/lib/client-errors";
 import { afterNextPaint } from "@/lib/paint";
 import { useToast } from "@/components/Toast";
-import { LoadingAmount } from "@/components/LoadingAmount";
 import { DepositSheet } from "@/components/savings/DepositSheet";
 import { WithdrawalSheet } from "@/components/savings/WithdrawalSheet";
+import { SavingsStatus } from "@/components/savings/SavingsStatus";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
 import type { ActionPatch } from "@/lib/action-center-model";
@@ -1114,55 +1114,7 @@ export default function SavingsPage() {
 
       <TestnetWarning />
 
-      <div className="card space-y-3">
-        <p className="label">Personal status</p>
-        <div className="flex items-center justify-between">
-          <span className="text-muted text-sm">{balanceBucketLabels.walletUsdc}</span>
-          <span className="font-semibold tabular-nums">{formatUSDC(usdcBalance)} USDC</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted text-sm">{balanceBucketLabels.withdrawalInProgress}</span>
-          <span className="font-semibold tabular-nums">
-            {pendingWithdrawals.some((request) => request.amount === undefined)
-              ? `${pendingWithdrawals.length} pending`
-              : `${formatUSDC(withdrawalInProgress)} USDC`}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted text-sm">{balanceBucketLabels.savingsBalance}</span>
-          <span className="font-semibold tabular-nums text-text">
-            {confidentialBalancesLoading ? <LoadingAmount /> : `${formatUSDC(principal)} USDC`}
-          </span>
-        </div>
-        {confidentialBalancesError && <p className="text-xs text-danger">{confidentialBalancesError}</p>}
-        {confidentialBalancesReadState === "access-required" && (
-          <div className="rounded-2xl bg-white/45 p-3 text-sm">
-            <p className="text-muted">Review access to show your current savings balance.</p>
-            {accessReviewStep === "confirm" ? (
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button type="button" className="btn-secondary !px-3" onClick={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }}>Back</button>
-                <button type="button" className="btn-primary !px-3" onClick={confirmBalanceAccess}>Confirm</button>
-              </div>
-            ) : (
-              <button type="button" className="btn-secondary mt-3 w-full" onClick={() => void reviewBalanceAccess()} disabled={!session}>Review access</button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {pendingWithdrawals.length > 0 && (
-        <section className="space-y-3 border-t border-text/10 py-4" aria-label="Pending withdrawals" aria-live="polite">
-          <h2 className="text-sm font-semibold">Pending withdrawals</h2>
-          {automaticWithdrawals && <p className="text-sm text-muted">USDC will arrive in your wallet automatically.</p>}
-          {withdrawalRefreshError && <p className="text-sm text-muted">Updates are delayed. Your withdrawals are still pending.</p>}
-          {pendingWithdrawals.map((request) => (
-            <div key={request.batchId.toString()} className="flex items-center justify-between gap-3 text-sm">
-              <span>{withdrawalStageCopy[request.stage]}</span>
-              <span className="tabular-nums">{request.amount === undefined ? "Amount pending" : `${formatUSDC(request.amount)} USDC`}</span>
-            </div>
-          ))}
-        </section>
-      )}
+      <SavingsStatus walletBalance={usdcBalance} principal={principal} pendingTotal={withdrawalInProgress} pendingWithdrawals={pendingWithdrawals} loading={confidentialBalancesLoading} error={confidentialBalancesError} accessRequired={confidentialBalancesReadState === "access-required"} accessConfirming={accessReviewStep === "confirm"} accessAvailable={Boolean(session)} automaticWithdrawals={automaticWithdrawals} withdrawalRefreshError={withdrawalRefreshError} onAccessBack={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }} onAccessConfirm={confirmBalanceAccess} onAccessReview={() => void reviewBalanceAccess()} />
 
       <div className="grid grid-cols-2 gap-3">
         <button
