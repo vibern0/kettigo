@@ -67,6 +67,7 @@ export class EthersV6EoaProviderAdapter {
     const block = await this.getBlock(receipt.blockNumber);
     if (
       !block ||
+      block.number !== receipt.blockNumber ||
       !same(receipt.hash, hash) ||
       !same(receipt.blockHash, block.hash) ||
       tx.blockHash !== receipt.blockHash ||

@@ -35,7 +35,7 @@ function provider(overrides = {}) {
     broadcastTransaction: async () => ({ hash: HASH }),
     getTransaction: async () => tx,
     getTransactionReceipt: async () => receipt,
-    getBlock: async () => ({ hash: BLOCK }),
+    getBlock: async () => ({ hash: BLOCK, number: 9 }),
     ...overrides,
   };
 }
@@ -80,6 +80,11 @@ test("keeps null receipt unresolved and rejects mismatched transaction or canoni
   await assert.rejects(
     new EthersV6EoaProviderAdapter(
       provider({ getBlock: async () => ({ hash: `0x${"ef".repeat(32)}` }) }),
+    ).getTransactionReceipt(HASH),
+  );
+  await assert.rejects(
+    new EthersV6EoaProviderAdapter(
+      provider({ getBlock: async () => ({ hash: BLOCK, number: 10 }) }),
     ).getTransactionReceipt(HASH),
   );
 });
