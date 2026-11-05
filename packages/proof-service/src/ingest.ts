@@ -157,6 +157,8 @@ export async function ingestOneSlice(
     return archive.disable(n, state, "rpc chain id mismatch");
   }
   const head = await rpcCall(signal, () => rpc.finalizedHead(signal));
+  if (state.lastFinalizedBlock >= n.deploymentBlock && head.number < state.lastFinalizedBlock)
+    throw new Error("finalized head behind retained checkpoint");
   // Check stored history even when there is no new finalized work. Otherwise a
   // reorg that leaves nextBlock beyond head is never discovered.
   const recovery = await commonAncestor(archive, n, rpc, state, head, signal);
