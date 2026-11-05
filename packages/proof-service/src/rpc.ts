@@ -257,7 +257,7 @@ export class EthereumRpc implements RpcSource {
       logs: this.decodeMany(receipt.logs, block.number, block.number, true),
     };
   }
-  async receiptLogs(block: BlockHeader, signal?: AbortSignal) {
+  private async receiptTransactionHashes(block: BlockHeader, signal?: AbortSignal) {
     const full = await this.call(
       "eth_getBlockByNumber",
       [`0x${block.number.toString(16)}`, false],
@@ -280,34 +280,62 @@ export class EthereumRpc implements RpcSource {
     });
     if (new Set(transactionHashes).size !== transactionHashes.length)
       throw new Error("duplicate block transaction hash");
-    let receipts: unknown,
-      fallback = false;
+    return transactionHashes;
+  }
+  private async receiptsForBlock(
+    block: BlockHeader,
+    transactionHashes: readonly string[],
+    signal?: AbortSignal,
+  ) {
     try {
-      receipts = await this.call(
-        "eth_getBlockReceipts",
-        [`0x${block.number.toString(16)}`],
-        signal,
-      );
+      return {
+        receipts: await this.call(
+          "eth_getBlockReceipts",
+          [`0x${block.number.toString(16)}`],
+          signal,
+        ),
+        fallback: false,
+      };
     } catch (e) {
       if (!(e instanceof RpcFailure) || e.code !== -32601) throw e;
-      fallback = true;
-      receipts = await mapWithConcurrency(transactionHashes, 4, (tx) =>
-        this.call("eth_getTransactionReceipt", [tx], signal),
-      );
+      return {
+        receipts: await mapWithConcurrency(transactionHashes, 4, (tx) =>
+          this.call("eth_getTransactionReceipt", [tx], signal),
+        ),
+        fallback: true,
+      };
     }
+  }
+  private async checkedReceipts(
+    receipts: unknown,
+    block: BlockHeader,
+    transactionHashes: readonly string[],
+    fallback: boolean,
+  ) {
     if (!Array.isArray(receipts) || receipts.length !== transactionHashes.length)
       throw new Error("incomplete receipt array");
-    const checked = await Promise.all(
+    return Promise.all(
       receipts.map((receipt, index) =>
         this.checkedReceipt(receipt, block, fallback ? transactionHashes[index] : undefined),
       ),
     );
-    const receiptHashes = new Set(checked.map((receipt) => receipt.transactionHash));
+  }
+  private assertReceiptSet(
+    receipts: readonly { transactionHash: string }[],
+    transactionHashes: readonly string[],
+  ) {
+    const receiptHashes = new Set(receipts.map((receipt) => receipt.transactionHash));
     if (
       receiptHashes.size !== transactionHashes.length ||
       transactionHashes.some((tx) => !receiptHashes.has(tx))
     )
       throw new Error("incomplete receipt transaction set");
+  }
+  async receiptLogs(block: BlockHeader, signal?: AbortSignal) {
+    const transactionHashes = await this.receiptTransactionHashes(block, signal);
+    const { receipts, fallback } = await this.receiptsForBlock(block, transactionHashes, signal);
+    const checked = await this.checkedReceipts(receipts, block, transactionHashes, fallback);
+    this.assertReceiptSet(checked, transactionHashes);
     return checked.flatMap((receipt) => receipt.logs);
   }
   private callAt(data: `0x${string}`, block: BlockHeader, signal?: AbortSignal) {

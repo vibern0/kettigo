@@ -52,9 +52,8 @@ class FixtureRpc implements RpcSource {
   async receiptLogs(block: BlockHeader) {
     return (this.receipts ?? this.allLogs).filter((x) => x.blockNumber === block.number);
   }
-  async drawSnapshot() {
+  async drawSnapshot(): ReturnType<RpcSource["drawSnapshot"]> {
     throw new Error("unused");
-    return { rootHash: zero, rootSum: zero, ticket: zero, upperBound: "0", closeBlock: 0 };
   }
   async membershipRoot() {
     if (this.root) return this.root;

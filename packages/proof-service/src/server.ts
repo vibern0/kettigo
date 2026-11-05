@@ -85,6 +85,63 @@ function rpc(env: Env, n: Namespace) {
     Math.max(0, Number(env.CONFIRMATIONS ?? "6")),
   );
 }
+const isDecimalPathSegment = (value: string) =>
+  value.length > 0 && [...value].every((character) => character >= "0" && character <= "9");
+const isAddressPathSegment = (value: string) =>
+  value.length === 42 &&
+  value.startsWith("0x") &&
+  [...value.slice(2)].every(
+    (character) =>
+      (character >= "0" && character <= "9") ||
+      (character >= "a" && character <= "f") ||
+      (character >= "A" && character <= "F"),
+  );
+type Route = { chainId: string; pool: string; drawId?: string; account?: string };
+const hasFixedSegments = (segments: readonly string[], fixed: ReadonlyMap<number, string>) =>
+  [...fixed].every(([index, value]) => segments[index] === value);
+function listRoute(segments: readonly string[]): Route | undefined {
+  if (
+    segments.length !== 5 ||
+    !hasFixedSegments(
+      segments,
+      new Map([
+        [0, ""],
+        [1, "v1"],
+        [4, "draws"],
+      ]),
+    )
+  )
+    return;
+  if (!isDecimalPathSegment(segments[2]) || !isAddressPathSegment(segments[3])) return;
+  return { chainId: segments[2], pool: segments[3] };
+}
+function proofRoute(segments: readonly string[]): Route | undefined {
+  if (
+    segments.length !== 8 ||
+    !hasFixedSegments(
+      segments,
+      new Map([
+        [0, ""],
+        [1, "v1"],
+        [4, "draws"],
+        [6, "proof"],
+      ]),
+    )
+  )
+    return;
+  if (
+    !isDecimalPathSegment(segments[2]) ||
+    !isAddressPathSegment(segments[3]) ||
+    !isDecimalPathSegment(segments[5]) ||
+    !isAddressPathSegment(segments[7])
+  )
+    return;
+  return { chainId: segments[2], pool: segments[3], drawId: segments[5], account: segments[7] };
+}
+function route(pathname: string): Route | undefined {
+  const list = listRoute(pathname.split("/"));
+  return list ?? proofRoute(pathname.split("/"));
+}
 async function authenticate(draw: Draw, env: Env, n: Namespace) {
   return rpc(env, n).withSource(async (source) => {
     const close = await source.block(draw.closeBlockNumber);
@@ -127,6 +184,61 @@ async function absentDrawOutcome(
     return outcome("HISTORY_UNAVAILABLE", 409, headers);
   });
 }
+function validRoute(requestRoute: Route, n: Namespace) {
+  return (
+    decimal(requestRoute.chainId, "chain id") === n.chainId &&
+    checksum(requestRoute.pool) === n.pool &&
+    (requestRoute.drawId === undefined ||
+      uint(requestRoute.drawId, 256, "draw id") === requestRoute.drawId)
+  );
+}
+async function listDraws(
+  archive: D1Archive,
+  n: Namespace,
+  url: URL,
+  env: Env,
+  headers: HeadersInit,
+) {
+  const limit = Number(url.searchParams.get("limit") ?? "20");
+  const cursor = url.searchParams.get("cursor") ?? undefined;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 100 ||
+    (cursor !== undefined && uint(cursor, 256, "cursor") !== cursor)
+  )
+    return response({ outcome: "HISTORY_UNAVAILABLE" }, 400, headers);
+  await archive.assertNamespace(n);
+  const state = await archive.status(n);
+  if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
+  await authenticateCheckpoint(state, env, n);
+  return response({ draws: await archive.listDraws(n, cursor, limit) }, 200, headers);
+}
+async function proofForRoute(
+  archive: D1Archive,
+  n: Namespace,
+  requestRoute: Route,
+  env: Env,
+  headers: HeadersInit,
+) {
+  await archive.assertNamespace(n);
+  const state = await archive.status(n);
+  if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
+  const draw = await archive.drawById(n, requestRoute.drawId!);
+  if (!draw) return absentDrawOutcome(archive, env, n, requestRoute.drawId!, headers);
+  await authenticate(draw, env, n);
+  const proof = await archive.proof(n, requestRoute.drawId!, requestRoute.account!);
+  return proof ? response({ proof }, 200, headers) : outcome("NOT_ELIGIBLE", 404, headers);
+}
+async function proofResponse(url: URL, env: Env, n: Namespace, headers: HeadersInit) {
+  const requestRoute = route(url.pathname);
+  if (!requestRoute || !validRoute(requestRoute, n))
+    return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
+  const archive = new D1Archive(primary(env.PROOF_DB));
+  return requestRoute.drawId
+    ? proofForRoute(archive, n, requestRoute, env, headers)
+    : listDraws(archive, n, url, env, headers);
+}
 
 export async function handle(request: Request, env: Env): Promise<Response> {
   const headers = cors(request, env);
@@ -148,43 +260,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   activeRequests += 1;
   try {
     const n = namespace(env);
-    const url = new URL(request.url);
-    const match = url.pathname.match(
-      /^\/v1\/([0-9]+)\/(0x[0-9a-fA-F]{40})\/draws(?:\/([0-9]+)\/proof\/(0x[0-9a-fA-F]{40}))?$/,
-    );
-    if (!match) return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
-    if (
-      decimal(match[1], "chain id") !== n.chainId ||
-      checksum(match[2]) !== n.pool ||
-      (match[3] !== undefined && uint(match[3], 256, "draw id") !== match[3])
-    )
-      return response({ outcome: "HISTORY_UNAVAILABLE" }, 404, headers);
-    if (!match[3]) {
-      const limit = Number(url.searchParams.get("limit") ?? "20");
-      const cursor = url.searchParams.get("cursor") ?? undefined;
-      if (
-        !Number.isSafeInteger(limit) ||
-        limit < 1 ||
-        limit > 100 ||
-        (cursor !== undefined && uint(cursor, 256, "cursor") !== cursor)
-      )
-        return response({ outcome: "HISTORY_UNAVAILABLE" }, 400, headers);
-      const archive = new D1Archive(primary(env.PROOF_DB));
-      await archive.assertNamespace(n);
-      const state = await archive.status(n);
-      if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
-      await authenticateCheckpoint(state, env, n);
-      return response({ draws: await archive.listDraws(n, cursor, limit) }, 200, headers);
-    }
-    const archive = new D1Archive(primary(env.PROOF_DB));
-    await archive.assertNamespace(n);
-    const state = await archive.status(n);
-    if (state.disabledReason) return outcome("HISTORY_UNAVAILABLE", 409, headers);
-    const draw = await archive.drawById(n, match[3]);
-    if (!draw) return absentDrawOutcome(archive, env, n, match[3], headers);
-    await authenticate(draw, env, n);
-    const proof = await archive.proof(n, match[3], match[4]);
-    return proof ? response({ proof }, 200, headers) : outcome("NOT_ELIGIBLE", 404, headers);
+    return await proofResponse(new URL(request.url), env, n, headers);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
     console.error(JSON.stringify({ event: "proof-service-error", message: message.slice(0, 160) }));
