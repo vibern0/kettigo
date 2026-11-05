@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => {
     alternatePool: "0x5555555555555555555555555555555555555555" as const,
     aggregate: `0x${"1".repeat(64)}` as `0x${string}`,
     aggregateRead: vi.fn(),
+    readContract: vi.fn(),
     mode: "legacy1",
     membership: 0n,
     pending: { requested: false },
@@ -30,12 +31,7 @@ vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     getBlockNumber: async () => 0n,
-    readContract: async ({ functionName }: { functionName: string }) => {
-      if (functionName === "encryptedWinningsOf") return fixture.aggregateRead();
-      if (functionName === "membershipIndexOf") return fixture.membership;
-      if (functionName === "pendingAdmissionOf") return fixture.pending;
-      return 0n;
-    },
+    readContract: (args: { functionName: string; address: `0x${string}` }) => fixture.readContract(args),
     request: async () => [],
     watchBlockNumber: () => () => {},
   }),
@@ -56,7 +52,10 @@ vi.mock("@/lib/runtime-config", () => ({
     name === "NEXT_PUBLIC_POOL_VERSION" ? fixture.mode : (fallback ?? ""),
 }));
 vi.mock("@/lib/wallet-context", () => ({
-  useWallet: () => ({ session: fixture.session, refreshConfidentialBalances: fixture.refreshBalances }),
+  useWallet: () => ({
+    session: fixture.session,
+    refreshConfidentialBalances: fixture.refreshBalances,
+  }),
 }));
 vi.mock("@/lib/zama", async () => ({
   asChecksumAddress: (await vi.importActual<typeof import("viem")>("viem")).getAddress,
@@ -104,6 +103,13 @@ beforeEach(() => {
   fixture.aggregate = `0x${"1".repeat(64)}`;
   fixture.aggregateRead.mockReset();
   fixture.aggregateRead.mockImplementation(() => fixture.aggregate);
+  fixture.readContract.mockReset();
+  fixture.readContract.mockImplementation(({ functionName }) => {
+    if (functionName === "encryptedWinningsOf") return fixture.aggregateRead();
+    if (functionName === "membershipIndexOf") return fixture.membership;
+    if (functionName === "pendingAdmissionOf") return fixture.pending;
+    return 0n;
+  });
   fixture.mode = "legacy1";
   fixture.membership = 0n;
   fixture.pending = { requested: false };
@@ -180,7 +186,11 @@ test("reinvest refreshes an unadmitted member's current participation status", a
   fixture.pending = { requested: true };
   fixture.prepare.mockResolvedValue({
     cancel: vi.fn(),
-    send: async ({ onOperationPrepared }: { onOperationPrepared: (value: ReturnType<typeof operation>) => void }) => {
+    send: async ({
+      onOperationPrepared,
+    }: {
+      onOperationPrepared: (value: ReturnType<typeof operation>) => void;
+    }) => {
       onOperationPrepared(operation());
       fixture.aggregate = `0x${"0".repeat(64)}`;
       return `0x${"b".repeat(64)}` as const;
@@ -193,7 +203,9 @@ test("reinvest refreshes an unadmitted member's current participation status", a
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
   expect(
-    await screen.findByText("Your savings are waiting to be included in a future draw. Review participation in Savings."),
+    await screen.findByText(
+      "Your savings are waiting to be included in a future draw. Review participation in Savings.",
+    ),
   ).toBeTruthy();
 });
 
@@ -217,7 +229,7 @@ test("a post-completion display read can refresh without resending the credited 
   expect(fixture.refreshBalances).toHaveBeenCalledTimes(2);
 });
 
-test("cancels a late unused credit preparation after the Draw scope changes", async () => {
+test("cancels a late unused credit preparation after the Draw mode changes", async () => {
   let resolvePrepare!: (value: { cancel: () => void; send: () => Promise<`0x${string}`> }) => void;
   const cancel = vi.fn();
   fixture.prepare.mockImplementation(
@@ -230,8 +242,7 @@ test("cancels a late unused credit preparation after the Draw scope changes", as
   const rendered = mount();
   fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
   fireEvent.click(await screen.findByRole("button", { name: "Claim prize" }));
-  fixture.pool = fixture.alternatePool;
-  fixture.session = { ...fixture.session, address: fixture.alternateAccount };
+  fixture.mode = "2";
   rendered.rerender(tree());
   resolvePrepare({ cancel, send: async () => `0x${"d".repeat(64)}` });
 
@@ -239,7 +250,7 @@ test("cancels a late unused credit preparation after the Draw scope changes", as
   expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 });
 
-test("ignores a late aggregate reveal after the selected account and pool change", async () => {
+test("ignores a late aggregate reveal after the selected pool changes", async () => {
   let resolveAggregate!: (value: `0x${string}`) => void;
   fixture.aggregateRead.mockReturnValue(
     new Promise<`0x${string}`>((resolve) => {
@@ -249,7 +260,6 @@ test("ignores a late aggregate reveal after the selected account and pool change
   const rendered = mount();
   fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
   fixture.pool = fixture.alternatePool;
-  fixture.session = { ...fixture.session, address: fixture.alternateAccount };
   rendered.rerender(tree());
   resolveAggregate(`0x${"1".repeat(64)}`);
 

@@ -324,7 +324,11 @@ test.each(["Claim prize", "Add prize to savings"] as const)(
     );
     fixture.prepare.mockResolvedValue({
       cancel: vi.fn(),
-      send: async ({ onOperationPrepared }: { onOperationPrepared: (value: ReturnType<typeof savedIntent>["operation"]) => void }) => {
+      send: async ({
+        onOperationPrepared,
+      }: {
+        onOperationPrepared: (value: ReturnType<typeof savedIntent>["operation"]) => void;
+      }) => {
         onOperationPrepared(savedIntent().operation);
         fixture.winningsHandle = `0x${"0".repeat(64)}`;
         return `0x${"f".repeat(64)}` as const;

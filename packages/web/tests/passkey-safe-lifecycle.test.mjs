@@ -94,6 +94,8 @@ test("anchors a successful operation to its EntryPoint v0.7 event and canonical 
     transactionHash,
     blockNumber: 42n,
     blockHash,
+    nonce: 0n,
+    actualGasCost: 1n,
   });
 });
 

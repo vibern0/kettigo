@@ -16,7 +16,13 @@ import { createLatestBlockRefresher } from "@/lib/morpho-yield";
 import { PrizeHistory } from "@/components/draw/PrizeHistory";
 import { DrawPoolSummary } from "@/components/draw/DrawPoolSummary";
 import { readDrawSnapshot } from "@/components/draw/draw-snapshot";
-import { asDrawAddress as asAddress, drawErrorMessage as getErrorMessage, drawRuntimeConfig, formatDrawDateTime as formatDateTime, formatDrawInterval as formatInterval } from "@/components/draw/draw-page-utils";
+import {
+  asDrawAddress as asAddress,
+  drawErrorMessage as getErrorMessage,
+  drawRuntimeConfig,
+  formatDrawDateTime as formatDateTime,
+  formatDrawInterval as formatInterval,
+} from "@/components/draw/draw-page-utils";
 import { PrizeCreditPanel } from "@/components/draw/PrizeCreditPanel";
 import { useActionCenter } from "@/components/ActionCenter";
 import type { AsyncAction } from "@/lib/action-center-model";
@@ -126,7 +132,10 @@ export default function DrawPage() {
 
   useEffect(() => {
     for (const action of actions) {
-      if (!action.operation || !["completed", "failed", "rejected", "not-submitted"].includes(action.status))
+      if (
+        !action.operation ||
+        !["completed", "failed", "rejected", "not-submitted"].includes(action.status)
+      )
         continue;
       const key = creditOperationKey(action.operation);
       const owner = pendingCreditOwnersRef.current.get(key);
@@ -198,7 +207,11 @@ export default function DrawPage() {
     });
 
     if (isZeroEncryptedHandle(handle)) {
-      if (scopeRef.current !== requestScope || winningsSessionRef.current !== user || winningsRequestId.current !== requestId)
+      if (
+        scopeRef.current !== requestScope ||
+        winningsSessionRef.current !== user ||
+        winningsRequestId.current !== requestId
+      )
         return false;
       setWinnings(0n);
       setWinningsOwner(user);
@@ -213,11 +226,19 @@ export default function DrawPage() {
         pool,
       );
     } catch (error) {
-      if (scopeRef.current !== requestScope || winningsSessionRef.current !== user || winningsRequestId.current !== requestId)
+      if (
+        scopeRef.current !== requestScope ||
+        winningsSessionRef.current !== user ||
+        winningsRequestId.current !== requestId
+      )
         return false;
       throw error;
     }
-    if (scopeRef.current !== requestScope || winningsSessionRef.current !== user || winningsRequestId.current !== requestId)
+    if (
+      scopeRef.current !== requestScope ||
+      winningsSessionRef.current !== user ||
+      winningsRequestId.current !== requestId
+    )
       return false;
     setWinnings(revealedWinnings);
     setWinningsOwner(user);
@@ -248,7 +269,11 @@ export default function DrawPage() {
         await decryptWinnings();
         if (scopeRef.current !== requestScope) return;
         await Promise.all([refresh(), refreshConfidentialBalances()]);
-        if (scopeRef.current !== requestScope || creditScope.action !== "addPrizeToSavings" || !runtime.mode2) {
+        if (
+          scopeRef.current !== requestScope ||
+          creditScope.action !== "addPrizeToSavings" ||
+          !runtime.mode2
+        ) {
           refreshedCreditOperationsRef.current.add(operationKey);
           setCreditRefreshAction(undefined);
           return;
@@ -256,8 +281,18 @@ export default function DrawPage() {
         const pool = asAddress(addresses.pool, "Prize pool");
         const account = asAddress(session?.address, "Smart account");
         const [membership, pending] = await Promise.all([
-          publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "membershipIndexOf", args: [account] }),
-          publicClient.readContract({ address: pool, abi: confidentialPrizePoolAbi, functionName: "pendingAdmissionOf", args: [account] }),
+          publicClient.readContract({
+            address: pool,
+            abi: confidentialPrizePoolAbi,
+            functionName: "membershipIndexOf",
+            args: [account],
+          }),
+          publicClient.readContract({
+            address: pool,
+            abi: confidentialPrizePoolAbi,
+            functionName: "pendingAdmissionOf",
+            args: [account],
+          }),
         ]);
         if (scopeRef.current === requestScope)
           setParticipationPending(membership === 0n && pending.requested);
@@ -276,7 +311,14 @@ export default function DrawPage() {
         }
       }
     },
-    [addresses.pool, refreshConfidentialBalances, runtime.mode2, scope, session?.address, updateTrackedAction],
+    [
+      addresses.pool,
+      refreshConfidentialBalances,
+      runtime.mode2,
+      scope,
+      session?.address,
+      updateTrackedAction,
+    ],
   );
 
   useEffect(() => {
@@ -485,7 +527,8 @@ function creditOperationKey(operation: {
 }
 
 function isCreditScope(value: unknown): value is NonNullable<AsyncAction["creditScope"]> {
-  const pool = typeof value === "object" && value !== null ? (value as { pool?: unknown }).pool : undefined;
+  const pool =
+    typeof value === "object" && value !== null ? (value as { pool?: unknown }).pool : undefined;
   return (
     typeof value === "object" &&
     value !== null &&
