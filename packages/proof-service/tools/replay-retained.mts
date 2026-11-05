@@ -302,6 +302,36 @@ function publish(from: string, to: string) {
   linkSync(from, to);
   unlinkSync(from);
 }
+async function verifyCanonicalDerivedRows(db: DatabaseSync, n: Namespace) {
+  // Event logs are the retained canonical source. Rebuild their derived projection in an
+  // isolated database so a sealed SQL snapshot cannot omit rows that proof() would skip.
+  const retained = exportArchive(db, n);
+  const rebuilt = migrate(":memory:");
+  try {
+    const archive = new D1Archive(new SqliteD1(rebuilt));
+    await archive.initialize(n, retained.payload.deploymentParentHash);
+    await archive.ingest(
+      n,
+      await archive.status(n),
+      retained.payload.logs,
+      retained.payload.headers,
+    );
+    for (const table of ["node_versions", "slot_versions", "draws"]) {
+      const rows = (database: DatabaseSync) =>
+        (
+          database
+            .prepare(`SELECT * FROM ${table} WHERE chain_id=? AND pool=?`)
+            .all(n.chainId, n.pool) as Record<string, unknown>[]
+        )
+          .map(stable)
+          .sort();
+      if (stable(rows(db)) !== stable(rows(rebuilt)))
+        throw new Error(`canonical derived ${table} mismatch`);
+    }
+  } finally {
+    rebuilt.close();
+  }
+}
 async function verify(db: DatabaseSync, n: Namespace) {
   const archive = new D1Archive(new SqliteD1(db));
   await archive.assertNamespace(n);
@@ -309,6 +339,7 @@ async function verify(db: DatabaseSync, n: Namespace) {
     (db.prepare("PRAGMA integrity_check").get() as Record<string, unknown>).integrity_check !== "ok"
   )
     throw new Error("SQLite integrity check failed");
+  await verifyCanonicalDerivedRows(db, n);
   const draws = db
     .prepare("SELECT draw_id FROM draws WHERE chain_id=? AND pool=?")
     .all(n.chainId, n.pool) as Record<string, unknown>[];
