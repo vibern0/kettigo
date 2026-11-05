@@ -3,6 +3,7 @@ import {
   validateSafeUserOperationReceipt,
   validateStoredSafeUserOperationReceipt,
 } from "./safe-userop-receipt.mjs";
+import { validStoredEoaReceipt } from "./eoa-receipt-validation.mjs";
 
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const UINT = /^(0|[1-9][0-9]*)$/;
@@ -50,18 +51,5 @@ export function validateStoredReceipt(receipt, intent) {
     if (BigInt(receipt.feeWei) > BigInt(intent.maxFeeWei)) fail("invalid persisted receipt");
     return;
   }
-  if (
-    !receipt ||
-    !validHash(receipt.hash) ||
-    receipt.hash !== intent.signed.hash ||
-    ![0, 1].includes(receipt.status) ||
-    receipt.from !== intent.sender ||
-    receipt.to !== intent.to ||
-    receipt.input !== intent.input ||
-    receipt.nonce !== intent.nonce ||
-    receipt.chainId !== 11155111 ||
-    !UINT.test(receipt.feeWei ?? "") ||
-    BigInt(receipt.feeWei) > BigInt(intent.maxFeeWei)
-  )
-    fail("invalid persisted receipt");
+  if (!validStoredEoaReceipt(receipt, intent, validHash, UINT)) fail("invalid persisted receipt");
 }

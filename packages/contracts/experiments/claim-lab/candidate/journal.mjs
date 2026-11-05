@@ -30,6 +30,7 @@ import {
 } from "./state-shape-validation.mjs";
 import { loadState } from "./state-storage.mjs";
 import { assertOpen, assertSigningAllowed } from "./journal-guards.mjs";
+import { validPersistedIntentFields as validFields, validRequest } from "./intent-validation.mjs";
 
 export const ORIGINAL_ENVELOPE = Object.freeze({
   id: "merkle-fhe-v2-sepolia-2026-11-04",
@@ -157,38 +158,14 @@ function validatePersistedIntent(intent) {
   validatePersistedTransition(intent);
 }
 function validPersistedIntentFields(intent) {
-  const shared =
-    Boolean(intent) &&
-    [
-      typeof intent.intentId === "string" &&
-        Boolean(intent.intentId) &&
-        intent.intentId.length <= MAX_INTENT_ID,
-      validAddress(intent.sender),
-      isNatural(intent.nonce),
-      validHash(intent.unsignedDigest),
-      isNatural(intent.offeredAt),
-      validTarget(intent.to, intent.input),
-      validIntentBudget(intent),
-      Array.isArray(intent.attempts),
-      intent.observations === undefined || Array.isArray(intent.observations),
-    ].every(Boolean);
-  if (!shared) return false;
-  if (intent.kind === undefined) return true;
-  if (intent.kind !== "user-operation" || !intent.userOperation) return false;
-  const metadata = intent.userOperation;
-  return (
-    Object.keys(metadata).length === 6 &&
-    ["chainId", "entryPoint", "sender", "userOperationHash", "nonce", "wireDigest"].every((key) =>
-      Object.hasOwn(metadata, key),
-    ) &&
-    metadata.chainId === 11155111 &&
-    validAddress(metadata.entryPoint) &&
-    metadata.sender === intent.sender &&
-    validHash(metadata.userOperationHash) &&
-    UINT.test(metadata.nonce) &&
-    BigInt(metadata.nonce) === BigInt(intent.nonce) &&
-    (metadata.wireDigest === null || validHash(metadata.wireDigest))
-  );
+  return validFields(intent, {
+    validAddress,
+    validHash,
+    isNatural,
+    validTarget,
+    validIntentBudget,
+    uint: UINT,
+  });
 }
 function validTarget(to, input) {
   return validTargetShape(to, input, { validAddress, hex: HEX, maxInput: MAX_INPUT });
@@ -473,36 +450,8 @@ export class CandidateRunJournal {
 }
 
 function validateRequest(request) {
-  if (
-    !request ||
-    typeof request.intentId !== "string" ||
-    !request.intentId ||
-    !validAddress(request.sender) ||
-    !isNatural(request.nonce) ||
-    !validHash(request.unsignedDigest) ||
-    !validTarget(request.to, request.input) ||
-    !isNatural(request.offeredAt) ||
-    typeof request.maxGasPriceWei !== "bigint"
-  )
+  if (!validRequest(request, { validAddress, validHash, isNatural, validTarget, uint: UINT }))
     fail("invalid intent");
-  if (request.kind !== undefined) {
-    const meta = request.userOperation;
-    if (
-      request.kind !== "user-operation" ||
-      !meta ||
-      Object.keys(meta).length !== 5 ||
-      !["chainId", "entryPoint", "sender", "userOperationHash", "nonce"].every((key) =>
-        Object.hasOwn(meta, key),
-      ) ||
-      meta.chainId !== 11155111 ||
-      !validAddress(meta.entryPoint) ||
-      meta.sender !== request.sender ||
-      !validHash(meta.userOperationHash) ||
-      !UINT.test(meta.nonce) ||
-      BigInt(meta.nonce) !== BigInt(request.nonce)
-    )
-      fail("invalid UserOperation intent");
-  }
 }
 function sameRequest(intent, request) {
   return (
