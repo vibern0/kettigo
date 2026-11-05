@@ -43,7 +43,7 @@ export function completeKnownPrizeHistoryOperation(
     return;
   const key = drawOperationKey(error.operation);
   const boundOwner = owners.get(key);
-  if (boundOwner && boundOwner !== owner) return;
+  if (boundOwner !== owner) return;
   owners.delete(key);
   reviewLease.complete(owner);
 }
