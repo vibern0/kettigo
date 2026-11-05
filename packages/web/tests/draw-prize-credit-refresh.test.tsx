@@ -51,7 +51,18 @@ vi.mock("@/lib/contracts", async (original) => ({
 }));
 vi.mock("@/lib/runtime-config", () => ({
   get SELECTED_SCOPE() {
-    return { mode: fixture.mode === "legacy1" ? "legacy1" : "v2", proofServiceUrl: "" };
+    return {
+      id: fixture.mode === "legacy1" ? "legacy-e65" : "candidate-v2",
+      chainId: 11155111,
+      usdc: fixture.account,
+      wrapper: "0x2222222222222222222222222222222222222222",
+      pool: fixture.pool,
+      rpcUrl: "https://rpc.example",
+      mode: fixture.mode === "legacy1" ? "legacy1" : "v2",
+      proofServiceUrl: "",
+      proofNamespace: "",
+      onboardingEnabled: false,
+    };
   },
   publicConfig: (name: string, fallback?: string) =>
     name === "NEXT_PUBLIC_POOL_VERSION" ? fixture.mode : (fallback ?? ""),
@@ -123,6 +134,7 @@ function operation() {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState({}, "", "/draw?tab=prize&tag=one&tag=two");
   fixture.pool = fixture.originalPool;
   fixture.aggregate = `0x${"1".repeat(64)}`;
   fixture.aggregateRead.mockReset();
@@ -227,7 +239,7 @@ test("reinvest refreshes an unadmitted member's current participation status", a
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
   expect((await screen.findByRole("link", { name: "Savings" })).getAttribute("href")).toBe(
-    "/savings",
+    "/savings?tab=prize&tag=one&tag=two&savings=candidate-v2",
   );
 });
 

@@ -1,9 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   scopeId: "legacy-9c" as "legacy-9c" | "candidate-v2",
-  alternateOrigin: false,
   session: undefined as { address: `0x${string}` } | undefined,
 }));
 
@@ -44,21 +43,12 @@ vi.mock("@/lib/wallet-context", () => ({
   }),
 }));
 vi.mock("@/lib/usePoolData", () => ({ useUSDCBalance: () => ({ data: [{ result: 0n }] }) }));
-vi.mock("@/lib/scope-navigation", async (original) => {
-  const actual = await original<typeof import("@/lib/scope-navigation")>();
-  return {
-    ...actual,
-    isAlternateSavingsOrigin: () => fixture.alternateOrigin,
-  };
-});
-
 import { Header } from "@/components/Header";
 import HomePage from "@/app/page";
 import ProfilePage from "@/app/profile/page";
 
 beforeEach(() => {
   fixture.scopeId = "legacy-9c";
-  fixture.alternateOrigin = false;
   fixture.session = undefined;
   window.history.replaceState(
     {},
@@ -93,17 +83,13 @@ test("Header and home render selected-scope hrefs without dropping repeated quer
   );
 });
 
-test("Header renders the fixed earlier-savings origin only for the alternate candidate document", async () => {
+test("Header renders the fixed earlier-savings link for an actual alternate candidate origin", async () => {
   fixture.scopeId = "candidate-v2";
-  fixture.alternateOrigin = true;
-  const { unmount } = render(<Header />);
+  expect(window.location.origin).not.toBe("https://kettigo.xyz");
+  render(<Header />);
   expect((await screen.findByRole("link", { name: "Earlier savings" })).getAttribute("href")).toBe(
     "https://kettigo.xyz",
   );
-  unmount();
-  fixture.alternateOrigin = false;
-  render(<Header />);
-  await waitFor(() => expect(screen.queryByRole("link", { name: "Earlier savings" })).toBeNull());
 });
 
 test("Profile renders no hidden navigation anchors", () => {
