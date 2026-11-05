@@ -38,7 +38,15 @@ type Selection =
   | Readonly<{ kind: "access-ready"; drawId: bigint; prepared: PreparedSmartTransaction }>
   | Readonly<{ kind: "checked"; drawId: bigint; handle: Hex; award?: bigint; access?: true }>
   | Readonly<{
-      kind: "pending" | "updating" | "failed" | "rejected" | "not-submitted";
+      kind:
+        | "pending"
+        | "updating"
+        | "failed"
+        | "rejected"
+        | "not-submitted"
+        | "not-eligible"
+        | "indexing"
+        | "history-unavailable";
       drawId: bigint;
     }>
   | Readonly<{ kind: "unavailable"; drawId: bigint }>;
@@ -285,7 +293,7 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
         return;
       }
       if (reviewed.state !== "ready") {
-        setSelection({ kind: "unavailable", drawId: selection.drawId });
+        setSelection({ kind: reviewed.state, drawId: selection.drawId });
         return;
       }
       const prepared = await coordinator.prepare(reviewed, controller.signal);
@@ -447,6 +455,19 @@ export function PrizeHistory({ account, pool, session, proofUrl }: PrizeHistoryP
             Review check
           </button>
         </div>
+      )}
+      {selection?.kind === "not-eligible" && (
+        <p className="text-sm text-muted">
+          This round was not available to check for your account.
+        </p>
+      )}
+      {selection?.kind === "indexing" && (
+        <p className="text-sm text-muted">
+          This result is still being prepared. Check back shortly.
+        </p>
+      )}
+      {selection?.kind === "history-unavailable" && (
+        <p className="text-sm text-muted">Past results are unavailable right now.</p>
       )}
       {selection?.kind === "ready" && (
         <button className="btn-primary w-full" onClick={confirmCheck}>

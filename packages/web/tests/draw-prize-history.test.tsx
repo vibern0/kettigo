@@ -265,6 +265,33 @@ test("confirms one prepared prize check from the Confirm click", async () => {
   await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
 });
 
+test.each([
+  ["not-eligible", "This round was not available to check for your account."],
+  ["indexing", "This result is still being prepared. Check back shortly."],
+  ["history-unavailable", "Past results are unavailable right now."],
+] as const)("keeps the %s check outcome distinct", async (state, copy) => {
+  fixture.version = "2";
+  fixture.readerFactory.mockReturnValue({
+    readBlockHash: vi.fn(async () => `0x${"a".repeat(64)}`),
+    readChecked: vi.fn(async () => false),
+    readAward: vi.fn(async () => fixture.award),
+  });
+  fixture.coordinator.mockReturnValue({
+    pending: () => null,
+    reconcile: vi.fn(),
+    review: vi.fn(async () => ({ state, drawId: 12n })),
+    prepare: vi.fn(),
+  });
+  mount();
+  await screen.findByText("Your past results");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Review check" }));
+  expect(await screen.findByText(copy)).toBeTruthy();
+});
+
 test("keeps a late selected-round result out of the newer view", async () => {
   fixture.version = "2";
   fixture.proofUrl = "";
