@@ -73,8 +73,8 @@ export const confidentialPrizePoolAbi = [
     type: "function", name: "finalizeAdmission", stateMutability: "nonpayable",
     inputs: [{ name: "account", type: "address" }, { name: "nonce", type: "uint256" }, { name: "positive", type: "bool" }, { name: "proof", type: "bytes" }], outputs: [],
   },
-  { type: "function", name: "membershipIndexOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "encryptedAwardOf", stateMutability: "view", inputs: [{ name: "drawId_", type: "uint256" }, { name: "beneficiary", type: "address" }], outputs: [{ type: "bytes32" }] },
+  { type: "function", name: "membershipIndexOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", name: "encryptedAwardOf", stateMutability: "view", inputs: [{ name: "drawId_", type: "uint256" }, { name: "beneficiary", type: "address" }], outputs: [{ name: "", type: "bytes32" }] },
   {
     type: "function", name: "draws", stateMutability: "view",
     inputs: [{ name: "drawId", type: "uint256" }],
