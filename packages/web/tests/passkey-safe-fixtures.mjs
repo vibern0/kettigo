@@ -52,6 +52,22 @@ export function createStorage() {
   };
 }
 
+export function createLocks() {
+  const held = new Set();
+  return {
+    async request(name, options, callback) {
+      assert.deepEqual(options, { mode: "exclusive", ifAvailable: true });
+      if (held.has(name)) return callback(null);
+      held.add(name);
+      try {
+        return await callback({ name });
+      } finally {
+        held.delete(name);
+      }
+    },
+  };
+}
+
 export function finalUserOperation(sender = SAFE_ADDRESS) {
   return {
     sender,
@@ -113,6 +129,8 @@ export function relay(address = SAFE_ADDRESS, safeProvider) {
 
 export function dependencies(overrides = {}) {
   return {
+    pendingOperationStorage: createStorage(),
+    pendingOperationLocks: createLocks(),
     async createCredential() {
       return { id: "credential" };
     },

@@ -5,7 +5,6 @@ import Safe, {
   buildSignatureBytes,
   getP256VerifierAddress,
   type ExtractedPasskeyData,
-  type PasskeyArgType,
 } from "@safe-global/protocol-kit";
 import { Safe4337Pack } from "@safe-global/relay-kit";
 import { getSafeWebAuthnShareSignerDeployment } from "@safe-global/safe-modules-deployments";
@@ -44,6 +43,12 @@ import {
   type PasskeySubmissionDependencies,
   type SubmissionRelay,
 } from "./passkey-submission.ts";
+import {
+  createGuardedPasskeySession,
+  type PendingOperationLockManager,
+} from "./pending-operation-session.ts";
+import { withDirectCredentialLease } from "./direct-signing-fence.ts";
+import { buildPasskeySigner } from "./passkey-signer.ts";
 
 import { writePasskeyMetadata, type PasskeyMetadata } from "./passkey-metadata.ts";
 import { createKettigoCredential, getKettigoCredential } from "./passkey-webauthn.ts";
@@ -70,6 +75,7 @@ export {
   SafeUserOperationRejectedError,
 } from "./passkey-operation.ts";
 export { createPasskeyFeeEstimator } from "./passkey-fee-estimator.ts";
+export { buildPasskeySigner } from "./passkey-signer.ts";
 
 const SAFE_VERSION = "1.4.1" as const;
 const SAFE_MODULES_VERSION = "0.3.0";
@@ -130,6 +136,9 @@ type PasskeySafeDependencies = PasskeySubmissionDependencies & {
   ): Promise<Credential>;
   estimateVerifierGas(address: Address): Promise<bigint>;
   sleep(milliseconds: number): Promise<void>;
+  pendingOperationLocks?: PendingOperationLockManager;
+  pendingOperationStorage?: PasskeyStorage;
+  preparationTimeoutMs?: number;
 };
 
 type ReceiptWaitOptions = {
@@ -173,11 +182,15 @@ export async function createPasskeyAccount(
   );
   const address = getAddress(await relay.protocolKit.getAddress());
   const stored = writePasskeyMetadata({ ...metadata, safeAddress: address }, input.storage);
-  return createSession(relay, stored, input.rpId, deps, true);
+  return createGuardedPasskeySession(createSession(relay, stored, input.rpId, deps, true), {
+    storage: input.storage ?? deps.pendingOperationStorage,
+    locks: deps.pendingOperationLocks,
+    preparationTimeoutMs: deps.preparationTimeoutMs,
+  });
 }
 
 export async function restorePasskeyAccount(
-  input: { metadata: PasskeyMetadata; rpId: string },
+  input: { metadata: PasskeyMetadata; rpId: string; storage?: PasskeyStorage },
   dependencies: Partial<PasskeySafeDependencies> = {},
 ): Promise<PasskeySmartSession> {
   const deps = withDependencies({
@@ -200,20 +213,14 @@ export async function restorePasskeyAccount(
         ),
       )
     : predictedRelay;
-  return createSession(relay, input.metadata, input.rpId, deps, !isDeployed);
-}
-
-export function buildPasskeySigner(
-  metadata: Pick<PasskeyMetadata, "rawId" | "coordinates" | "verifierAddress">,
-  rpId: string,
-  dependencies: Pick<PasskeySafeDependencies, "getCredential">,
-): PasskeyArgType {
-  return {
-    rawId: metadata.rawId,
-    coordinates: metadata.coordinates,
-    verifierAddress: getAddress(metadata.verifierAddress),
-    getFn: (options) => dependencies.getCredential(metadata.rawId, rpId, options),
-  };
+  return createGuardedPasskeySession(
+    createSession(relay, input.metadata, input.rpId, deps, !isDeployed),
+    {
+      storage: input.storage ?? deps.pendingOperationStorage,
+      locks: deps.pendingOperationLocks,
+      preparationTimeoutMs: deps.preparationTimeoutMs,
+    },
+  );
 }
 
 export async function signSafeTypedData(
@@ -385,19 +392,36 @@ function createSession(
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
       await refreshDeploymentState();
-      const transactionHash = await sendPasskeyCalls(
-        relay,
+      const active = (
+        options as SmartTransactionOptions & { __assertPendingOperationLease?: () => void }
+      ).__assertPendingOperationLease;
+      const signingRelay = active
+        ? await prepareDeployedRelay(
+            await deps.initRelay(
+              relayOptions(
+                metadata,
+                usingCounterfactualRelay
+                  ? predictedOptions(metadata.rawId)
+                  : { safeAddress: getAddress(metadata.safeAddress) },
+                rpId,
+                withDirectCredentialLease(deps, active),
+              ),
+            ),
+          )
+        : relay;
+      return sendPasskeyCalls(
+        signingRelay,
         calls,
         deps,
         getAddress(metadata.verifierAddress),
         getAddress(metadata.safeAddress),
         normalizePasskeySignature,
+        active,
         options,
         () => {
           if (usingCounterfactualRelay) refreshRequired = true;
         },
       );
-      return transactionHash;
     },
   };
 }

@@ -181,7 +181,7 @@ test("reconnects through the deployed Safe after the first mined action", async 
   const initOptions = [];
   let firstRelayCalls = 0;
   let secondRelayCalls = 0;
-  const relays = [relay(), relay()];
+  const relays = [relay(), relay(), relay(), relay()];
   for (const [index, instance] of relays.entries()) {
     const original = instance.createTransaction;
     instance.createTransaction = async (...args) => {
@@ -208,13 +208,13 @@ test("reconnects through the deployed Safe after the first mined action", async 
   await session.sendTransaction(calls);
   await session.sendTransaction(calls);
 
-  assert.equal(initOptions.length, 2);
-  assert.equal(initOptions[1].options.safeAddress, SAFE_ADDRESS);
+  assert.equal(initOptions.length, 4);
+  assert.equal(initOptions[2].options.safeAddress, SAFE_ADDRESS);
   assert.equal(
-    initOptions[1].customContracts.safeWebAuthnSharedSignerAddress,
+    initOptions[2].customContracts.safeWebAuthnSharedSignerAddress,
     SHARED_SIGNER_ADDRESS,
   );
-  assert.deepEqual([firstRelayCalls, secondRelayCalls], [1, 1]);
+  assert.deepEqual([firstRelayCalls, secondRelayCalls], [0, 2]);
 });
 
 test("returns a mined transaction and retries a failed relay refresh before the next action", async () => {
@@ -234,8 +234,8 @@ test("returns a mined transaction and retries a failed relay refresh before the 
       },
       async initRelay() {
         initCount += 1;
-        if (initCount === 1) return relay();
-        if (initCount === 2) throw new Error("temporary RPC failure");
+        if (initCount <= 2) return relay();
+        if (initCount === 3) throw new Error("temporary RPC failure");
         return deployedRelay;
       },
     }),
@@ -243,11 +243,11 @@ test("returns a mined transaction and retries a failed relay refresh before the 
   const calls = [{ to: SAFE_ADDRESS, data: "0x" }];
 
   assert.equal(await session.sendTransaction(calls), `0x${"44".repeat(32)}`);
-  assert.equal(initCount, 1);
+  assert.equal(initCount, 2);
   await assert.rejects(session.sendTransaction(calls), /temporary RPC failure/);
   assert.equal(deployedCalls, 0);
   assert.equal(await session.sendTransaction(calls), `0x${"44".repeat(32)}`);
-  assert.equal(initCount, 3);
+  assert.equal(initCount, 5);
   assert.equal(deployedCalls, 1);
 });
 
@@ -279,7 +279,7 @@ test("refreshes a deployed relay before signing a transaction", async () => {
     await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
     `0x${"44".repeat(32)}`,
   );
-  assert.equal(initCount, 3);
+  assert.equal(initCount, 4);
 });
 
 test("does not retry a deployed relay after an AA24 signature rejection", async () => {
@@ -303,7 +303,7 @@ test("does not retry a deployed relay after an AA24 signature rejection", async 
       },
       async initRelay() {
         initCount += 1;
-        if (initCount < 3) return relay();
+        if (initCount < 4) return relay();
         return firstRelay;
       },
     }),
@@ -313,7 +313,7 @@ test("does not retry a deployed relay after an AA24 signature rejection", async 
     session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
     /still pending/,
   );
-  assert.equal(initCount, 3);
+  assert.equal(initCount, 4);
 });
 
 test("submission failures retain gas diagnostics and request only one signature", async () => {

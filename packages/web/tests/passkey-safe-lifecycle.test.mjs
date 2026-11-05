@@ -229,7 +229,7 @@ test("a restored counterfactual lookup selects a deployed relay only after code 
   assert.equal(initialCreates, 0);
   assert.equal(sends, 0);
   await session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
-  assert.equal(initCount, 3);
+  assert.equal(initCount, 4);
 });
 
 test("bounds a stalled send once and keeps its identity pending without late polling", async () => {

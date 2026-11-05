@@ -73,6 +73,7 @@ export async function sendPasskeyCalls(
   verifierAddress: Address,
   expectedSender: Address,
   normalizeSignature: (operation: unknown) => unknown,
+  beforeSigning?: () => void,
   options?: SmartTransactionOptions,
   onAccepted?: () => void,
 ): Promise<Hex> {
@@ -92,6 +93,7 @@ export async function sendPasskeyCalls(
       },
     }),
   );
+  beforeSigning?.();
   const signed = normalizeSignature(
     await withPasskeyStage(diagnostics, "signing", () => relay.signSafeOperation(operation)),
   );
