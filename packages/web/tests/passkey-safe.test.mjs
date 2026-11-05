@@ -3,7 +3,8 @@ import test from "node:test";
 
 import { EthSafeSignature } from "@safe-global/protocol-kit";
 import { PimlicoFeeEstimator } from "@safe-global/relay-kit";
-import { getAddress, hashTypedData } from "viem";
+import { encodeAbiParameters, encodeEventTopics, getAddress, hashTypedData } from "viem";
+import { entryPoint07Abi, entryPoint07Address } from "viem/account-abstraction";
 
 import {
   buildPasskeySigner,
@@ -52,6 +53,78 @@ test("derives the canonical EntryPoint v0.7 hash from all final signed operation
   assert.equal(Object.isFrozen(identity), true);
 });
 
+test("anchors a successful operation to its EntryPoint v0.7 event and canonical block", async () => {
+  const operation = Object.freeze({
+    chainId: 11155111,
+    entryPoint: getAddress(entryPoint07Address),
+    sender: SAFE_ADDRESS,
+    userOperationHash: `0x${"33".repeat(32)}`,
+  });
+  const transactionHash = `0x${"44".repeat(32)}`;
+  const blockHash = `0x${"55".repeat(32)}`;
+  const topics = encodeEventTopics({
+    abi: entryPoint07Abi,
+    eventName: "UserOperationEvent",
+    args: {
+      userOpHash: operation.userOperationHash,
+      sender: SAFE_ADDRESS,
+      paymaster: "0x0000000000000000000000000000000000000000",
+      nonce: 0n,
+      success: true,
+      actualGasCost: 1n,
+      actualGasUsed: 1n,
+    },
+  });
+  const data = encodeAbiParameters(
+    [{ type: "uint256" }, { type: "bool" }, { type: "uint256" }, { type: "uint256" }],
+    [0n, true, 1n, 1n],
+  );
+  const session = await createPasskeyAccount(
+    { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
+    dependencies({
+      async getTransactionReceipt() {
+        return {
+          transactionHash,
+          status: "success",
+          blockHash,
+          blockNumber: 42n,
+          logs: [
+            {
+              topics,
+              data,
+              address: getAddress(entryPoint07Address),
+              transactionHash,
+              blockHash,
+              blockNumber: 42n,
+            },
+          ],
+        };
+      },
+      async getBlock() {
+        return { hash: blockHash, number: 42n };
+      },
+      async initRelay() {
+        const instance = relay();
+        instance.getUserOperationReceipt = async () => ({
+          success: true,
+          userOpHash: operation.userOperationHash,
+          sender: SAFE_ADDRESS,
+          receipt: { transactionHash },
+        });
+        return instance;
+      },
+    }),
+  );
+
+  assert.deepEqual(await session.lookupUserOperation(operation), {
+    state: "confirmed",
+    operation,
+    transactionHash,
+    blockNumber: 42n,
+    blockHash,
+  });
+});
+
 function createStorage() {
   const values = new Map();
   return {
@@ -68,7 +141,17 @@ function createStorage() {
 }
 
 function finalUserOperation(sender = SAFE_ADDRESS) {
-  return { sender, nonce: 0n, callData: "0x", callGasLimit: 1n, verificationGasLimit: 2n, preVerificationGas: 3n, maxFeePerGas: 4n, maxPriorityFeePerGas: 5n, signature: "0x" };
+  return {
+    sender,
+    nonce: 0n,
+    callData: "0x",
+    callGasLimit: 1n,
+    verificationGasLimit: 2n,
+    preVerificationGas: 3n,
+    maxFeePerGas: 4n,
+    maxPriorityFeePerGas: 5n,
+    signature: "0x",
+  };
 }
 
 function relay(address = SAFE_ADDRESS, safeProvider) {
@@ -87,7 +170,13 @@ function relay(address = SAFE_ADDRESS, safeProvider) {
       async getAddress() {
         return address;
       },
-      ...(safeProvider ? { getSafeProvider() { return safeProvider; } } : {}),
+      ...(safeProvider
+        ? {
+            getSafeProvider() {
+              return safeProvider;
+            },
+          }
+        : {}),
     },
     async createTransaction() {
       return operation;
@@ -222,14 +311,21 @@ test("sponsors the observed Samsung passkey deployment estimate without a local 
 
 test("a measured verifier cost can raise the budget above the fallback and bundler estimate", async () => {
   const diagnostics = {};
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() { return {}; },
-    async postEstimateUserOperationGas(input) {
-      assert.equal(input.userOperation.verificationGasLimit, 912_500n);
-      return { verificationGasLimit: 950_000n };
+  const estimator = createPasskeyFeeEstimator(
+    {
+      async preEstimateUserOperationGas() {
+        return {};
+      },
+      async postEstimateUserOperationGas(input) {
+        assert.equal(input.userOperation.verificationGasLimit, 912_500n);
+        return { verificationGasLimit: 950_000n };
+      },
     },
-  }, { estimateVerifierGas: async () => 650_000n, diagnostics });
-  await estimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
+    { estimateVerifierGas: async () => 650_000n, diagnostics },
+  );
+  await estimator.postEstimateUserOperationGas({
+    userOperation: { verificationGasLimit: 308_778n },
+  });
   assert.equal(diagnostics.verifierProbe, "measured");
   assert.equal(diagnostics.verifierGas, "650000");
   assert.equal(diagnostics.bundlerVerificationGas, "308778");
@@ -239,11 +335,25 @@ test("a measured verifier cost can raise the budget above the fallback and bundl
 
 test("a probe outage preserves the proven fallback without blocking sponsorship", async () => {
   const diagnostics = {};
-  const estimator = createPasskeyFeeEstimator({
-    async preEstimateUserOperationGas() { return {}; },
-    async postEstimateUserOperationGas(input) { return { verificationGasLimit: input.userOperation.verificationGasLimit }; },
-  }, { estimateVerifierGas: async () => { throw new Error("offline https://rpc.example/?apikey=secret"); }, diagnostics });
-  const result = await estimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
+  const estimator = createPasskeyFeeEstimator(
+    {
+      async preEstimateUserOperationGas() {
+        return {};
+      },
+      async postEstimateUserOperationGas(input) {
+        return { verificationGasLimit: input.userOperation.verificationGasLimit };
+      },
+    },
+    {
+      estimateVerifierGas: async () => {
+        throw new Error("offline https://rpc.example/?apikey=secret");
+      },
+      diagnostics,
+    },
+  );
+  const result = await estimator.postEstimateUserOperationGas({
+    userOperation: { verificationGasLimit: 308_778n },
+  });
   assert.equal(result.verificationGasLimit, 600_000n);
   assert.equal(diagnostics.verifierProbe, "fallback");
   assert.doesNotMatch(JSON.stringify(diagnostics), /secret|https/);
@@ -266,6 +376,45 @@ function dependencies(overrides = {}) {
     },
     async getCode() {
       return "0x";
+    },
+    async getTransactionReceipt() {
+      const userOperationHash =
+        "0x60a9c26f9c932173953974fad9377bd05b94e7af3f01dfdb93482ac70b4265a5";
+      const topics = encodeEventTopics({
+        abi: entryPoint07Abi,
+        eventName: "UserOperationEvent",
+        args: {
+          userOpHash: userOperationHash,
+          sender: SAFE_ADDRESS,
+          paymaster: "0x0000000000000000000000000000000000000000",
+          nonce: 0n,
+          success: true,
+          actualGasCost: 1n,
+          actualGasUsed: 1n,
+        },
+      });
+      const blockHash = `0x${"55".repeat(32)}`;
+      return {
+        transactionHash: `0x${"44".repeat(32)}`,
+        status: "success",
+        blockHash,
+        blockNumber: 42n,
+        logs: [
+          {
+            address: getAddress(entryPoint07Address),
+            topics,
+            data: encodeAbiParameters(
+              [{ type: "uint256" }, { type: "bool" }, { type: "uint256" }, { type: "uint256" }],
+              [0n, true, 1n, 1n],
+            ),
+            blockHash,
+            blockNumber: 42n,
+          },
+        ],
+      };
+    },
+    async getBlock() {
+      return { hash: `0x${"55".repeat(32)}`, number: 42n };
     },
     async getCredential() {
       return { id: "credential" };
@@ -292,7 +441,10 @@ test("creates a deterministic Safe 1.4.1 session and stores checksum metadata", 
 
   assert.equal(session.address, SAFE_ADDRESS);
   assert.equal(initOptions.safeModulesVersion, "0.3.0");
-  assert.equal(initOptions.customContracts.entryPointAddress.toLowerCase(), "0x0000000071727de22e5e9d8baf0edac6f37da032");
+  assert.equal(
+    initOptions.customContracts.entryPointAddress.toLowerCase(),
+    "0x0000000071727de22e5e9d8baf0edac6f37da032",
+  );
   assert.equal(initOptions.customContracts.safeWebAuthnSharedSignerAddress, SHARED_SIGNER_ADDRESS);
   assert.deepEqual(initOptions.options.owners, []);
   assert.equal(initOptions.options.threshold, 1);
@@ -313,7 +465,10 @@ test("derives account identity before restoring counterfactual and deployed Safe
     safeAddress: SAFE_ADDRESS,
   };
 
-  for (const [code, expectedKey] of [["0x", "owners"], ["0x6000", "safeAddress"]]) {
+  for (const [code, expectedKey] of [
+    ["0x", "owners"],
+    ["0x6000", "safeAddress"],
+  ]) {
     const initOptions = [];
     const session = await restorePasskeyAccount(
       { metadata, rpId: "app.kettigo.xyz" },
@@ -369,7 +524,9 @@ test("blocks a deployed restored signer when independent Safe derivation no long
 
 test("reports signing before submission and receipt polling finish", async () => {
   let release;
-  const submission = new Promise((resolve) => { release = resolve; });
+  const submission = new Promise((resolve) => {
+    release = resolve;
+  });
   const instance = relay();
   let signed = false;
   instance.executeTransaction = async () => {
@@ -379,10 +536,16 @@ test("reports signing before submission and receipt polling finish", async () =>
   };
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
-    dependencies({ async initRelay() { return instance; } }),
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
   );
   const pending = session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
-    onSigned() { signed = true; },
+    onSigned() {
+      signed = true;
+    },
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(signed, true);
@@ -394,15 +557,29 @@ test("does not hand off or submit when signing is cancelled", async () => {
   const instance = relay();
   let signed = false;
   let submitted = false;
-  instance.signSafeOperation = async () => { throw new Error("Approval cancelled"); };
-  instance.executeTransaction = async () => { submitted = true; return "0x"; };
+  instance.signSafeOperation = async () => {
+    throw new Error("Approval cancelled");
+  };
+  instance.executeTransaction = async () => {
+    submitted = true;
+    return "0x";
+  };
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
-    dependencies({ async initRelay() { return instance; } }),
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
   );
-  await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
-    onSigned() { signed = true; },
-  }), /Approval cancelled/);
+  await assert.rejects(
+    session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }], {
+      onSigned() {
+        signed = true;
+      },
+    }),
+    /Approval cancelled/,
+  );
   assert.equal(signed, false);
   assert.equal(submitted, false);
 });
@@ -436,7 +613,10 @@ test("reconnects through the deployed Safe after the first mined action", async 
 
   assert.equal(initOptions.length, 2);
   assert.equal(initOptions[1].options.safeAddress, SAFE_ADDRESS);
-  assert.equal(initOptions[1].customContracts.safeWebAuthnSharedSignerAddress, SHARED_SIGNER_ADDRESS);
+  assert.equal(
+    initOptions[1].customContracts.safeWebAuthnSharedSignerAddress,
+    SHARED_SIGNER_ADDRESS,
+  );
   assert.deepEqual(callCounts, [1, 1]);
 });
 
@@ -540,24 +720,45 @@ test("submission failures retain gas diagnostics and request only one signature"
   const instance = relay();
   let signatures = 0;
   let submissions = 0;
-  instance.createTransaction = async () => ({ getUserOperation() { return {
-    ...finalUserOperation(),
-    verificationGasLimit: 650_000n, callGasLimit: 1_000_000n, preVerificationGas: 60_000n,
-    maxFeePerGas: 123n, maxPriorityFeePerGas: 100n,
-    callData: "secret-calldata", signature: "secret-signature",
-  }; } });
-  instance.signSafeOperation = async (operation) => { signatures++; return operation; };
-  instance.executeTransaction = async () => { submissions++; throw new Error("AA24 signature error"); };
+  instance.createTransaction = async () => ({
+    getUserOperation() {
+      return {
+        ...finalUserOperation(),
+        verificationGasLimit: 650_000n,
+        callGasLimit: 1_000_000n,
+        preVerificationGas: 60_000n,
+        maxFeePerGas: 123n,
+        maxPriorityFeePerGas: 100n,
+        callData: "secret-calldata",
+        signature: "secret-signature",
+      };
+    },
+  });
+  instance.signSafeOperation = async (operation) => {
+    signatures++;
+    return operation;
+  };
+  instance.executeTransaction = async () => {
+    submissions++;
+    throw new Error("AA24 signature error");
+  };
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
-    dependencies({ async initRelay() { return instance; } }),
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
   );
   await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), (error) => {
     assert.equal(error.passkeyDiagnostics.phase, "submission");
     assert.equal(error.passkeyDiagnostics.aaCode, "AA24");
     assert.equal(error.passkeyDiagnostics.submittedVerificationGas, "650000");
     assert.equal(error.passkeyDiagnostics.submittedMaxFeePerGas, "123");
-    assert.doesNotMatch(JSON.stringify(error.passkeyDiagnostics), /secret|sender|callData|signature|0x/);
+    assert.doesNotMatch(
+      JSON.stringify(error.passkeyDiagnostics),
+      /secret|sender|callData|signature|0x/,
+    );
     return true;
   });
   assert.equal(signatures, 1);
@@ -566,11 +767,19 @@ test("submission failures retain gas diagnostics and request only one signature"
 
 test("estimation failures are identified before any passkey signature", async () => {
   const instance = relay();
-  instance.createTransaction = async () => { throw new Error("RPC unavailable"); };
-  instance.signSafeOperation = async () => { assert.fail("must not sign"); };
+  instance.createTransaction = async () => {
+    throw new Error("RPC unavailable");
+  };
+  instance.signSafeOperation = async () => {
+    assert.fail("must not sign");
+  };
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
-    dependencies({ async initRelay() { return instance; } }),
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+    }),
   );
   await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), (error) => {
     assert.equal(error.passkeyDiagnostics.phase, "estimation");
@@ -579,30 +788,84 @@ test("estimation failures are identified before any passkey signature", async ()
 });
 
 test("immediate and prepared actions measure the configured verifier before signing once", async (t) => {
-  t.mock.method(PimlicoFeeEstimator.prototype, "postEstimateUserOperationGas", async ({ userOperation }) => ({
-    verificationGasLimit: userOperation.verificationGasLimit,
-  }));
+  t.mock.method(
+    PimlicoFeeEstimator.prototype,
+    "postEstimateUserOperationGas",
+    async ({ userOperation }) => ({
+      verificationGasLimit: userOperation.verificationGasLimit,
+    }),
+  );
   for (const prepared of [false, true]) {
     let measured = false;
     let signatures = 0;
     const instance = relay();
     instance.createTransaction = async ({ options }) => {
-      const gas = await options.feeEstimator.postEstimateUserOperationGas({ userOperation: { verificationGasLimit: 308_778n } });
+      const gas = await options.feeEstimator.postEstimateUserOperationGas({
+        userOperation: { verificationGasLimit: 308_778n },
+      });
       assert.equal(gas.verificationGasLimit, 912_500n);
-      return { getUserOperation() { return { ...finalUserOperation(), ...gas }; } };
+      return {
+        getUserOperation() {
+          return { ...finalUserOperation(), ...gas };
+        },
+      };
     };
     instance.signSafeOperation = async (operation) => {
       assert.equal(measured, true);
       signatures++;
       return operation;
     };
-    instance.executeTransaction = async ({ executable }) => getSafeUserOperationIdentity(executable.getUserOperation()).userOperationHash;
-    instance.getUserOperationReceipt = async (hash) => ({ success: true, userOpHash: hash, sender: SAFE_ADDRESS, receipt: { transactionHash: `0x${"44".repeat(32)}` } });
+    instance.executeTransaction = async ({ executable }) =>
+      getSafeUserOperationIdentity(executable.getUserOperation()).userOperationHash;
+    instance.getUserOperationReceipt = async (hash) => ({
+      success: true,
+      userOpHash: hash,
+      sender: SAFE_ADDRESS,
+      receipt: { transactionHash: hash },
+    });
     const session = await createPasskeyAccount(
       { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
       dependencies({
-        async initRelay() { return instance; },
-        async estimateVerifierGas(address) { assert.equal(address, VERIFIER_ADDRESS); measured = true; return 650_000n; },
+        async initRelay() {
+          return instance;
+        },
+        async getTransactionReceipt({ hash }) {
+          const topics = encodeEventTopics({
+            abi: entryPoint07Abi,
+            eventName: "UserOperationEvent",
+            args: {
+              userOpHash: hash,
+              sender: SAFE_ADDRESS,
+              paymaster: "0x0000000000000000000000000000000000000000",
+              nonce: 0n,
+              success: true,
+              actualGasCost: 1n,
+              actualGasUsed: 1n,
+            },
+          });
+          const blockHash = `0x${"55".repeat(32)}`;
+          return {
+            transactionHash: hash,
+            status: "success",
+            blockHash,
+            blockNumber: 42n,
+            logs: [
+              {
+                address: getAddress(entryPoint07Address),
+                topics,
+                data: encodeAbiParameters(
+                  [{ type: "uint256" }, { type: "bool" }, { type: "uint256" }, { type: "uint256" }],
+                  [0n, true, 1n, 1n],
+                ),
+              },
+            ],
+          };
+        },
+        async estimateVerifierGas(address) {
+          assert.equal(address, VERIFIER_ADDRESS);
+          measured = true;
+          return 650_000n;
+        },
       }),
     );
     const calls = [{ to: SAFE_ADDRESS, data: "0x" }];
@@ -613,14 +876,26 @@ test("immediate and prepared actions measure the configured verifier before sign
 });
 
 test("paymaster failures retain the sponsorship phase and requested budget", async (t) => {
-  t.mock.method(PimlicoFeeEstimator.prototype, "postEstimateUserOperationGas", async () => { throw new Error("paymaster unavailable"); });
+  t.mock.method(PimlicoFeeEstimator.prototype, "postEstimateUserOperationGas", async () => {
+    throw new Error("paymaster unavailable");
+  });
   const instance = relay();
-  instance.createTransaction = async ({ options }) => options.feeEstimator.postEstimateUserOperationGas({userOperation:{verificationGasLimit:308_778n}});
+  instance.createTransaction = async ({ options }) =>
+    options.feeEstimator.postEstimateUserOperationGas({
+      userOperation: { verificationGasLimit: 308_778n },
+    });
   const session = await createPasskeyAccount(
     { rpId: "app.kettigo.xyz", rpName: "Kettigo", storage: createStorage() },
-    dependencies({ async initRelay() { return instance; }, async estimateVerifierGas() { return 356_759n; } }),
+    dependencies({
+      async initRelay() {
+        return instance;
+      },
+      async estimateVerifierGas() {
+        return 356_759n;
+      },
+    }),
   );
-  await assert.rejects(session.sendTransaction([{to: SAFE_ADDRESS, data: "0x"}]), (error) => {
+  await assert.rejects(session.sendTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), (error) => {
     assert.equal(error.passkeyDiagnostics.phase, "sponsorship");
     assert.equal(error.passkeyDiagnostics.requestedVerificationGas, "600000");
     return true;
@@ -637,19 +912,27 @@ test("binds a deployed passkey client to the Safe shared signer", async () => {
   const externalSigner = {
     key: "passkeyWallet",
     account: { address: getAddress("0x00000000000000000000000000000000000000cc") },
-    async signMessage() { return "0x"; },
+    async signMessage() {
+      return "0x";
+    },
   };
   const safeProvider = {
     signer: { rawId: RAW_ID },
-    async getExternalSigner() { return externalSigner; },
+    async getExternalSigner() {
+      return externalSigner;
+    },
   };
   const instance = relay(SAFE_ADDRESS, safeProvider);
 
   await restorePasskeyAccount(
     { metadata, rpId: "app.kettigo.xyz" },
     dependencies({
-      async getCode() { return "0x6000"; },
-      async initRelay() { return instance; },
+      async getCode() {
+        return "0x6000";
+      },
+      async initRelay() {
+        return instance;
+      },
     }),
   );
 
@@ -708,7 +991,11 @@ test("waits for a successful UserOperation receipt and returns the transaction h
 
   await assert.rejects(
     waitForUserOperationTransaction(
-      { async getUserOperationReceipt() { return { success: false, receipt: { transactionHash: `0x${"55".repeat(32)}` } }; } },
+      {
+        async getUserOperationReceipt() {
+          return { success: false, receipt: { transactionHash: `0x${"55".repeat(32)}` } };
+        },
+      },
       `0x${"33".repeat(32)}`,
       { timeoutMs: 10, pollMs: 0, sleep: async () => {} },
     ),
@@ -751,7 +1038,12 @@ test("encodes a canonical Safe signature over bigint EIP-712 data", async () => 
 test("builds a passkey signer whose assertion callback is scoped to the stored credential", async () => {
   let requestedRawId;
   const signer = buildPasskeySigner(
-    { rawId: RAW_ID, coordinates: COORDINATES, verifierAddress: VERIFIER_ADDRESS, safeAddress: SAFE_ADDRESS },
+    {
+      rawId: RAW_ID,
+      coordinates: COORDINATES,
+      verifierAddress: VERIFIER_ADDRESS,
+      safeAddress: SAFE_ADDRESS,
+    },
     "app.kettigo.xyz",
     {
       async getCredential(rawId, rpId) {
@@ -772,7 +1064,10 @@ test("prepared transactions start the real passkey request synchronously after S
     dependencies({
       async initRelay(options) {
         const instance = relay();
-        instance.createTransaction = async () => { events.push("prepare"); return relay().createTransaction(); };
+        instance.createTransaction = async () => {
+          events.push("prepare");
+          return relay().createTransaction();
+        };
         instance.signSafeOperation = async (operation) => {
           events.push("rpc-checks");
           await options.signer.getFn({ publicKey: { challenge: new Uint8Array([1, 2, 3]) } });
@@ -789,7 +1084,11 @@ test("prepared transactions start the real passkey request synchronously after S
   );
   const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
   assert.deepEqual(events, ["prepare", "rpc-checks"]);
-  const pending = prepared.send({ onSigned() { events.push("signed"); } });
+  const pending = prepared.send({
+    onSigned() {
+      events.push("signed");
+    },
+  });
   assert.deepEqual(events, ["prepare", "rpc-checks", "passkey"]);
   await pending;
   assert.deepEqual(events, ["prepare", "rpc-checks", "passkey", "signed"]);
@@ -804,11 +1103,20 @@ test("cancelling a prepared review never requests a credential or submits", asyn
     dependencies({
       async initRelay(options) {
         const instance = relay();
-        instance.signSafeOperation = async (operation) => { await options.signer.getFn({}); return operation; };
-        instance.executeTransaction = async () => { submissions++; return "0x"; };
+        instance.signSafeOperation = async (operation) => {
+          await options.signer.getFn({});
+          return operation;
+        };
+        instance.executeTransaction = async () => {
+          submissions++;
+          return "0x";
+        };
         return instance;
       },
-      async getCredential() { credentials++; return { id: "credential" }; },
+      async getCredential() {
+        credentials++;
+        return { id: "credential" };
+      },
     }),
   );
   const prepared = await session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]);
@@ -824,11 +1132,18 @@ test("a Safe preflight failure is returned during review before any passkey prom
     dependencies({
       async initRelay() {
         const instance = relay();
-        instance.signSafeOperation = async () => { throw new Error("RPC unavailable"); };
+        instance.signSafeOperation = async () => {
+          throw new Error("RPC unavailable");
+        };
         return instance;
       },
-      async getCredential() { assert.fail("must not request credentials"); },
+      async getCredential() {
+        assert.fail("must not request credentials");
+      },
     }),
   );
-  await assert.rejects(session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]), /RPC unavailable/);
+  await assert.rejects(
+    session.prepareTransaction([{ to: SAFE_ADDRESS, data: "0x" }]),
+    /RPC unavailable/,
+  );
 });

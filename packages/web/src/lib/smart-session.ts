@@ -1,22 +1,19 @@
 import type { Address, Hex } from "viem";
+import type {
+  SafeUserOperationIdentity,
+  SafeUserOperationReceipt,
+} from "./canonical-user-operation-receipt.ts";
+
+export type {
+  SafeUserOperationIdentity,
+  SafeUserOperationReceipt,
+} from "./canonical-user-operation-receipt.ts";
 
 export type SmartAccountCall = {
   to: Address;
   data: Hex;
   value?: bigint;
 };
-
-export type SafeUserOperationIdentity = Readonly<{
-  chainId: 11155111;
-  entryPoint: Address;
-  sender: Address;
-  userOperationHash: Hex;
-}>;
-
-export type SafeUserOperationReceipt =
-  | { state: "pending"; operation: SafeUserOperationIdentity }
-  | { state: "confirmed"; operation: SafeUserOperationIdentity; transactionHash: Hex }
-  | { state: "failed"; operation: SafeUserOperationIdentity; transactionHash?: Hex };
 
 export type PasskeySmartSession = {
   address: Address;
