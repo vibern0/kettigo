@@ -14,10 +14,11 @@ const actor = getAddress(wallet.address);
 const target = getAddress("0x2222222222222222222222222222222222222222");
 const blockHash = `0x${"ab".repeat(32)}`;
 class Provider {
-  constructor(status = 1) {
+  constructor(status = 1, pending = false) {
     this.status = status;
     this.raw = null;
     this.broadcasts = 0;
+    this.pending = pending;
   }
   async getNetwork() {
     return { chainId: 11155111n };
@@ -45,7 +46,7 @@ class Provider {
     };
   }
   async getTransactionReceipt() {
-    if (!this.raw) return null;
+    if (!this.raw || this.pending) return null;
     const tx = Transaction.from(this.raw);
     return {
       hash: tx.hash,
@@ -62,13 +63,13 @@ class Provider {
     return { hash: blockHash, number: 1 };
   }
 }
-async function run(status) {
+async function run(status, pending = false) {
   const journal = await CandidateRunJournal.open({
     directory: await mkdtemp(join(tmpdir(), "kettigo-adapter-")),
     envelope: ORIGINAL_ENVELOPE,
     now: () => 1000,
   });
-  const inward = new Provider(status);
+  const inward = new Provider(status, pending);
   const sender = new DurableEoaSender({
     journal,
     provider: new EthersV6EoaProviderAdapter(inward),
@@ -103,4 +104,34 @@ test("records reverted ethers receipt fee once", async () => {
   assert.equal(result.state, "reverted");
   assert.equal(journal.intent("eoa-0").terminal.feeWei, "3000000000");
   await journal.close();
+});
+test("readonly reconciliation rejects each corrupted canonical tuple without terminalizing", async () => {
+  for (const corrupt of [
+    (p) =>
+      (p.getTransaction = async () => ({
+        ...(await Provider.prototype.getTransaction.call(p)),
+        nonce: 1,
+      })),
+    (p) =>
+      (p.getTransaction = async () => ({
+        ...(await Provider.prototype.getTransaction.call(p)),
+        data: "0xabcd",
+      })),
+    (p) => (p.getBlock = async () => ({ hash: blockHash, number: 2 })),
+  ]) {
+    const { journal, inward } = await run(1, true);
+    corrupt(inward);
+    inward.pending = false;
+    const sender = new DurableEoaSender({
+      journal,
+      provider: new EthersV6EoaProviderAdapter(inward),
+      signer: wallet,
+      actor,
+      targets: [target],
+    });
+    assert.equal((await sender.reconcile("eoa-1")).state, "unresolved");
+    assert.equal(journal.intent("eoa-1").terminal, null);
+    assert.equal(inward.broadcasts, 1);
+    await journal.close();
+  }
 });
