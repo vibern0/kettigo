@@ -92,6 +92,48 @@ test("reconciliation clears captured identity A without replacing or touching B"
   assert.equal(current.operation.userOperationHash, b.operation.userOperationHash);
 });
 
+test("confirmed checks retain their exact saved intent until checked award state is readable", async () => {
+  for (const reads of [
+    {
+      readChecked: async () => false,
+      readAward: async () => HASH,
+    },
+    {
+      readChecked: async () => true,
+      readAward: async () => {
+        throw new Error("award unavailable");
+      },
+    },
+  ]) {
+    const value = saved();
+    const { coordinator } = fixture({
+      ...reads,
+      intentStore: {
+        save: async () => {},
+        read: () => value,
+        clear: async () => {
+          value.cleared = true;
+        },
+      },
+      session: {
+        address: ACCOUNT,
+        prepareTransaction: async () => {
+          throw new Error("unused");
+        },
+        lookupUserOperation: async (operation) => ({
+          state: "confirmed",
+          operation,
+          transactionHash: HASH,
+          blockNumber: 1n,
+          blockHash: HASH,
+        }),
+      },
+    });
+    await assert.rejects(coordinator.reconcile(4n, value));
+    assert.equal(value.cleared, undefined);
+  }
+});
+
 test("abort after send discards late reconciliation without cancelling attempted operation", async () => {
   const controller = new AbortController();
   let cancelled = 0,

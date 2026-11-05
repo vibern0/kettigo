@@ -317,13 +317,18 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
     if (!sameOperation(result.operation, saved.operation))
       throw new Error("Operation reconciliation returned a different operation.");
     if (result.state === "pending") return result;
-    await dependencies.intentStore.clear(saved);
-    aborted(signal);
-    if (result.state === "failed") return result;
-    return readState({ ...scope, drawId: saved.drawId }, dependencies, {
+    if (result.state === "failed") {
+      await dependencies.intentStore.clear(saved);
+      aborted(signal);
+      return result;
+    }
+    const state = await readState({ ...scope, drawId: saved.drawId }, dependencies, {
       blockHash: result.blockHash,
       signal,
     });
+    await dependencies.intentStore.clear(saved);
+    aborted(signal);
+    return state;
   };
   return Object.freeze({
     review,

@@ -5,9 +5,11 @@ import { entryPoint07Address } from "viem/account-abstraction";
 const fixture = vi.hoisted(() => {
   const account = "0x1111111111111111111111111111111111111111" as const;
   const pool = "0x3333333333333333333333333333333333333333" as const;
+  const award = `0x${"2".repeat(64)}` as const;
   return {
     account,
     pool,
+    award,
     version: "2",
     proofUrl: "https://proof.example",
     prepare: vi.fn(),
@@ -18,6 +20,7 @@ const fixture = vi.hoisted(() => {
     coordinator: vi.fn(),
     readerFactory: vi.fn(),
     proofFactory: vi.fn(),
+    decrypt: vi.fn(),
     session: undefined as any,
   };
 });
@@ -55,8 +58,8 @@ vi.mock("@/lib/wallet-context", () => ({
 }));
 vi.mock("@/lib/zama", async () => ({
   asChecksumAddress: (await vi.importActual<typeof import("viem")>("viem")).getAddress,
-  decryptExistingSmartUint64: vi.fn(async () => 0n),
-  decryptSmartUint64: vi.fn(async () => 0n),
+  decryptExistingSmartUint64: fixture.decrypt,
+  decryptSmartUint64: fixture.decrypt,
   isZeroEncryptedHandle: (value: string) => value === `0x${"0".repeat(64)}`,
 }));
 vi.mock("@/lib/prize-check-coordinator", () => ({
@@ -103,6 +106,30 @@ async function prepareCheck() {
   return screen.findByRole("button", { name: "Confirm" });
 }
 
+function savedIntent(drawId = 12n) {
+  return {
+    chainId: 11155111 as const,
+    pool: fixture.pool,
+    account: fixture.account,
+    drawId,
+    action: "checkPrize" as const,
+    operation: {
+      chainId: 11155111 as const,
+      entryPoint: entryPoint07Address,
+      sender: fixture.account,
+      userOperationHash: `0x${"e".repeat(64)}` as const,
+    },
+  };
+}
+
+async function viewRound() {
+  await screen.findByText("Your past results");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View round" }));
+}
+
 beforeEach(() => {
   localStorage.clear();
   fixture.prepare.mockReset();
@@ -113,6 +140,8 @@ beforeEach(() => {
   fixture.coordinator.mockReset();
   fixture.readerFactory.mockReset();
   fixture.proofFactory.mockReset();
+  fixture.decrypt.mockReset();
+  fixture.decrypt.mockResolvedValue(5_000_000n);
   fixture.pending.mockReturnValue(null);
   fixture.recover.mockResolvedValue({ state: "pending" });
   fixture.session = {
@@ -130,6 +159,8 @@ beforeEach(() => {
     listDraws: vi.fn(async () => ({ kind: "draws", draws: [] })),
   });
   fixture.coordinator.mockReturnValue({
+    pending: () => null,
+    reconcile: vi.fn(),
     review: vi.fn(async () => ({ state: "ready", drawId: 12n, proof: {} })),
     prepare: fixture.prepare,
   });
@@ -210,4 +241,109 @@ test("double Confirm creates one Activity action and sends one prepared prize ch
   );
   expect(JSON.parse(screen.getByTestId("actions").textContent ?? "[]")).toHaveLength(1);
   resolveConfirm();
+});
+
+test("reloads an exact pending prize check without preparing another action", async () => {
+  const intent = savedIntent();
+  fixture.coordinator.mockReturnValue({
+    pending: (drawId: bigint) => (drawId === intent.drawId ? intent : null),
+    reconcile: vi.fn(async () => ({ state: "pending", operation: intent.operation })),
+    review: vi.fn(),
+    prepare: fixture.prepare,
+  });
+  const first = mount();
+  await viewRound();
+  expect(await screen.findByText("This check is still processing.")).toBeTruthy();
+  first.unmount();
+  mount();
+  await viewRound();
+  expect(await screen.findByText("This check is still processing.")).toBeTruthy();
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(fixture.session.prepareTransaction).not.toHaveBeenCalled();
+});
+
+test("keeps a confirmed but unreadable result updating and retains recovery without retrying", async () => {
+  const intent = savedIntent();
+  const reconcile = vi.fn(async () => {
+    throw new Error("checked state unavailable");
+  });
+  fixture.coordinator.mockReturnValue({
+    pending: () => intent,
+    reconcile,
+    review: vi.fn(),
+    prepare: fixture.prepare,
+  });
+  mount();
+  await viewRound();
+  expect(await screen.findByText("This result is updating. Check back shortly.")).toBeTruthy();
+  expect(reconcile).toHaveBeenCalledWith(12n, intent, expect.any(AbortSignal));
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Review check" })).toBeNull();
+});
+
+test("renders the immutable recovered award without a fresh prize check", async () => {
+  const intent = savedIntent();
+  fixture.coordinator.mockReturnValue({
+    pending: () => intent,
+    reconcile: vi.fn(async () => ({ state: "checked", drawId: 12n, award: fixture.award })),
+    review: vi.fn(),
+    prepare: fixture.prepare,
+  });
+  mount();
+  await viewRound();
+  expect(await screen.findByText("Result checked")).toBeTruthy();
+  expect(screen.getByText("5.000000 USDC")).toBeTruthy();
+  expect(fixture.prepare).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["rejected", "This check was not approved.", false],
+  ["not-submitted", "This check was not sent.", true],
+  ["failed", "This check did not go through.", false],
+] as const)(
+  "shows the %s terminal state without automatically reviewing again",
+  async (status, copy, canReview) => {
+    const intent = savedIntent();
+    window.localStorage.setItem(
+      "kettigo:actions",
+      JSON.stringify([
+        {
+          id: `saved-${status}`,
+          label: "Check prize",
+          type: "check",
+          status,
+          operation: intent.operation,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ]),
+    );
+    fixture.coordinator.mockReturnValue({
+      pending: () => intent,
+      reconcile: vi.fn(async () => ({ state: "pending", operation: intent.operation })),
+      review: vi.fn(),
+      prepare: fixture.prepare,
+    });
+    mount();
+    await viewRound();
+    expect(await screen.findByText(copy)).toBeTruthy();
+    expect(Boolean(screen.queryByRole("button", { name: "Review check" }))).toBe(canReview);
+    expect(fixture.prepare).not.toHaveBeenCalled();
+  },
+);
+
+test("never applies an unrelated saved round to the selected outcome", async () => {
+  const intent = savedIntent(13n);
+  const reconcile = vi.fn();
+  fixture.coordinator.mockReturnValue({
+    pending: (drawId: bigint) => (drawId === intent.drawId ? intent : null),
+    reconcile,
+    review: vi.fn(),
+    prepare: fixture.prepare,
+  });
+  mount();
+  await viewRound();
+  expect(await screen.findByRole("button", { name: "Review check" })).toBeTruthy();
+  expect(reconcile).not.toHaveBeenCalled();
+  expect(fixture.prepare).not.toHaveBeenCalled();
 });

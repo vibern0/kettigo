@@ -249,6 +249,8 @@ test("confirms one prepared prize check from the Confirm click", async () => {
     readAward: vi.fn(async () => fixture.award),
   });
   fixture.coordinator.mockReturnValue({
+    pending: () => null,
+    reconcile: vi.fn(),
     review: vi.fn(async () => ({ state: "ready", drawId: 12n, proof: {} })),
     prepare: vi.fn(async () => ({ confirm, cancel: vi.fn() })),
   });
