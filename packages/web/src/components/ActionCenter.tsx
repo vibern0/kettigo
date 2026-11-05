@@ -126,7 +126,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [statusUnavailable, setStatusUnavailable] = useState(false);
-  const [statusResultId, setStatusResultId] = useState<string>();
+  const [statusResult, setStatusResult] = useState<AsyncAction>();
   const sessionRef = useRef(session);
   const sessionEpochRef = useRef(0);
   const runnersRef = useRef(new Map<string, (controls: ActionRunnerControls) => Promise<void>>());
@@ -139,7 +139,7 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     sessionRef.current = session;
     sessionEpochRef.current += 1;
-    setStatusResultId(undefined);
+    setStatusResult(undefined);
     if (!session?.getPendingOperation) return;
 
     let record: PendingOperationRecord | null;
@@ -277,8 +277,11 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
         )
           return;
         const patch = patchForPendingRecovery(result);
+        if (patch.status && isFinalActionStatus(patch.status)) {
+          const [terminalStatusResult] = updateAction([action], action.id, patch);
+          setStatusResult(terminalStatusResult);
+        }
         updateTrackedAction(action.id, patch);
-        if (patch.status && isFinalActionStatus(patch.status)) setStatusResultId(action.id);
       } catch (error) {
         if (epoch !== sessionEpochRef.current) return;
         reportClientError(error, { action: "pending-operation", stage: "recovery" });
@@ -298,9 +301,6 @@ export function ActionCenterProvider({ children }: { children: ReactNode }) {
 
   const liveCount = countPendingActions(actions);
   const pendingActions = actions.filter((action) => !isFinalActionStatus(action.status));
-  const statusResult = statusResultId
-    ? actions.find((action) => action.id === statusResultId)
-    : undefined;
   const visibleActions = statusResult
     ? [statusResult, ...pendingActions.filter((action) => action.id !== statusResult.id)]
     : pendingActions;

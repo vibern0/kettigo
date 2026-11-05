@@ -243,7 +243,10 @@ describe("ActionCenter pending operation", () => {
     }));
     window.localStorage.setItem("kettigo:actions", JSON.stringify(newerCompletedHistory));
     wallet.session = { ...session, getPendingOperation: () => olderOperation };
-    recoverPendingOperation.mockResolvedValue({ state: "pending", operation: olderOperation });
+    recoverPendingOperation.mockResolvedValue({
+      state: "not-submitted",
+      operation: olderOperation,
+    });
 
     render(
       <ActionCenterProvider>
@@ -259,7 +262,9 @@ describe("ActionCenter pending operation", () => {
 
     await waitFor(() => expect(recoverPendingOperation).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("actions").textContent).toContain("completed-0");
-    expect(screen.getByTestId("actions").textContent).toContain(olderOperation.userOperationHash);
+    expect(await screen.findByText("Not sent")).toBeTruthy();
+    expect(screen.getByText("This action was not sent. Review it again.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Activity" })).toBeTruthy();
     expect(sendTransaction).not.toHaveBeenCalled();
     expect(prepareTransaction).not.toHaveBeenCalled();
     expect(signTypedData).not.toHaveBeenCalled();
