@@ -209,11 +209,12 @@ test("parent confirmation refuses repeated parent confirmation and child review 
 });
 
 test("child access confirmation refuses a parent credited review until its exact operation settles", async () => {
+  let observe!: (value: ReturnType<typeof operation>) => void;
   let resolveAccess!: (hash: `0x${string}`) => void;
   const childOperation = operation("d");
   const childCancel = vi.fn();
   const childSend = vi.fn(({ onOperationPrepared }) => {
-    onOperationPrepared(childOperation);
+    observe = onOperationPrepared;
     return new Promise<`0x${string}`>((resolve) => {
       resolveAccess = resolve;
     });
@@ -240,7 +241,12 @@ test("child access confirmation refuses a parent credited review until its exact
   expect(fixture.prepareTransaction).toHaveBeenCalledTimes(1);
   expect(childCancel).not.toHaveBeenCalled();
   await waitFor(() => expect(actions()).toHaveLength(1));
-  expect(screen.getByTestId("actions").textContent).toContain(childOperation.userOperationHash);
+  expect(screen.getByTestId("actions").textContent).not.toContain(childOperation.userOperationHash);
+
+  observe(childOperation);
+  await waitFor(() =>
+    expect(screen.getByTestId("actions").textContent).toContain(childOperation.userOperationHash),
+  );
 
   resolveAccess(`0x${"e".repeat(64)}`);
   await screen.findByText("Result checked");
