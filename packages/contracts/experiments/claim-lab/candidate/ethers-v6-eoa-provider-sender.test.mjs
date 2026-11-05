@@ -19,6 +19,7 @@ class Provider {
     this.raw = null;
     this.broadcasts = 0;
     this.pending = pending;
+    this.broadcastHash = null;
   }
   async getNetwork() {
     return { chainId: 11155111n };
@@ -29,7 +30,7 @@ class Provider {
   async broadcastTransaction(raw) {
     this.raw = raw;
     this.broadcasts++;
-    return { hash: Transaction.from(raw).hash };
+    return this.broadcastHash ?? { hash: Transaction.from(raw).hash };
   }
   async getTransaction(hash) {
     if (!this.raw) return null;
@@ -90,14 +91,62 @@ async function run(status, pending = false) {
     fundingWei: 0n,
     usdcCommitment: "0",
   });
-  return { journal, inward, result };
+  return { journal, inward, sender, result };
 }
 test("durably broadcasts through ethers response and records success fee once", async () => {
-  const { journal, inward, result } = await run(1);
+  const { journal, inward, sender, result } = await run(1);
   assert.equal(result.state, "success");
   assert.equal(inward.broadcasts, 1);
   assert.equal(journal.intent("eoa-1").terminal.feeWei, "3000000000");
+  await sender.reconcile("eoa-1");
+  assert.equal(journal.snapshot().budget.feeActualWei, "3000000000");
+  assert.equal(inward.broadcasts, 1);
   await journal.close();
+});
+test("pending null evidence stays unresolved without a new broadcast", async () => {
+  for (const missing of ["getTransactionReceipt", "getTransaction", "getBlock"]) {
+    const { journal, inward, sender } = await run(1, true);
+    inward.pending = false;
+    inward[missing] = async () => null;
+    assert.equal((await sender.reconcile("eoa-1")).state, "unresolved");
+    assert.equal(journal.intent("eoa-1").terminal, null);
+    assert.equal(inward.broadcasts, 1);
+    await journal.close();
+  }
+});
+test("wrong broadcast hashes cannot terminalize the saved intent", async () => {
+  for (const hash of [{}, { hash: `0x${"ef".repeat(32)}` }]) {
+    const journal = await CandidateRunJournal.open({
+      directory: await mkdtemp(join(tmpdir(), "kettigo-adapter-")),
+      envelope: ORIGINAL_ENVELOPE,
+      now: () => 1000,
+    });
+    const inward = new Provider(1);
+    inward.broadcastHash = hash;
+    const sender = new DurableEoaSender({
+      journal,
+      provider: new EthersV6EoaProviderAdapter(inward),
+      signer: wallet,
+      actor,
+      targets: [target],
+    });
+    await sender.submit({
+      intentId: "bad-hash",
+      sender: actor,
+      nonce: 0,
+      to: target,
+      data: "0x1234",
+      value: 0n,
+      gasLimit: 30_000n,
+      gasPrice: 100_000n,
+      offeredAt: 1000,
+      fundingWei: 0n,
+      usdcCommitment: "0",
+    });
+    assert.equal(journal.intent("bad-hash").terminal, null);
+    assert.equal(journal.snapshot().budget.feeActualWei, "0");
+    await journal.close();
+  }
 });
 test("records reverted ethers receipt fee once", async () => {
   const { journal, result } = await run(0);
