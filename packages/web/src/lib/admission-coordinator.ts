@@ -1,5 +1,5 @@
 import { NotEntitledError, RpcRateLimitError } from "@zama-fhe/sdk";
-import { getAddress, type Address, type Hex } from "viem";
+import { getAddress, isAddress, isHex, type Address, type Hex } from "viem";
 
 import type { PasskeySmartSession, PreparedSmartTransaction } from "./smart-session.ts";
 
@@ -63,6 +63,15 @@ function samePending(left: PendingAdmission, right: PendingAdmission) {
   );
 }
 
+function copyPending(pending: PendingAdmission): PendingAdmission {
+  return Object.freeze({
+    balance: pending.balance,
+    nonce: pending.nonce,
+    marker: pending.marker,
+    requested: pending.requested,
+  });
+}
+
 function assertActive(signal?: AbortSignal) {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted.", "AbortError");
 }
@@ -70,11 +79,15 @@ function assertActive(signal?: AbortSignal) {
 async function reconcile(
   dependencies: AdmissionCoordinatorDependencies,
   review: AdmissionReview,
+  signal?: AbortSignal,
 ): Promise<AdmissionResult> {
-  const [membershipIndex, pending] = await Promise.all([
-    dependencies.readMembershipIndex(dependencies.account),
-    dependencies.readPendingAdmission(dependencies.account),
-  ]);
+  assertActive(signal);
+  const membershipIndex = await dependencies.readMembershipIndex(dependencies.account, signal);
+  assertActive(signal);
+  const pending = copyPending(
+    await dependencies.readPendingAdmission(dependencies.account, signal),
+  );
+  assertActive(signal);
   if (review.positive && (membershipIndex === 0n || pending.requested)) {
     throw new AdmissionReconciliationError();
   }
@@ -104,7 +117,7 @@ export function createAdmissionCoordinator(input: AdmissionCoordinatorDependenci
         throw new Error("Reveal result is not a boolean.");
       }
       return Object.freeze({
-        pending,
+        pending: copyPending(pending),
         positive: decrypted.clearValue,
         decryptionProof: decrypted.decryptionProof,
       });
@@ -124,10 +137,18 @@ export function createAdmissionCoordinator(input: AdmissionCoordinatorDependenci
       });
       const prepared = await dependencies.session.prepareTransaction(
         [{ to: dependencies.pool, data }],
-        { signal },
+        {
+          signal,
+        },
       );
-      assertActive(signal);
-      return readyAdmission(prepared, dependencies, review);
+      if (signal?.aborted) {
+        try {
+          prepared.cancel();
+        } finally {
+          assertActive(signal);
+        }
+      }
+      return readyAdmission(prepared, dependencies, review, signal);
     },
   });
 }
@@ -136,25 +157,89 @@ function readyAdmission(
   prepared: PreparedSmartTransaction,
   dependencies: AdmissionCoordinatorDependencies,
   review: AdmissionReview,
+  signal?: AbortSignal,
 ) {
+  let active = true;
+  let confirmation: Promise<AdmissionResult> | undefined;
   return Object.freeze({
-    cancel: () => prepared.cancel(),
+    cancel: () => {
+      if (!active) return;
+      active = false;
+      prepared.cancel();
+    },
     // Do not make this async: prepared.send must begin within the Confirm gesture stack.
     confirm: () => {
-      const sent = prepared.send();
-      return sent.then(() => reconcile(dependencies, review));
+      if (confirmation) return confirmation;
+      try {
+        assertActive(signal);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      if (!active) return Promise.reject(new Error("Please review your savings again."));
+      active = false;
+      try {
+        const sent = prepared.send();
+        confirmation = sent.then(() => reconcile(dependencies, review, signal));
+      } catch (error) {
+        confirmation = Promise.reject(error);
+      }
+      return confirmation;
     },
   });
 }
 
+export type ConfirmedVisibilityScope = Readonly<{
+  account: Address;
+  pool: Address;
+  handle: Hex;
+}>;
+
+export type ConfirmedVisibilityObservation = Readonly<
+  ConfirmedVisibilityScope & { blockNumber: bigint; visible: boolean }
+>;
+
 export type ConfirmedVisibilityReadOptions<T> = Readonly<{
   read: () => Promise<T>;
+  scope: ConfirmedVisibilityScope;
   observeConfirmedVisibility: (
+    scope: ConfirmedVisibilityScope,
     signal?: AbortSignal,
-  ) => Promise<Readonly<{ blockNumber: bigint; visible: boolean }>>;
+  ) => Promise<ConfirmedVisibilityObservation>;
   signal?: AbortSignal;
-  isRateLimitError?: (error: unknown) => boolean;
 }>;
+
+function normalizedVisibilityScope(scope: ConfirmedVisibilityScope): ConfirmedVisibilityScope {
+  if (
+    !isAddress(scope.account) ||
+    !isAddress(scope.pool) ||
+    !isHex(scope.handle) ||
+    scope.handle.length !== 66
+  ) {
+    throw new Error("Visibility scope is invalid.");
+  }
+  return Object.freeze({
+    account: getAddress(scope.account),
+    pool: getAddress(scope.pool),
+    handle: scope.handle,
+  });
+}
+
+function isConfirmedObservation(
+  scope: ConfirmedVisibilityScope,
+  observation: ConfirmedVisibilityObservation,
+): boolean {
+  return (
+    typeof observation?.blockNumber === "bigint" &&
+    observation.blockNumber >= 0n &&
+    typeof observation.visible === "boolean" &&
+    isAddress(observation.account) &&
+    isAddress(observation.pool) &&
+    isHex(observation.handle) &&
+    getAddress(observation.account) === scope.account &&
+    getAddress(observation.pool) === scope.pool &&
+    observation.handle.toLowerCase() === scope.handle.toLowerCase()
+  );
+}
 
 /**
  * The SDK already waits for delegation propagation. This adds one application
@@ -164,22 +249,34 @@ export async function readWithConfirmedVisibility<T>(
   options: ConfirmedVisibilityReadOptions<T>,
 ): Promise<T> {
   assertActive(options.signal);
+  const scope = normalizedVisibilityScope(options.scope);
+  let firstError: unknown;
   try {
-    return await options.read();
-  } catch (firstError) {
+    const result = await options.read();
     assertActive(options.signal);
-    if (firstError instanceof NotEntitledError) throw firstError;
-    const isRateLimit =
-      options.isRateLimitError ?? ((error: unknown) => error instanceof RpcRateLimitError);
-    if (!isRateLimit(firstError)) throw firstError;
-    const visibility = await options.observeConfirmedVisibility(options.signal);
+    return result;
+  } catch (error) {
     assertActive(options.signal);
-    if (!visibility.visible) throw firstError;
-    try {
-      return await options.read();
-    } catch {
-      // Preserve the original typed failure and its cause rather than masking it.
-      throw firstError;
-    }
+    firstError = error;
+  }
+  if (firstError instanceof NotEntitledError || !(firstError instanceof RpcRateLimitError)) {
+    throw firstError;
+  }
+  let observation: ConfirmedVisibilityObservation;
+  try {
+    observation = await options.observeConfirmedVisibility(scope, options.signal);
+    assertActive(options.signal);
+  } catch {
+    throw firstError;
+  }
+  if (!isConfirmedObservation(scope, observation) || !observation.visible) throw firstError;
+  try {
+    const result = await options.read();
+    assertActive(options.signal);
+    return result;
+  } catch {
+    assertActive(options.signal);
+    // Preserve the original typed failure and its cause rather than masking it.
+    throw firstError;
   }
 }
