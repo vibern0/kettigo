@@ -1,16 +1,17 @@
 import {
-  branchHash,
-  checksum,
-  decimal,
   hash32,
-  leafHash,
-  uint,
   validateNamespace,
   type ArchiveLog,
   type Namespace,
   type Node,
   CheckpointConflict,
 } from "./domain.ts";
+import { commitStatement, ingest as ingestEvents } from "./archive-ingest.ts";
+import {
+  drawById as readDrawById,
+  listDraws as readDraws,
+  proof as readProof,
+} from "./archive-read.ts";
 
 export type Checkpoint = {
   nextBlock: number;
@@ -44,7 +45,6 @@ export type Proof = Draw & {
 
 const ZERO_HASH = `0x${"00".repeat(32)}`;
 const now = () => new Date().toISOString();
-const before = "(block_number<? OR (block_number=? AND log_index<?))";
 
 export type ArchiveDatabase = Pick<D1Database, "prepare" | "batch">;
 
@@ -142,7 +142,14 @@ export class D1Archive {
     if (!reason || reason.length > 160) throw new Error("invalid disabled reason");
     try {
       await this.db.batch([
-        this.commit(n, expected, "disable", expected.nextBlock, expected.lastFinalizedBlock),
+        commitStatement(
+          this.db,
+          n,
+          expected,
+          "disable",
+          expected.nextBlock,
+          expected.lastFinalizedBlock,
+        ),
         this.db
           .prepare(
             "UPDATE ingestion_state SET disabled_reason=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?",
@@ -180,138 +187,8 @@ export class D1Archive {
       typeof headersOrBlock === "number"
         ? [{ number: headersOrBlock, hash: finalHash!, parentHash: expected.lastFinalizedHash }]
         : headersOrBlock;
-    const blocks = [...headers].sort((a, b) => a.number - b.number);
-    if (!blocks.length || blocks[0].number !== expected.nextBlock)
-      throw new Error("invalid header range");
-    for (let i = 0; i < blocks.length; i += 1) {
-      if (
-        !Number.isSafeInteger(blocks[i].number) ||
-        blocks[i].number < 0 ||
-        (i && blocks[i].number !== blocks[i - 1].number + 1)
-      )
-        throw new Error("invalid header range");
-      hash32(blocks[i].hash);
-      hash32(blocks[i].parentHash);
-      if (
-        hash32(blocks[i].parentHash) !==
-        (i ? hash32(blocks[i - 1].hash) : expected.lastFinalizedHash)
-      )
-        throw new Error("non-canonical header range");
-    }
-    const statements: D1PreparedStatement[] = [
-      this.commit(n, expected, "ingest", expected.nextBlock, blocks.at(-1)!.number),
-    ];
-    for (const block of blocks)
-      statements.push(
-        this.db
-          .prepare("INSERT INTO canonical_blocks VALUES(?,?,?,?,?)")
-          .bind(n.chainId, n.pool, block.number, hash32(block.hash), hash32(block.parentHash)),
-      );
-    const uniqueLogs = new Map<string, ArchiveLog>();
-    for (const log of logs) {
-      const key = `${log.blockNumber}:${log.logIndex}`;
-      const prior = uniqueLogs.get(key);
-      if (prior && JSON.stringify(prior) !== JSON.stringify(log))
-        throw new Error("conflicting log payload");
-      uniqueLogs.set(key, log);
-    }
-    for (const log of [...uniqueLogs.values()].sort(
-      (a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex,
-    )) {
-      if (log.blockNumber < blocks[0].number || log.blockNumber > blocks.at(-1)!.number)
-        throw new Error("log outside header range");
-      const header = blocks[log.blockNumber - blocks[0].number];
-      if (!header || hash32(log.blockHash, "log block hash") !== hash32(header.hash))
-        throw new Error("log block hash mismatch");
-      statements.push(
-        this.db
-          .prepare("INSERT INTO event_logs VALUES(?,?,?,?,?)")
-          .bind(
-            n.chainId,
-            n.pool,
-            log.blockNumber,
-            log.logIndex,
-            JSON.stringify({ name: log.name, args: log.args }),
-          ),
-      );
-      if (log.name === "NodeUpdated") {
-        const level = Number(decimal(log.args.level, "level"));
-        const index = decimal(log.args.index, "node index");
-        if (
-          !Number.isSafeInteger(level) ||
-          level < 0 ||
-          level > n.depth ||
-          BigInt(index) >= 1n << BigInt(n.depth - level)
-        )
-          throw new Error("invalid node position");
-        statements.push(
-          this.db
-            .prepare("INSERT INTO node_versions VALUES(?,?,?,?,?,?,?,?)")
-            .bind(
-              n.chainId,
-              n.pool,
-              level,
-              index,
-              log.blockNumber,
-              log.logIndex,
-              hash32(log.args.hash),
-              hash32(log.args.sum),
-            ),
-        );
-      } else if (log.name === "SlotAssigned" || log.name === "SlotReleased")
-        statements.push(
-          this.db
-            .prepare("INSERT INTO slot_versions VALUES(?,?,?,?,?,?,?,?)")
-            .bind(
-              n.chainId,
-              n.pool,
-              checksum(log.args.account),
-              this.slotIndex(n, log.args.index),
-              uint(log.args.generation, 64, "generation"),
-              log.name === "SlotAssigned" ? 1 : 0,
-              log.blockNumber,
-              log.logIndex,
-            ),
-        );
-      else {
-        const upperBound = uint(log.args.upperBound, 64, "draw upper bound");
-        if (BigInt(upperBound) === 0n || BigInt(upperBound) > 1n << BigInt(n.depth))
-          throw new Error("invalid draw upper bound");
-        statements.push(
-          this.db
-            .prepare("INSERT INTO draws VALUES(?,?,?,?,?,?,?,?,?)")
-            .bind(
-              n.chainId,
-              n.pool,
-              decimal(log.args.drawId),
-              hash32(log.args.rootHash),
-              hash32(log.args.rootSum),
-              hash32(log.args.ticket),
-              upperBound,
-              Number(log.args.closeBlockNumber),
-              log.logIndex,
-            ),
-        );
-      }
-    }
-    const final = blocks.at(-1)!;
-    statements.push(
-      this.db
-        .prepare(
-          "UPDATE ingestion_state SET next_block=?,last_finalized_block=?,last_finalized_hash=?,revision=revision+1,updated_at=? WHERE chain_id=? AND pool=? AND revision=?",
-        )
-        .bind(
-          final.number + 1,
-          final.number,
-          hash32(final.hash),
-          now(),
-          n.chainId,
-          n.pool,
-          expected.revision,
-        ),
-    );
     try {
-      await this.db.batch(statements);
+      await ingestEvents(this.db, n, expected, logs, headers);
     } catch (error) {
       this.conflict(error);
     }
@@ -333,7 +210,7 @@ export class D1Archive {
     const scoped = (sql: string) => this.db.prepare(sql).bind(n.chainId, n.pool, block);
     try {
       await this.db.batch([
-        this.commit(n, expected, "rollback", block, block - 1),
+        commitStatement(this.db, n, expected, "rollback", block, block - 1),
         scoped("DELETE FROM draws WHERE chain_id=? AND pool=? AND close_block_number>=?"),
         scoped("DELETE FROM node_versions WHERE chain_id=? AND pool=? AND block_number>=?"),
         scoped("DELETE FROM slot_versions WHERE chain_id=? AND pool=? AND block_number>=?"),
@@ -352,175 +229,17 @@ export class D1Archive {
   }
 
   async listDraws(n: Namespace, cursor?: string, limit = 20): Promise<Draw[]> {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("invalid limit");
-    const c = cursor === undefined ? undefined : decimal(cursor, "cursor");
-    const predicate =
-      c === undefined
-        ? ""
-        : " AND (length(d.draw_id)<length(?) OR (length(d.draw_id)=length(?) AND d.draw_id<?))";
-    const query = `SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=?${predicate} ORDER BY length(d.draw_id) DESC,d.draw_id DESC LIMIT ?`;
-    const result =
-      c === undefined
-        ? await this.db.prepare(query).bind(n.chainId, n.pool, limit).all<Record<string, unknown>>()
-        : await this.db
-            .prepare(query)
-            .bind(n.chainId, n.pool, c, c, c, limit)
-            .all<Record<string, unknown>>();
-    return result.results.map((row) => this.draw(n, row));
+    return readDraws(this.db, n, cursor, limit);
   }
 
   async proof(n: Namespace, drawId: string, account: string): Promise<Proof | null> {
-    const row = await this.db
-      .prepare(
-        "SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=? AND d.draw_id=?",
-      )
-      .bind(n.chainId, n.pool, decimal(drawId))
-      .first<Record<string, unknown>>();
-    if (!row) return null;
-    const draw = this.draw(n, row);
-    const owner = checksum(account);
-    const args = [
-      n.chainId,
-      n.pool,
-      owner,
-      draw.closeBlockNumber,
-      draw.closeBlockNumber,
-      draw.closeLogIndex,
-    ];
-    const slot = await this.db
-      .prepare(
-        `SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND account=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
-      )
-      .bind(...args)
-      .first<Record<string, unknown>>();
-    if (!slot || Number(slot.assigned) !== 1) return null;
-    if (BigInt(String(slot.slot_index)) >= BigInt(draw.upperBound)) return null;
-    const occupant = await this.db
-      .prepare(
-        `SELECT * FROM slot_versions WHERE chain_id=? AND pool=? AND slot_index=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
-      )
-      .bind(
-        n.chainId,
-        n.pool,
-        String(slot.slot_index),
-        draw.closeBlockNumber,
-        draw.closeBlockNumber,
-        draw.closeLogIndex,
-      )
-      .first<Record<string, unknown>>();
-    if (
-      !occupant ||
-      Number(occupant.assigned) !== 1 ||
-      occupant.account !== owner ||
-      occupant.generation !== slot.generation
-    )
-      throw new Error("ownership history unavailable");
-    let index = BigInt(String(slot.slot_index));
-    const queries: D1PreparedStatement[] = [];
-    for (let level = 0; level <= n.depth; level += 1) {
-      queries.push(this.nodeQuery(n, level, index, draw));
-      if (level < n.depth) queries.push(this.nodeQuery(n, level, index ^ 1n, draw));
-      index >>= 1n;
-    }
-    const results = await this.db.batch(queries);
-    let position = 0;
-    index = BigInt(String(slot.slot_index));
-    const read = (level: number, required: boolean): Node => {
-      const result = results[position++].results[0] as Record<string, unknown> | undefined;
-      if (result) return { hash: String(result.hash), sum: String(result.sum_handle) };
-      if (required) throw new Error("node history unavailable");
-      return { hash: n.emptyHashes[level], sum: n.zero };
-    };
-    let current = read(0, true);
-    if (current.hash !== leafHash(owner, String(slot.generation), current.sum))
-      throw new Error("leaf mismatch");
-    const balance = current.sum;
-    const siblingHashes: string[] = [];
-    const siblingSums: string[] = [];
-    const parentSums: string[] = [];
-    for (let level = 0; level < n.depth; level += 1) {
-      const sibling = read(level, false);
-      const parent = read(level + 1, true);
-      if (
-        parent.hash !==
-        branchHash((index & 1n) === 1n ? sibling : current, (index & 1n) === 1n ? current : sibling)
-      )
-        throw new Error("parent mismatch");
-      siblingHashes.push(sibling.hash);
-      siblingSums.push(sibling.sum);
-      parentSums.push(parent.sum);
-      current = parent;
-      index >>= 1n;
-    }
-    if (current.hash !== draw.rootHash || current.sum !== draw.rootSum)
-      throw new Error("root mismatch");
-    return {
-      ...draw,
-      account: owner,
-      index: String(slot.slot_index),
-      generation: String(slot.generation),
-      balance,
-      siblingHashes,
-      siblingSums,
-      parentSums,
-    };
+    return readProof(this.db, n, drawId, account);
   }
 
   async drawById(n: Namespace, drawId: string): Promise<Draw | null> {
-    const row = await this.db
-      .prepare(
-        "SELECT d.*,b.block_hash FROM draws d JOIN canonical_blocks b ON b.chain_id=d.chain_id AND b.pool=d.pool AND b.block_number=d.close_block_number WHERE d.chain_id=? AND d.pool=? AND d.draw_id=?",
-      )
-      .bind(n.chainId, n.pool, decimal(drawId, "draw id"))
-      .first<Record<string, unknown>>();
-    return row ? this.draw(n, row) : null;
+    return readDrawById(this.db, n, drawId);
   }
 
-  private nodeQuery(n: Namespace, level: number, index: bigint, draw: Draw): D1PreparedStatement {
-    return this.db
-      .prepare(
-        `SELECT hash,sum_handle FROM node_versions WHERE chain_id=? AND pool=? AND level=? AND node_index=? AND ${before} ORDER BY block_number DESC,log_index DESC LIMIT 1`,
-      )
-      .bind(
-        n.chainId,
-        n.pool,
-        level,
-        index.toString(),
-        draw.closeBlockNumber,
-        draw.closeBlockNumber,
-        draw.closeLogIndex,
-      );
-  }
-  private slotIndex(n: Namespace, value: string): string {
-    const index = decimal(value, "slot index");
-    if (BigInt(index) >= 1n << BigInt(n.depth)) throw new Error("invalid slot index");
-    return index;
-  }
-  private commit(
-    n: Namespace,
-    expected: Checkpoint,
-    kind: string,
-    from: number,
-    to: number,
-  ): D1PreparedStatement {
-    return this.db
-      .prepare("INSERT INTO ingestion_commits VALUES(?,?,?,?,?,?,?)")
-      .bind(n.chainId, n.pool, expected.revision, kind, from, to, now());
-  }
-  private draw(n: Namespace, row: Record<string, unknown>): Draw {
-    return {
-      drawId: String(row.draw_id),
-      rootHash: String(row.root_hash),
-      rootSum: String(row.root_sum),
-      ticket: String(row.ticket_handle),
-      upperBound: String(row.upper_bound_handle),
-      closeBlockNumber: Number(row.close_block_number),
-      closeLogIndex: Number(row.close_log_index),
-      chainId: n.chainId,
-      pool: n.pool,
-      blockHash: String(row.block_hash),
-    };
-  }
   private conflict(error: unknown): never {
     if (
       String(error).includes("checkpoint conflict") ||

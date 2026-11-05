@@ -10,12 +10,29 @@ export function header(number = 1, hash = `0x${"11".repeat(32)}`): BlockHeader {
   return { number, hash, parentHash: zero };
 }
 
+function emptyHashes(depth: number): string[] {
+  const empty = [leafHash("0x0000000000000000000000000000000000000000", "0", zero)];
+  for (let level = 0; level < depth; level += 1) {
+    const child = empty.at(level)!;
+    empty.push(branchHash({ hash: child, sum: zero }, { hash: child, sum: zero }));
+  }
+  return empty;
+}
+
+function nodeUpdated(level: number, hash: string, blockHash: string): ArchiveLog {
+  return {
+    blockNumber: 1,
+    blockHash,
+    logIndex: level + 1,
+    name: "NodeUpdated",
+    args: { level: String(level), index: "0", hash, sum: zero },
+  };
+}
+
 /** A real, single-slot depth-32 tree; the root is independently derived from every node update. */
 export function depth32Fixture() {
   const poolSuffix = `${crypto.randomUUID().replaceAll("-", "")}00000000`.slice(0, 40);
-  const empty = [leafHash("0x0000000000000000000000000000000000000000", "0", zero)];
-  for (let level = 0; level < 32; level += 1)
-    empty.push(branchHash({ hash: empty[level], sum: zero }, { hash: empty[level], sum: zero }));
+  const empty = emptyHashes(32);
   const namespace: Namespace = {
     chainId: "11155111",
     pool: getAddress(`0x${poolSuffix}`),
@@ -35,22 +52,10 @@ export function depth32Fixture() {
     },
   ];
   let node = { hash: leafHash(account, "1", zero), sum: zero };
-  logs.push({
-    blockNumber: 1,
-    blockHash: h.hash,
-    logIndex: 1,
-    name: "NodeUpdated",
-    args: { level: "0", index: "0", hash: node.hash, sum: zero },
-  });
+  logs.push(nodeUpdated(0, node.hash, h.hash));
   for (let level = 0; level < 32; level += 1) {
-    node = { hash: branchHash(node, { hash: empty[level], sum: zero }), sum: zero };
-    logs.push({
-      blockNumber: 1,
-      blockHash: h.hash,
-      logIndex: level + 2,
-      name: "NodeUpdated",
-      args: { level: String(level + 1), index: "0", hash: node.hash, sum: zero },
-    });
+    node = { hash: branchHash(node, { hash: empty.at(level)!, sum: zero }), sum: zero };
+    logs.push(nodeUpdated(level + 1, node.hash, h.hash));
   }
   logs.push({
     blockNumber: 1,
