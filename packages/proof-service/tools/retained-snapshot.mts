@@ -80,47 +80,59 @@ export function writeSqlSnapshot(
   const db = new DatabaseSync(source, { readOnly: true });
   db.exec("BEGIN");
   try {
-    const stored = db
-      .prepare("SELECT * FROM namespaces WHERE chain_id=? AND pool=?")
-      .get(namespace.chainId, namespace.pool) as Record<string, unknown> | undefined;
-    if (!stored || !sameNamespace(namespaceFromRow(stored), namespace))
-      throw new Error("source namespace mismatch");
-    validateStoredCheckpoint(db, namespace);
-    const lines = [
-      "PRAGMA foreign_keys=ON;",
-      readFileSync(new URL("0001_proof_archive.sql", migrations), "utf8"),
-      "DROP TRIGGER require_current_revision;",
-    ];
-    for (const table of tables)
-      for (const row of db
-        .prepare(`SELECT * FROM ${table} WHERE chain_id=? AND pool=?`)
-        .all(namespace.chainId, namespace.pool) as Record<string, unknown>[]) {
-        const keys = Object.keys(row);
-        lines.push(
-          `INSERT INTO ${table}(${keys.join(",")}) VALUES(${keys.map((key) => sql(row[key])).join(",")});`,
-        );
-      }
-    lines.push(
-      readFileSync(new URL("0002_checkpoint_state.sql", migrations), "utf8").replace(
-        "DROP TRIGGER require_current_revision;",
-        "DROP TRIGGER IF EXISTS require_current_revision;",
-      ),
-    );
-    const body = `${lines.join("\n")}\n`;
+    assertSnapshotSource(db, namespace);
+    const body = serializeSnapshot(db, namespace);
     writeFileSync(destination, body);
-    writeFileSync(
-      manifestPath,
-      json({
-        version: VERSION,
-        exportedAt: new Date().toISOString(),
-        sha256: digest(body),
-        namespace,
-      }),
-    );
+    writeSnapshotManifest(manifestPath, body, namespace);
   } finally {
     db.exec("ROLLBACK");
     db.close();
   }
+}
+function assertSnapshotSource(db: DatabaseSync, namespace: Namespace) {
+  const stored = db
+    .prepare("SELECT * FROM namespaces WHERE chain_id=? AND pool=?")
+    .get(namespace.chainId, namespace.pool) as Record<string, unknown> | undefined;
+  if (!stored || !sameNamespace(namespaceFromRow(stored), namespace))
+    throw new Error("source namespace mismatch");
+  validateStoredCheckpoint(db, namespace);
+}
+function serializeSnapshot(db: DatabaseSync, namespace: Namespace) {
+  const lines = [
+    "PRAGMA foreign_keys=ON;",
+    readFileSync(new URL("0001_proof_archive.sql", migrations), "utf8"),
+    "DROP TRIGGER require_current_revision;",
+  ];
+  for (const table of tables) appendTableRows(lines, db, table, namespace);
+  lines.push(
+    readFileSync(new URL("0002_checkpoint_state.sql", migrations), "utf8").replace(
+      "DROP TRIGGER require_current_revision;",
+      "DROP TRIGGER IF EXISTS require_current_revision;",
+    ),
+  );
+  return `${lines.join("\n")}\n`;
+}
+function appendTableRows(lines: string[], db: DatabaseSync, table: string, namespace: Namespace) {
+  const rows = db
+    .prepare(`SELECT * FROM ${table} WHERE chain_id=? AND pool=?`)
+    .all(namespace.chainId, namespace.pool) as Record<string, unknown>[];
+  for (const row of rows) {
+    const keys = Object.keys(row);
+    lines.push(
+      `INSERT INTO ${table}(${keys.join(",")}) VALUES(${keys.map((key) => sql(row[key])).join(",")});`,
+    );
+  }
+}
+function writeSnapshotManifest(path: string, body: string, namespace: Namespace) {
+  writeFileSync(
+    path,
+    json({
+      version: VERSION,
+      exportedAt: new Date().toISOString(),
+      sha256: digest(body),
+      namespace,
+    }),
+  );
 }
 export async function restoreSqlSnapshot(
   sqlPath: string,

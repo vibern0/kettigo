@@ -85,6 +85,12 @@ export class FixedTargetRpc extends DeadlineRpc {
 export function validateBackfillOptions(options: BackfillOptions): Namespace {
   const namespace = validateNamespace(options.namespace);
   if (namespace.deploymentBlock === 0) throw new Error("deployment block zero is unsupported");
+  validateTarget(options, namespace);
+  validateLimits(options);
+  if (existsSync(options.output)) throw new Error("backfill output already exists");
+  return namespace;
+}
+function validateTarget(options: BackfillOptions, namespace: Namespace) {
   if (namespace.chainId !== "11155111" || options.target.chainId !== namespace.chainId)
     throw new Error("backfill requires Ethereum Sepolia namespace and target");
   if (
@@ -93,6 +99,8 @@ export function validateBackfillOptions(options: BackfillOptions): Namespace {
   )
     throw new Error("invalid fixed target block");
   hash32(options.target.hash, "fixed target hash");
+}
+function validateLimits(options: BackfillOptions) {
   if (
     !Number.isSafeInteger(options.maxBlocksPerSlice) ||
     options.maxBlocksPerSlice < 1 ||
@@ -103,8 +111,6 @@ export function validateBackfillOptions(options: BackfillOptions): Namespace {
     throw new Error("invalid max slices");
   if (!Number.isSafeInteger(options.deadlineMs) || options.deadlineMs < 1)
     throw new Error("invalid deadline");
-  if (existsSync(options.output)) throw new Error("backfill output already exists");
-  return namespace;
 }
 export async function requireCanonicalTarget(
   source: RpcSource,

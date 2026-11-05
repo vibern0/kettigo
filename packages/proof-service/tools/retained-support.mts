@@ -104,17 +104,24 @@ export function namespaceFromRow(row: Record<string, unknown>): Namespace {
 }
 export function checkpointInfo(row: Record<string, unknown>) {
   const value = {
-    nextBlock: Number(row.nextBlock ?? row.next_block),
-    lastFinalizedBlock: Number(row.lastFinalizedBlock ?? row.last_finalized_block),
-    lastFinalizedHash: hash32(row.lastFinalizedHash ?? row.last_finalized_hash),
-    disabledReason:
-      (row.disabledReason ?? row.disabled_reason) == null
-        ? null
-        : String(row.disabledReason ?? row.disabled_reason),
+    nextBlock: checkpointNumber(row, "nextBlock", "next_block"),
+    lastFinalizedBlock: checkpointNumber(row, "lastFinalizedBlock", "last_finalized_block"),
+    lastFinalizedHash: hash32(checkpointValue(row, "lastFinalizedHash", "last_finalized_hash")),
+    disabledReason: checkpointOptionalText(row, "disabledReason", "disabled_reason"),
   };
   if (!Number.isSafeInteger(value.nextBlock) || !Number.isSafeInteger(value.lastFinalizedBlock))
     throw new Error("invalid checkpoint");
   return value;
+}
+function checkpointValue(row: Record<string, unknown>, camel: string, snake: string) {
+  return row[camel] ?? row[snake];
+}
+function checkpointNumber(row: Record<string, unknown>, camel: string, snake: string) {
+  return Number(checkpointValue(row, camel, snake));
+}
+function checkpointOptionalText(row: Record<string, unknown>, camel: string, snake: string) {
+  const value = checkpointValue(row, camel, snake);
+  return value == null ? null : String(value);
 }
 export function validateStoredCheckpoint(db: DatabaseSync, namespace: Namespace) {
   const state = db

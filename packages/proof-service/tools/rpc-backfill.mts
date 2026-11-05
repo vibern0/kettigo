@@ -66,43 +66,10 @@ export async function runRpcBackfill(options: BackfillOptions): Promise<Backfill
   const temporary = tempPath(options.output);
   let db: DatabaseSync | undefined;
   try {
-    deadline.check();
-    if ((await source.chainId(deadline.controller.signal)) !== n.chainId)
-      throw new Error("rpc chain id mismatch");
-    await requireCanonicalTarget(source, options.target, deadline.controller.signal);
-    const parent = await source.block(n.deploymentBlock - 1, deadline.controller.signal);
-    if (parent.number !== n.deploymentBlock - 1)
-      throw new Error("deployment parent block mismatch");
-    closeSync(openSync(temporary, "wx", 0o600));
-    db = migrate(temporary);
-    const archive = new D1Archive(new SqliteD1(db));
-    await archive.initialize(n, parent.hash);
-    const fixed = new FixedTargetRpc(source, options.target, deadline);
-    let state = await archive.status(n);
-    for (let slice = 0; state.lastFinalizedBlock < options.target.number; slice += 1) {
-      if (slice >= options.maxSlices) throw new Error("backfill work limit exceeded");
-      deadline.check();
-      const before = state.nextBlock;
-      state = await ingestOneSlice(
-        archive,
-        n,
-        fixed,
-        options.maxBlocksPerSlice,
-        deadline.controller.signal,
-      );
-      if (state.disabledReason)
-        throw new Error(`backfill archive disabled: ${state.disabledReason}`);
-      if (state.nextBlock <= before) throw new Error("backfill made no progress");
-      if (state.lastFinalizedBlock > options.target.number)
-        throw new Error("backfill exceeded fixed target");
-    }
-    // Query the pinned source again before examining/publishing the locally built checkpoint.
-    await requireCanonicalTarget(source, options.target, deadline.controller.signal);
-    if (
-      state.lastFinalizedBlock !== options.target.number ||
-      hash32(state.lastFinalizedHash) !== hash32(options.target.hash)
-    )
-      throw new Error("backfill checkpoint does not match fixed target");
+    const initialized = await initializeBackfill(source, deadline, temporary, n, options);
+    db = initialized.db;
+    const archive = initialized.archive;
+    const state = await advanceBackfill(archive, source, deadline, n, options);
     const result = {
       checkpoint: state,
       canonicalBlocks: count(db, "canonical_blocks", n),
@@ -123,6 +90,59 @@ export async function runRpcBackfill(options: BackfillOptions): Promise<Backfill
   } finally {
     deadline.close();
   }
+}
+async function initializeBackfill(
+  source: DeadlineRpc,
+  deadline: Deadline,
+  temporary: string,
+  namespace: Namespace,
+  options: BackfillOptions,
+) {
+  deadline.check();
+  if ((await source.chainId(deadline.controller.signal)) !== namespace.chainId)
+    throw new Error("rpc chain id mismatch");
+  await requireCanonicalTarget(source, options.target, deadline.controller.signal);
+  const parent = await source.block(namespace.deploymentBlock - 1, deadline.controller.signal);
+  if (parent.number !== namespace.deploymentBlock - 1)
+    throw new Error("deployment parent block mismatch");
+  closeSync(openSync(temporary, "wx", 0o600));
+  const db = migrate(temporary);
+  const archive = new D1Archive(new SqliteD1(db));
+  await archive.initialize(namespace, parent.hash);
+  return { archive, db };
+}
+async function advanceBackfill(
+  archive: D1Archive,
+  source: DeadlineRpc,
+  deadline: Deadline,
+  namespace: Namespace,
+  options: BackfillOptions,
+) {
+  const fixed = new FixedTargetRpc(source, options.target, deadline);
+  let state = await archive.status(namespace);
+  for (let slice = 0; state.lastFinalizedBlock < options.target.number; slice += 1) {
+    if (slice >= options.maxSlices) throw new Error("backfill work limit exceeded");
+    deadline.check();
+    const before = state.nextBlock;
+    state = await ingestOneSlice(
+      archive,
+      namespace,
+      fixed,
+      options.maxBlocksPerSlice,
+      deadline.controller.signal,
+    );
+    if (state.disabledReason) throw new Error(`backfill archive disabled: ${state.disabledReason}`);
+    if (state.nextBlock <= before) throw new Error("backfill made no progress");
+    if (state.lastFinalizedBlock > options.target.number)
+      throw new Error("backfill exceeded fixed target");
+  }
+  await requireCanonicalTarget(source, options.target, deadline.controller.signal);
+  if (
+    state.lastFinalizedBlock !== options.target.number ||
+    hash32(state.lastFinalizedHash) !== hash32(options.target.hash)
+  )
+    throw new Error("backfill checkpoint does not match fixed target");
+  return state;
 }
 
 function positive(value: string | undefined, name: string) {
