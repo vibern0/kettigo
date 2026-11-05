@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// Sepolia's Cancun target supports PUSH0; production compilation pins Cancun.
+// aderyn-fp-next-line(push-zero-opcode)
 pragma solidity ^0.8.27;
 
 import {FHE, euint64} from "@fhevm/solidity/lib/FHE.sol";
@@ -20,7 +22,7 @@ library EncryptedSnapshotTree {
     self.zero = zero;
     FHE.allowThis(zero);
     self.emptyHash[0] = leaf(address(0), 0, zero);
-    for (uint256 level; level < DEPTH; ++level) {
+    for (uint256 level = 0; level < DEPTH; ++level) {
       Node memory empty = Node(self.emptyHash[level], zero);
       self.emptyHash[level + 1] = parent(empty, empty);
     }
@@ -72,6 +74,7 @@ library EncryptedSnapshotTree {
         clear ? self.zero : balance
       )
     );
+    // aderyn-fp-next-line(costly-loop)
     for (uint256 level = 1; level <= DEPTH; ++level) {
       index >>= 1;
       Node memory left = get(self, level - 1, index * 2);

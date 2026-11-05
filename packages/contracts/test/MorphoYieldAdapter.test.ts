@@ -336,6 +336,24 @@ describe("MorphoYieldAdapter", function () {
     );
   });
 
+  it("keeps restoration accounting intact when Morpho attempts nested pool and adapter calls", async function () {
+    const { usdc, pool, morpho, adapter } = await deployFixture();
+    await usdc.transfer(await adapter.getAddress(), USDC(100));
+    await pool.supplyFinalizedMorphoPrincipal(USDC(100));
+
+    const Callback = await ethers.getContractFactory("RestoreCallbackAttacker");
+    const callback = await Callback.deploy(await pool.getAddress(), await adapter.getAddress());
+    await morpho.configureWithdrawCallback(await callback.getAddress(), USDC(1));
+
+    await pool.restoreMorphoPrincipal(USDC(25));
+
+    expect(await callback.poolRestoreSucceeded()).to.equal(false);
+    expect(await callback.adapterRestoreSucceeded()).to.equal(false);
+    expect(await adapter.suppliedPrincipal()).to.equal(USDC(75));
+    expect(await adapter.suppliedAssets()).to.equal(USDC(75));
+    expect(await pool.morphoPendingDepositCount()).to.equal(1n);
+  });
+
   it("does not expose a standalone Morpho yield harvest", async function () {
     const { pool } = await deployFixture();
 

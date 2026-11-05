@@ -120,6 +120,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     uint256 closeBlockNumber
   );
   event PrizeClaimed(address indexed account, euint64 indexed amount);
+  event PrizeChecked(uint256 indexed drawId, address indexed beneficiary);
   event PrizeAddedToSavings(address indexed account, euint64 indexed amount);
   event ConfidentialWithdrawal(address indexed account, euint64 indexed amount);
   event ConfidentialWithdrawalToUsdc(
@@ -333,7 +334,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
       EncryptedSnapshotTree.leaf(beneficiary, generation, balance),
       balance
     );
-    for (uint256 level; level < EncryptedSnapshotTree.DEPTH; ++level) {
+    for (uint256 level = 0; level < EncryptedSnapshotTree.DEPTH; ++level) {
       EncryptedSnapshotTree.Node memory sibling = EncryptedSnapshotTree.Node(
         siblingHashes[level],
         euint64.wrap(siblingSums[level])
@@ -360,20 +361,21 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     FHE.allowThis(draw.remaining);
     _allowAccount(award, beneficiary);
     _allowAccount(_winnings[beneficiary], beneficiary);
+    emit PrizeChecked(drawId_, beneficiary);
   }
 
   /// @dev Reduces left siblings in a balanced tree; depth-32 proof work stays logarithmic.
   function _prefixBefore(uint256 index, bytes32[] calldata siblingSums) internal returns (euint64) {
     euint64[] memory terms = new euint64[](EncryptedSnapshotTree.DEPTH);
-    uint256 count;
-    for (uint256 level; level < EncryptedSnapshotTree.DEPTH; ++level) {
+    uint256 count = 0;
+    for (uint256 level = 0; level < EncryptedSnapshotTree.DEPTH; ++level) {
       if (((index >> level) & 1) == 1) {
         terms[count++] = euint64.wrap(siblingSums[level]);
       }
     }
     while (count > 1) {
-      uint256 next;
-      for (uint256 i; i < count; i += 2) {
+      uint256 next = 0;
+      for (uint256 i = 0; i < count; i += 2) {
         terms[next++] = i + 1 < count ? FHE.add(terms[i], terms[i + 1]) : terms[i];
       }
       count = next;
@@ -502,6 +504,8 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Restores Morpho principal as cUSDC liquidity in the pool.
+  // Owner-only entry reaches an immutable pool-bound adapter protected by onlyPrizePool and nonReentrant.
+  // aderyn-fp-next-line(reentrancy-state-change)
   function restoreMorphoPrincipal(uint256 assets) external returns (uint256 restoredAssets) {
     _onlyOwner();
     if (_unfundedWithdrawalBatchCount != 0) {
@@ -512,7 +516,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     }
     IMorphoPrizeYieldAdapter adapter = _requireMorphoYieldAdapter();
 
-    restoredAssets = adapter.restorePrincipalToPool(assets);
+    restoredAssets = adapter.restorePrincipalToPool(assets); // aderyn-fp(reentrancy-state-change)
     if (restoredAssets != assets) {
       revert WithdrawalRestorationMismatch(assets, restoredAssets);
     }

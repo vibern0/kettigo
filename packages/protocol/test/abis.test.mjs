@@ -94,7 +94,13 @@ test("custom ABIs contain the union consumed by the web app, keepers, and lab", 
   ])
     assert.equal(has(confidentialPrizePoolAbi, "function", name), true, name);
 
-  for (const name of ["DrawSnapshotClosed", "SlotAssigned", "SlotReleased", "NodeUpdated"]) {
+  for (const name of [
+    "DrawSnapshotClosed",
+    "PrizeChecked",
+    "SlotAssigned",
+    "SlotReleased",
+    "NodeUpdated",
+  ]) {
     assert.equal(has(confidentialPrizePoolAbi, "event", name), true, name);
   }
 
@@ -175,6 +181,13 @@ test("prize proof selectors match the compiled pool artifact", () => {
       (item) => item.type === "function" && item.name === name,
     );
     const compiled = artifact.find((item) => item.type === "function" && item.name === name);
+    assert.deepEqual(shared, portable(compiled), name);
+  }
+  for (const name of ["PrizeChecked"]) {
+    const shared = confidentialPrizePoolAbi.find(
+      (item) => item.type === "event" && item.name === name,
+    );
+    const compiled = artifact.find((item) => item.type === "event" && item.name === name);
     assert.deepEqual(shared, portable(compiled), name);
   }
 });

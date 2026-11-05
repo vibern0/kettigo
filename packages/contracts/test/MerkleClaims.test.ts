@@ -234,6 +234,45 @@ describe("ConfidentialPrizePool snapshot claims", function () {
     ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
   }
 
+  it("emits PrizeChecked only for the successful prize check", async function () {
+    const f = await fixture();
+    await deposit(f.token, f.pool, f.alice, 5n);
+    await admit(f.pool, f.alice.address);
+    const claim = await proof(f.pool, f.alice.address);
+    await fund(f.token, f.pool, f.owner, 5n);
+    await close(f.pool);
+
+    await expect(
+      f.pool.checkPrize(
+        1n,
+        f.alice.address,
+        claim.index,
+        claim.generation,
+        claim.balance,
+        claim.siblingHashes,
+        claim.siblingSums,
+        claim.parentSums,
+      ),
+    )
+      .to.emit(f.pool, "PrizeChecked")
+      .withArgs(1n, f.alice.address);
+    const awardBeforeReplay = await f.pool.encryptedAwardOf(1n, f.alice.address);
+
+    await expect(
+      f.pool.checkPrize(
+        1n,
+        f.alice.address,
+        claim.index,
+        claim.generation,
+        claim.balance,
+        claim.siblingHashes,
+        claim.siblingSums,
+        claim.parentSums,
+      ),
+    ).to.be.revertedWithCustomError(f.pool, "DrawAlreadyChecked");
+    expect(await f.pool.encryptedAwardOf(1n, f.alice.address)).to.equal(awardBeforeReplay);
+  });
+
   it("closeDoesNotScanPopulation", async function () {
     const f = await fixture();
     for (const user of [f.alice, f.bob, f.carol]) {
