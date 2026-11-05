@@ -15,9 +15,10 @@ export function buildActions(definition, manifest) {
   const actions = [];
   const add = createActionAdder(actions, definition);
   const call = (signature, args, value = "0") => ({ signature, args, value });
+  const native = (value) => ({ signature: "nativeTransfer()", args: [], data: "0x", value });
   const transfer = (recipient, amount) => call("transfer(address,uint256)", [recipient, amount]);
-  addSetup(add, call, transfer, definition, manifest);
-  addParticipantFunding(add, call, transfer, definition);
+  addSetup(add, call, native, transfer, definition, manifest);
+  addParticipantFunding(add, call, native, transfer, definition);
   addInitialDraws(add, call, definition);
   addInitialMorpho(add, call, definition);
   addInitialBatch(add, call, definition);
@@ -48,6 +49,7 @@ function createActionAdder(actions, definition) {
         operation,
         dependencies: [...dependencies],
         concurrencyGroup: extra.concurrencyGroup || "serial",
+        concurrency: extra.concurrency || { id: extra.concurrencyGroup || "serial", width: 1 },
         allocation: extra.allocation || { id: null, usdcMicro: "0", valueWei: "0" },
         refs: extra.refs || {},
         provenance: extra.provenance || null,

@@ -188,19 +188,21 @@ test("uses concrete native targets, nested deposits, funding tags, and ABI ariti
   const action = (id) => workload.actions.find((entry) => entry.id === id);
   assert.equal(action("bootstrap-eth").target, workload.definition.actors.sponsor);
   assert.equal(action("bootstrap-eth").operation.signature, "nativeTransfer()");
+  assert.equal(action("bootstrap-eth").operation.data, "0x");
   assert.equal(action("bootstrap-eth").operation.value, "1000000000000000");
   assert.equal(action("bootstrap-eth").operation.args.length, 0);
   assert.equal(action("fund-eth-eoa-00").target, workload.definition.actors.eoaParticipants[0]);
+  assert.equal(action("fund-eth-eoa-00").operation.data, "0x");
+  assert.equal(action("fund-eth-eoa-00").operation.args.length, 0);
   assert.equal(
     action("eoa-00-deposit").operation.args[0][1].signature,
     "confidentialTransferAndCall(address,bytes32,bytes,bytes)",
   );
   assert.equal(action("safe-initial-deposit").operation.signature, "safeBatch(bytes[])");
   assert.equal(action("prize-fund-A").operation.args[3].encoded.value, "5000000");
-  assert.equal(
-    action("prize-fund-A").operation.args[3].tag,
-    "0x5052495a455f46554e44494e475f44415441",
-  );
+  assert.equal(action("prize-fund-A").operation.args[3].tag, "0x506aab00");
+  assert.equal(action("prize-fund-A").operation.args[3].length, 36);
+  assert.equal(action("prize-fund-A").operation.args[3].encoded.bytes, 32);
   assert.equal(action("initial-batch-settle").operation.args.length, 4);
   assert.equal(action("initial-batch-process-safe").operation.args.length, 2);
   assert.equal(action("initial-batch-finalize-safe").operation.args.length, 3);
@@ -211,6 +213,7 @@ test("enforces all admission and claim barriers rather than array order", () => 
   const workload = compileCandidateWorkload(definition(), manifest());
   const action = (id) => workload.actions.find((entry) => entry.id === id);
   assert.ok(action("prize-fund-A").dependencies.includes("reserve-wrap"));
+  assert.ok(action("eoa-01-approve").dependencies.includes("safe-reinvest"));
   assert.ok(action("eoa-07-approve").dependencies.includes("safe-stage-8-check"));
   assert.ok(action("check-stage8-eoa-05").dependencies.includes("check-stage8-eoa-04"));
   assert.ok(action("check-stage33-eoa-08").dependencies.includes("check-stage33-eoa-00"));
@@ -218,6 +221,48 @@ test("enforces all admission and claim barriers rather than array order", () => 
   assert.ok(action("final-request-eoa-31").dependencies.includes("claim-stage33-eoa-00"));
   assert.ok(action("safe-withdrawal-request").dependencies.includes("check-stage33-eoa-31"));
   assert.ok(action("final-batch-close").dependencies.includes("safe-withdrawal-request"));
+  assert.equal(action("check-stage8-eoa-00").concurrency.width, 1);
+  assert.equal(action("check-stage8-eoa-01").concurrency.width, 4);
+  assert.equal(action("check-stage8-eoa-05").concurrency.width, 2);
+  assert.equal(action("check-stage33-eoa-16").concurrency.width, 8);
+});
+
+test("pins concrete funding, receipt scopes, and immutable historical proof inputs", () => {
+  const workload = compileCandidateWorkload(definition(), manifest());
+  const action = (id) => workload.actions.find((entry) => entry.id === id);
+  for (let index = 0; index < 32; index += 1) {
+    const id = String(index).padStart(2, "0");
+    const funding = action(`fund-eth-eoa-${id}`);
+    assert.equal(funding.target, workload.definition.actors.eoaParticipants[index]);
+    assert.equal(funding.operation.data, "0x");
+    assert.equal(funding.operation.value, "20000000000000");
+    if (index)
+      assert.ok(
+        funding.dependencies.includes(`fund-eth-eoa-${String(index - 1).padStart(2, "0")}`),
+      );
+  }
+  const check = action("check-stage33-eoa-00").operation.args;
+  assert.equal(check[0].kind, "receiptEvent");
+  assert.equal(check[0].event, "DrawClosed");
+  for (const ref of check.slice(2)) {
+    assert.equal(ref.kind, "historicalProof");
+    assert.equal(ref.event, "DrawSnapshotClosed");
+    assert.ok(ref.constraints.includes("same-draw-beneficiary-proof"));
+  }
+  assert.equal(action("initial-batch-close").operation.args[0].event, "WithdrawalRequested");
+  assert.equal(action("final-batch-close").operation.args[0].event, "WithdrawalRequested");
+});
+
+test("rejects arbitrary StaticA bootstrap IDs and a caller-recomputed fingerprint", () => {
+  const changed = definition();
+  changed.initialFundingWorkloadIds = ["foo", "bar"];
+  changed.workloadIds = ["foo", "bar"];
+  assert.throws(() => compileCandidateWorkload(changed, manifest()), /bootstrap/i);
+  const tampered = JSON.parse(JSON.stringify(compileCandidateWorkload(definition(), manifest())));
+  tampered.actions.find((entry) => entry.id === "prize-fund-A").operation.args[3].tag =
+    "0x00000000";
+  tampered.fingerprint = workloadFingerprint(tampered);
+  assert.throws(() => validateCompiledCandidateWorkload(tampered), /differs|invalid/i);
 });
 
 test("deep freezes the graph and rejects a recomputed tampered compiled workload", () => {

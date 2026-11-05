@@ -13,7 +13,7 @@ export function addParticipantLifecycle(add, call, definition) {
       index === 0
         ? ["initial-batch-finalize-safe", "safe-exit-membership"]
         : index < 7
-          ? ["safe-rejoin-admission"]
+          ? ["safe-rejoin-admission", "safe-reinvest"]
           : [
               "close-draw-8",
               "safe-stage-8-check",

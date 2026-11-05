@@ -2,6 +2,7 @@ import {
   checkTemplate,
   depositTemplate,
   discoveryRef,
+  publicDecryptRef,
   prizeAllocation,
   prizeFundingData,
   resultRef,
@@ -20,6 +21,7 @@ export function addSafeInitial(add, call, definition) {
     "wrapper",
     safeDepositTemplate(definition, "safe-initial-deposit", "2000000"),
     ["fund-usdc-safe"],
+    { allocation: routeAllocation("safe-initial", "2000000") },
   );
   add(
     "safe-initial-admission",
@@ -28,9 +30,23 @@ export function addSafeInitial(add, call, definition) {
     "candidatePool",
     call("finalizeAdmission(address,uint256,bool,bytes)", [
       definition.actors.safeParticipant,
-      resultRef("safe-initial-deposit", "admissionNonce", "uint256"),
+      discoveryRef(
+        "safe-initial-deposit",
+        "candidatePool",
+        "AdmissionRequested",
+        definition.actors.safeParticipant,
+        "nonce",
+        "uint256",
+      ),
       true,
-      resultRef("safe-initial-deposit", "publicProof", "bytes"),
+      publicDecryptRef(
+        "safe-initial-deposit",
+        "candidatePool",
+        "AdmissionRequested",
+        definition.actors.safeParticipant,
+        "marker",
+        "bytes",
+      ),
     ]),
     ["safe-initial-deposit"],
   );
@@ -38,6 +54,17 @@ export function addSafeInitial(add, call, definition) {
 export function addParticipantDeposit(add, call, definition, index, amount, dependencies, group) {
   const id = String(index).padStart(2, "0");
   const actor = definition.actors.eoaParticipants[index];
+  const extra = {
+    actorIndex: index,
+    concurrencyGroup: group,
+    allocation: routeAllocation(`principal-eoa-${id}`, amount),
+  };
+  addParticipantApprove(add, call, definition, id, amount, dependencies, extra);
+  addParticipantWrappedDeposit(add, definition, id, actor, amount, extra);
+  addParticipantAdmission(add, call, id, actor, extra);
+}
+
+function addParticipantApprove(add, call, definition, id, amount, dependencies, extra) {
   add(
     `eoa-${id}-approve`,
     "deposit",
@@ -45,8 +72,11 @@ export function addParticipantDeposit(add, call, definition, index, amount, depe
     "underlying",
     call("approve(address,uint256)", [definition.contracts.wrapper, amount]),
     [`fund-usdc-eoa-${id}`, ...dependencies],
-    { actorIndex: index, concurrencyGroup: group },
+    extra,
   );
+}
+
+function addParticipantWrappedDeposit(add, definition, id, actor, amount, extra) {
   add(
     `eoa-${id}-deposit`,
     "deposit",
@@ -55,11 +85,13 @@ export function addParticipantDeposit(add, call, definition, index, amount, depe
     depositTemplate(definition, `eoa-${id}-deposit`, actor, amount),
     [`eoa-${id}-approve`],
     {
-      actorIndex: index,
-      concurrencyGroup: group,
+      ...extra,
       refs: { encryptedInput: sdkRef(`eoa-${id}-deposit`, "wrapper", actor, amount, "deposit") },
     },
   );
+}
+
+function addParticipantAdmission(add, call, id, actor, extra) {
   add(
     `eoa-${id}-admit`,
     "deposit",
@@ -67,13 +99,37 @@ export function addParticipantDeposit(add, call, definition, index, amount, depe
     "candidatePool",
     call("finalizeAdmission(address,uint256,bool,bytes)", [
       actor,
-      resultRef(`eoa-${id}-deposit`, "admissionNonce", "uint256"),
+      discoveryRef(
+        `eoa-${id}-deposit`,
+        "candidatePool",
+        "AdmissionRequested",
+        actor,
+        "nonce",
+        "uint256",
+      ),
       true,
-      resultRef(`eoa-${id}-deposit`, "publicProof", "bytes"),
+      publicDecryptRef(
+        `eoa-${id}-deposit`,
+        "candidatePool",
+        "AdmissionRequested",
+        actor,
+        "marker",
+        "bytes",
+      ),
     ]),
     [`eoa-${id}-deposit`],
-    { actorIndex: index, concurrencyGroup: group },
+    extra,
   );
+}
+
+function routeAllocation(route, amount) {
+  return {
+    id: "bootstrap-usdc-78",
+    usdcMicro: "0",
+    valueWei: "0",
+    provenance: `bootstrap-usdc-78/${route}`,
+    suballocationMicro: amount,
+  };
 }
 export function addReserveStages(add, call, definition) {
   add(
@@ -83,6 +139,7 @@ export function addReserveStages(add, call, definition) {
     "underlying",
     call("approve(address,uint256)", [definition.contracts.wrapper, "12000000"]),
     ["safe-initial-admission"],
+    { allocation: prizeAllocation("reserve", "12000000") },
   );
   add(
     "reserve-wrap",
@@ -91,6 +148,7 @@ export function addReserveStages(add, call, definition) {
     "wrapper",
     call("wrap(address,uint256)", [definition.actors.sponsor, "12000000"]),
     ["reserve-approve"],
+    { allocation: prizeAllocation("reserve", "12000000") },
   );
   addPrizeStages(add, call, definition);
   addStage8Checks(add, call, definition);
@@ -214,14 +272,13 @@ function addSafeFinalRequest(add, call, definition) {
 }
 
 function addFinalBatch(add, call, definition) {
+  const batch = finalBatchRef(definition);
   add(
     "final-batch-close",
     "final",
     "sponsor",
     "candidatePool",
-    call("closeWithdrawalBatch(uint256)", [
-      resultRef("safe-withdrawal-request", "batchId", "uint256"),
-    ]),
+    call("closeWithdrawalBatch(uint256)", [batch]),
     [
       "safe-withdrawal-request",
       ...Array.from(
@@ -235,14 +292,41 @@ function addFinalBatch(add, call, definition) {
     "final",
     "sponsor",
     "candidatePool",
-    call("settleWithdrawalBatch(uint256,uint64,uint64,bytes)", [
-      resultRef("final-batch-close", "batchId", "uint256"),
-      discoveryRef("final-batch-close", definition.actors.sponsor, "clearTotal", "uint64"),
-      discoveryRef("final-batch-close", definition.actors.sponsor, "clearMorphoRestore", "uint64"),
-      discoveryRef("final-batch-close", definition.actors.sponsor, "settlementProof", "bytes"),
-    ]),
+    call(
+      "settleWithdrawalBatch(uint256,uint64,uint64,bytes)",
+      finalSettlementArgs(batch, definition),
+    ),
     ["final-batch-close"],
   );
+}
+
+function finalBatchRef(definition) {
+  return discoveryRef(
+    "final-request-eoa-00",
+    "candidatePool",
+    "WithdrawalRequested",
+    definition.actors.eoaParticipants[0],
+    "batchId",
+    "uint256",
+  );
+}
+
+function finalSettlementArgs(batch, definition) {
+  const decrypt = (field, abiType) =>
+    publicDecryptRef(
+      "final-batch-close",
+      "candidatePool",
+      "WithdrawalBatchClosed",
+      definition.actors.sponsor,
+      field,
+      abiType,
+    );
+  return [
+    batch,
+    decrypt("clearTotal", "uint64"),
+    decrypt("clearMorphoRestore", "uint64"),
+    decrypt("settlementProof", "bytes"),
+  ];
 }
 
 function addFinalProcesses(add, call, definition) {
@@ -250,30 +334,49 @@ function addFinalProcesses(add, call, definition) {
     const account =
       index === 32 ? definition.actors.safeParticipant : definition.actors.eoaParticipants[index];
     const id = index === 32 ? "safe" : `eoa-${String(index).padStart(2, "0")}`;
-    add(
-      `final-process-${id}`,
-      "final",
-      "sponsor",
-      "candidatePool",
-      call("processWithdrawal(uint256,address)", [
-        resultRef("final-batch-close", "batchId", "uint256"),
-        account,
-      ]),
-      ["final-batch-settle"],
-      { concurrencyGroup: "final-process" },
-    );
-    add(
-      `final-finalize-${id}`,
-      "final",
-      "sponsor",
-      "wrapper",
-      call("finalizeUnwrap(bytes32,uint64,bytes)", [
-        resultRef(`final-process-${id}`, "unwrapRequestId", "bytes32"),
-        discoveryRef(`final-process-${id}`, account, "clearAmount", "uint64"),
-        discoveryRef(`final-process-${id}`, account, "proof", "bytes"),
-      ]),
-      [`final-process-${id}`],
-      { concurrencyGroup: "final-finalize" },
-    );
+    addFinalProcess(add, call, definition, id, account);
+    addFinalFinalize(add, call, id, account);
   }
+}
+
+function addFinalProcess(add, call, definition, id, account) {
+  add(
+    `final-process-${id}`,
+    "final",
+    "sponsor",
+    "candidatePool",
+    call("processWithdrawal(uint256,address)", [finalBatchRef(definition), account]),
+    ["final-batch-settle"],
+    { concurrencyGroup: "final-process" },
+  );
+}
+
+function addFinalFinalize(add, call, id, account) {
+  add(
+    `final-finalize-${id}`,
+    "final",
+    "sponsor",
+    "wrapper",
+    call("finalizeUnwrap(bytes32,uint64,bytes)", [
+      resultRef(`final-process-${id}`, "unwrapRequestId", "bytes32"),
+      publicDecryptRef(
+        `final-process-${id}`,
+        "wrapper",
+        "UnwrapRequested",
+        account,
+        "clearAmount",
+        "uint64",
+      ),
+      publicDecryptRef(
+        `final-process-${id}`,
+        "wrapper",
+        "UnwrapRequested",
+        account,
+        "proof",
+        "bytes",
+      ),
+    ]),
+    [`final-process-${id}`],
+    { concurrencyGroup: "final-finalize" },
+  );
 }

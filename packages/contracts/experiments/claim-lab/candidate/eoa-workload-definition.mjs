@@ -12,6 +12,11 @@ const digest = (value) => `0x${createHash("sha256").update(canonical(value)).dig
 
 export function compileCandidateWorkload(definition, manifest) {
   const staticDefinition = validateStaticRunDefinition(definition);
+  if (
+    canonical(staticDefinition.initialFundingWorkloadIds) !==
+    canonical(["bootstrap-eth", "bootstrap-usdc"])
+  )
+    fail("invalid fixed bootstrap workload IDs");
   const normalizedManifest = validateManifest(staticDefinition, manifest);
   const actions = buildActions(staticDefinition, normalizedManifest);
   validateActions(actions);

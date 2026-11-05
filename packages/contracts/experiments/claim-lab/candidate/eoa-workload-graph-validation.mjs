@@ -31,28 +31,25 @@ export function validateActions(actions) {
   for (const entry of actions) {
     if (!PHASES.includes(entry.phase) || typeof entry.operation.signature !== "string")
       fail("invalid action template");
-    for (const ref of findRefs(entry.operation)) {
-      if (
-        ![
-          "result",
-          "discovery",
-          "historicalProof",
-          "sdkInput",
-          "sdkProof",
-          "delegateData",
-          "abiBytes",
-        ].includes(ref.kind)
-      )
-        fail("untyped reference");
-      if (["sdkInput", "sdkProof", "delegateData", "abiBytes"].includes(ref.kind)) continue;
-      if (
-        !byId.has(ref.producer) ||
-        ref.producer === entry.id ||
-        !dependsOn(entry.id, ref.producer, byId)
-      )
-        fail(`unscoped reference producer ${entry.id}:${ref.producer}`);
-    }
+    findRefs(entry.operation).forEach((ref) => validateRef(ref, entry, byId));
   }
+}
+function validateRef(ref, entry, byId) {
+  const staticKinds = ["sdkInput", "sdkProof", "delegateData", "abiBytes"];
+  const kinds = ["result", "receiptEvent", "publicDecrypt", "historicalProof", ...staticKinds];
+  if (!kinds.includes(ref.kind)) fail("untyped reference");
+  if (staticKinds.includes(ref.kind)) return;
+  if (
+    !byId.has(ref.producer) ||
+    ref.producer === entry.id ||
+    !dependsOn(entry.id, ref.producer, byId)
+  )
+    fail(`unscoped reference producer ${entry.id}:${ref.producer}`);
+  if (
+    ["receiptEvent", "publicDecrypt", "historicalProof"].includes(ref.kind) &&
+    (!ref.contractRole || !ref.event || !ref.beneficiary)
+  )
+    fail(`incomplete scoped reference ${entry.id}:${ref.producer}`);
 }
 function findRefs(value, found = []) {
   if (Array.isArray(value)) value.forEach((entry) => findRefs(entry, found));

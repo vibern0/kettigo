@@ -16,24 +16,40 @@ export function resolveTarget(definition, role, participantIndex) {
 export function resultRef(producer, field, abiType) {
   return { kind: "result", producer, field, abiType, constraints: ["producer-complete"] };
 }
-export function discoveryRef(producer, beneficiary, field, abiType) {
+export function discoveryRef(producer, contractRole, event, beneficiary, field, abiType) {
   return {
-    kind: "discovery",
+    kind: "receiptEvent",
     producer,
+    contractRole,
+    event,
     beneficiary,
     field,
     abiType,
-    constraints: ["immutable-read"],
+    constraints: ["confirmed-receipt", "indexed-beneficiary"],
   };
 }
-export function proofRef(draw, beneficiary, field) {
+export function publicDecryptRef(producer, contractRole, event, beneficiary, field, abiType) {
+  return {
+    kind: "publicDecrypt",
+    producer,
+    contractRole,
+    event,
+    beneficiary,
+    field,
+    abiType,
+    constraints: ["confirmed-receipt", "public-handle", "decryption-proof"],
+  };
+}
+export function proofRef(draw, beneficiary, field, abiType = "bytes32[]") {
   return {
     kind: "historicalProof",
     producer: draw,
+    contractRole: "candidatePool",
+    event: "DrawSnapshotClosed",
     beneficiary,
     field,
-    abiType: "bytes32[]",
-    constraints: ["depth-32", "immutable-draw"],
+    abiType,
+    constraints: ["depth-32", "immutable-draw", "same-draw-beneficiary-proof"],
   };
 }
 export function sdkRef(producer, contractRole, actor, amount, purpose) {
@@ -60,8 +76,9 @@ export function sdkProofRef(producer) {
 export function prizeFundingData(amount) {
   return {
     kind: "abiBytes",
-    tag: "0x5052495a455f46554e44494e475f44415441",
-    encoded: { abiType: "uint64", value: amount },
+    tag: "0x506aab00",
+    encoded: { abiType: "uint64", value: amount, bytes: 32 },
+    length: 36,
   };
 }
 export function prizeAllocation(stage, amount) {
@@ -114,51 +131,68 @@ export function safeDepositTemplate(definition, producer, amount) {
   };
 }
 export function initialQueueArgs(index, definition) {
-  const batch = resultRef("safe-exit-membership", "initialBatchId", "uint256");
+  const batch = discoveryRef(
+    "safe-exit-membership",
+    "candidatePool",
+    "WithdrawalRequested",
+    definition.actors.safeParticipant,
+    "batchId",
+    "uint256",
+  );
   if (index === 0) return [batch];
-  if (index === 1)
-    return [
-      batch,
-      discoveryRef(
-        "initial-batch-close",
-        definition.actors.safeParticipant,
-        "clearTotal",
-        "uint64",
-      ),
-      discoveryRef(
-        "initial-batch-close",
-        definition.actors.safeParticipant,
-        "clearMorphoRestore",
-        "uint64",
-      ),
-      discoveryRef(
-        "initial-batch-close",
-        definition.actors.safeParticipant,
-        "settlementProof",
-        "bytes",
-      ),
-    ];
+  if (index === 1) return initialSettlementArgs(batch, definition);
   if (index === 2) return [batch, definition.actors.safeParticipant];
+  return initialFinalizeArgs(definition);
+}
+
+function initialSettlementArgs(batch, definition) {
+  const decrypt = (field, abiType) =>
+    publicDecryptRef(
+      "initial-batch-close",
+      "candidatePool",
+      "WithdrawalBatchClosed",
+      definition.actors.safeParticipant,
+      field,
+      abiType,
+    );
+  return [
+    batch,
+    decrypt("clearTotal", "uint64"),
+    decrypt("clearMorphoRestore", "uint64"),
+    decrypt("settlementProof", "bytes"),
+  ];
+}
+
+function initialFinalizeArgs(definition) {
   return [
     resultRef("initial-batch-process-safe", "unwrapRequestId", "bytes32"),
-    discoveryRef(
+    publicDecryptRef(
       "initial-batch-process-safe",
+      "wrapper",
+      "UnwrapRequested",
       definition.actors.safeParticipant,
       "clearAmount",
       "uint64",
     ),
-    discoveryRef("initial-batch-process-safe", definition.actors.safeParticipant, "proof", "bytes"),
+    publicDecryptRef(
+      "initial-batch-process-safe",
+      "wrapper",
+      "UnwrapRequested",
+      definition.actors.safeParticipant,
+      "proof",
+      "bytes",
+    ),
   ];
 }
 export function checkTemplate(draw, actor) {
   return {
     signature: "checkPrize(uint256,address,uint256,uint64,bytes32,bytes32[],bytes32[],bytes32[])",
     args: Object.freeze([
-      resultRef(draw, "drawId", "uint256"),
+      discoveryRef(draw, "candidatePool", "DrawClosed", actor, "drawId", "uint256"),
       actor,
-      discoveryRef(draw, actor, "slotIndex", "uint256"),
-      discoveryRef(draw, actor, "slotGeneration", "uint64"),
-      discoveryRef(draw, actor, "balanceHandle", "bytes32"),
+      proofRef(draw, actor, "index", "uint256"),
+      proofRef(draw, actor, "generation", "uint64"),
+      proofRef(draw, actor, "balanceHandle", "bytes32"),
       proofRef(draw, actor, "siblingHashes"),
       proofRef(draw, actor, "siblingSums"),
       proofRef(draw, actor, "parentSums"),

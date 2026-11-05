@@ -8,21 +8,16 @@ import {
   safeDepositTemplate,
   sdkProofRef,
   sdkRef,
+  publicDecryptRef,
 } from "./eoa-workload-templates.mjs";
 import { addSafeInitial } from "./eoa-workload-stages.mjs";
 
 const principal = (index) => (index === 0 ? "3000000" : index === 1 ? "1000000" : "2000000");
 
-export function addSetup(add, call, transfer, definition, manifest) {
-  add(
-    "bootstrap-eth",
-    "setup",
-    "bootstrapOperator",
-    "sponsor",
-    call("nativeTransfer()", [], "1000000000000000"),
-    [],
-    { allocation: { id: "bootstrap-eth", usdcMicro: "0", valueWei: "1000000000000000" } },
-  );
+export function addSetup(add, call, native, transfer, definition, manifest) {
+  add("bootstrap-eth", "setup", "bootstrapOperator", "sponsor", native("1000000000000000"), [], {
+    allocation: { id: "bootstrap-eth", usdcMicro: "0", valueWei: "1000000000000000" },
+  });
   add(
     "bootstrap-usdc",
     "setup",
@@ -59,13 +54,13 @@ export function addSetup(add, call, transfer, definition, manifest) {
   );
 }
 
-export function addParticipantFunding(add, call, transfer, definition) {
-  addEthFunding(add, call, definition);
+export function addParticipantFunding(add, call, native, transfer, definition) {
+  addEthFunding(add, native, definition);
   addUsdcFunding(add, transfer, definition);
   addSafeFunding(add, call, transfer, definition);
 }
 
-function addEthFunding(add, call, definition) {
+function addEthFunding(add, native, definition) {
   const participant = (index) => definition.actors.eoaParticipants[index];
   for (let index = 0; index < 32; index += 1)
     add(
@@ -73,15 +68,16 @@ function addEthFunding(add, call, definition) {
       "setup",
       "sponsor",
       "participant",
-      call("transfer(address,uint256)", [participant(index), "20000000000000"]),
-      ["configure-morpho"],
+      native("20000000000000"),
+      [index === 0 ? "configure-morpho" : `fund-eth-eoa-${String(index - 1).padStart(2, "0")}`],
       {
         actorIndex: index,
         allocation: {
           id: "bootstrap-eth",
           usdcMicro: "0",
           valueWei: "20000000000000",
-          provenance: "bootstrap-eth",
+          provenance: "bootstrap-eth/funding",
+          suballocationWei: "20000000000000",
         },
       },
     );
@@ -102,7 +98,8 @@ function addUsdcFunding(add, transfer, definition) {
           id: "bootstrap-usdc-78",
           usdcMicro: "0",
           valueWei: "0",
-          provenance: "bootstrap-usdc-78/principal",
+          provenance: `bootstrap-usdc-78/principal-eoa-${String(index).padStart(2, "0")}`,
+          suballocationMicro: principal(index),
         },
         refs: { recipient: participant(index), principal: principal(index) },
       },
@@ -122,7 +119,8 @@ function addSafeFunding(add, call, transfer, definition) {
         id: "bootstrap-usdc-78",
         usdcMicro: "0",
         valueWei: "0",
-        provenance: "bootstrap-usdc-78/safe",
+        provenance: "bootstrap-usdc-78/safe-initial",
+        suballocationMicro: "2000000",
       },
     },
   );
@@ -194,14 +192,18 @@ export function addInitialMorpho(add, call, definition) {
         index === 1
           ? [
               resultRef("morpho-request-initial", "unwrapRequestId", "bytes32"),
-              discoveryRef(
+              publicDecryptRef(
                 "morpho-request-initial",
+                "wrapper",
+                "UnwrapRequested",
                 definition.actors.safeParticipant,
                 "clearAmount",
                 "uint64",
               ),
-              discoveryRef(
+              publicDecryptRef(
                 "morpho-request-initial",
+                "wrapper",
+                "UnwrapRequested",
                 definition.actors.safeParticipant,
                 "proof",
                 "bytes",
@@ -256,6 +258,12 @@ export function addInitialBatch(add, call, definition) {
 }
 
 export function addSafeRejoin(add, call, definition) {
+  addSafeRejoinDeposit(add, definition);
+  addSafeRejoinAdmission(add, call, definition);
+  addSafeReinvest(add, call, definition);
+}
+
+function addSafeRejoinDeposit(add, definition) {
   add(
     "safe-rejoin-deposit",
     "deposit",
@@ -263,7 +271,19 @@ export function addSafeRejoin(add, call, definition) {
     "wrapper",
     safeDepositTemplate(definition, "safe-rejoin-deposit", "2000000"),
     ["eoa-00-admit", "initial-batch-finalize-safe"],
+    {
+      allocation: {
+        id: "bootstrap-usdc-78",
+        usdcMicro: "0",
+        valueWei: "0",
+        provenance: "bootstrap-usdc-78/safe-reuse",
+        suballocationMicro: "2000000",
+      },
+    },
   );
+}
+
+function addSafeRejoinAdmission(add, call, definition) {
   add(
     "safe-rejoin-admission",
     "deposit",
@@ -271,12 +291,29 @@ export function addSafeRejoin(add, call, definition) {
     "candidatePool",
     call("finalizeAdmission(address,uint256,bool,bytes)", [
       definition.actors.safeParticipant,
-      resultRef("safe-rejoin-deposit", "admissionNonce", "uint256"),
+      discoveryRef(
+        "safe-rejoin-deposit",
+        "candidatePool",
+        "AdmissionRequested",
+        definition.actors.safeParticipant,
+        "nonce",
+        "uint256",
+      ),
       true,
-      resultRef("safe-rejoin-deposit", "publicProof", "bytes"),
+      publicDecryptRef(
+        "safe-rejoin-deposit",
+        "candidatePool",
+        "AdmissionRequested",
+        definition.actors.safeParticipant,
+        "marker",
+        "bytes",
+      ),
     ]),
     ["safe-rejoin-deposit"],
   );
+}
+
+function addSafeReinvest(add, call, definition) {
   add(
     "safe-delayed-check-b",
     "draw",
@@ -292,5 +329,14 @@ export function addSafeRejoin(add, call, definition) {
     "candidatePool",
     call("claimPrizeToSavings()", []),
     ["safe-delayed-check-b"],
+    {
+      allocation: {
+        id: "bootstrap-usdc-78",
+        usdcMicro: "0",
+        valueWei: "0",
+        provenance: "bootstrap-usdc-78/safe-reinvest",
+        suballocationMicro: "2000000",
+      },
+    },
   );
 }
