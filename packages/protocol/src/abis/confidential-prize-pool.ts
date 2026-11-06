@@ -285,6 +285,45 @@ export const confidentialPrizePoolAbi = [
   },
   {
     type: "event",
+    anonymous: false,
+    name: "AdmissionRequested",
+    inputs: [
+      { indexed: true, name: "account", type: "address" },
+      { indexed: false, name: "nonce", type: "uint256" },
+      { indexed: false, name: "marker", type: "bytes32" },
+    ],
+  },
+  {
+    type: "event",
+    anonymous: false,
+    name: "DrawClosed",
+    inputs: [
+      { indexed: true, name: "drawId", type: "uint256" },
+      { indexed: true, name: "randomTicket", type: "bytes32" },
+      { indexed: true, name: "prizeAmount", type: "bytes32" },
+    ],
+  },
+  {
+    type: "event",
+    anonymous: false,
+    name: "WithdrawalBatchClosed",
+    inputs: [
+      { indexed: true, name: "batchId", type: "uint256" },
+      { indexed: false, name: "total", type: "bytes32" },
+      { indexed: false, name: "morphoRestoreTotal", type: "bytes32" },
+    ],
+  },
+  {
+    type: "event",
+    anonymous: false,
+    name: "MorphoPrincipalUnwrapRequested",
+    inputs: [
+      { indexed: true, name: "unwrapRequestId", type: "bytes32" },
+      { indexed: false, name: "depositCount", type: "uint256" },
+    ],
+  },
+  {
+    type: "event",
     name: "WithdrawalRequested",
     inputs: [
       { indexed: true, name: "account", type: "address" },

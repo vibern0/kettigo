@@ -8,5 +8,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["./zama-data-signer.ts", "./zama-data-signer-core.ts"]
+  "include": ["./zama-data-signer.ts", "./zama-data-signer-core.ts", "./workload-data.ts"]
 }

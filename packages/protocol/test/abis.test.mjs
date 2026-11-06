@@ -73,6 +73,10 @@ const poolFunctionSurface = [
   "encryptedAwardOf",
 ];
 const poolEventSurface = [
+  "AdmissionRequested",
+  "DrawClosed",
+  "WithdrawalBatchClosed",
+  "MorphoPrincipalUnwrapRequested",
   "DrawSnapshotClosed",
   "PrizeChecked",
   "SlotAssigned",
@@ -183,7 +187,13 @@ test("prize proof selectors match the compiled pool artifact", () => {
     const compiled = artifact.find((item) => item.type === "function" && item.name === name);
     assert.deepEqual(shared, portable(compiled), name);
   }
-  for (const name of ["PrizeChecked"]) {
+  for (const name of [
+    "PrizeChecked",
+    "AdmissionRequested",
+    "DrawClosed",
+    "WithdrawalBatchClosed",
+    "MorphoPrincipalUnwrapRequested",
+  ]) {
     const shared = confidentialPrizePoolAbi.find(
       (item) => item.type === "event" && item.name === name,
     );
