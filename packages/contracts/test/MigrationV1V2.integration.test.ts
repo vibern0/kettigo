@@ -3,6 +3,8 @@ import { ethers, fhevm } from "hardhat";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { captureMembershipProof, checkCapturedPrize } from "./proofHelper";
 import {
+  admit,
+  deposit,
   expectNamespaceUnchanged,
   readUint64,
   settleClosed,
@@ -95,20 +97,6 @@ describe("v1 to v2 voluntary migration", function () {
     };
   }
 
-  async function deposit(wrapper: any, pool: any, user: any, amount: bigint, data = "0x") {
-    const input = await fhevm
-      .createEncryptedInput(await wrapper.getAddress(), user.address)
-      .add64(amount)
-      .encrypt();
-    const userWrapper = wrapper.connect(user);
-    await userWrapper["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](
-      await pool.getAddress(),
-      input.handles[0],
-      input.inputProof,
-      data,
-    );
-  }
-
   async function fundPrize(wrapper: any, pool: any, owner: any, amount: bigint) {
     const input = await fhevm
       .createEncryptedInput(await wrapper.getAddress(), owner.address)
@@ -125,12 +113,6 @@ describe("v1 to v2 voluntary migration", function () {
       input.inputProof,
       data,
     );
-  }
-
-  async function admit(pool: any, account: string) {
-    const pending = await pool.pendingAdmissionOf(account);
-    const decrypted = await fhevm.publicDecrypt([pending.marker]);
-    await pool.finalizeAdmission(account, pending.nonce, true, decrypted.decryptionProof);
   }
 
   async function requestWithdrawal(pool: any, user: any, amount: bigint) {

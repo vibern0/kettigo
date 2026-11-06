@@ -96,25 +96,33 @@ export function expectNamespaceUnchanged(before: any, after: any) {
   expect(after).to.deep.equal(before);
 }
 
+export async function deposit(wrapper: any, pool: any, user: any, amount: bigint, data = "0x") {
+  const input = await fhevm
+    .createEncryptedInput(await wrapper.getAddress(), user.address)
+    .add64(amount)
+    .encrypt();
+  const userWrapper = wrapper.connect(user);
+  await userWrapper["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](
+    await pool.getAddress(),
+    input.handles[0],
+    input.inputProof,
+    data,
+  );
+}
+
+export async function admit(pool: any, account: string) {
+  const pending = await pool.pendingAdmissionOf(account);
+  const decrypted = await fhevm.publicDecrypt([pending.marker]);
+  await pool.finalizeAdmission(account, pending.nonce, true, decrypted.decryptionProof);
+}
+
 export async function usdcDepositForV2(fresh: any, user: any, amount: bigint) {
   const usdc = await ethers.getContractAt("MockUSDC", await fresh.wrapper.underlying());
   await usdc.connect(user).faucet(user.address, amount);
   await usdc.connect(user).approve(await fresh.wrapper.getAddress(), amount);
   await fresh.wrapper.connect(user).wrap(user.address, amount);
-  const input = await fhevm
-    .createEncryptedInput(await fresh.wrapper.getAddress(), user.address)
-    .add64(amount)
-    .encrypt();
-  const userWrapper = fresh.wrapper.connect(user);
-  await userWrapper["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](
-    await fresh.pool.getAddress(),
-    input.handles[0],
-    input.inputProof,
-    "0x",
-  );
-  const pending = await fresh.pool.pendingAdmissionOf(user.address);
-  const decrypted = await fhevm.publicDecrypt([pending.marker]);
-  await fresh.pool.finalizeAdmission(user.address, pending.nonce, true, decrypted.decryptionProof);
+  await deposit(fresh.wrapper, fresh.pool, user, amount);
+  await admit(fresh.pool, user.address);
 }
 
 export async function settleClosed(pool: any, batchId: bigint) {
