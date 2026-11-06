@@ -34,6 +34,8 @@ The two interface renames are compile-isolation only: Aderyn reports duplicate
 contract names when the archived fixture and current pool declare the same
 file-local interface names. Their inheritance, function signatures, every
 reference, storage behavior, participant cap, draw loop, and withdrawal
-lifecycle remain from the pinned object. The resulting fixture blob is
+lifecycle remain from the pinned object. Prettier also makes one whitespace-only
+line-wrap change to `_requireMorphoYieldAdapter`'s return signature; it does
+not alter tokens, ABI, or runtime behavior. The resulting fixture blob is
 `f3428beb4b346c94ed7f211ecb58a37b291001bf`; its SHA-256 is
 `5330e5fd4cb8dcc1c6f3c03c3019ae1bb267858e55cfe5f4b1452bbe942a7df6`.
