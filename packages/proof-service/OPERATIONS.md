@@ -4,6 +4,27 @@ The Worker uses only the dedicated D1 database `kettigo-proof-v2-sepolia`
 (`60fc25ef-1686-4c1a-b8b4-604456d00bdb`) through `PROOF_DB`. It must never be
 pointed at the application/waitlist database.
 
+## Candidate readiness record
+
+This configuration is ready for a candidate namespace but is not configured
+for a candidate pool yet. `wrangler.jsonc` contains no pool address, deployment
+block, or RPC credential; those values must come from the verified candidate
+deployment manifest. It is therefore safe for source/build verification but
+cannot ingest or serve candidate proofs before manifest population.
+
+The later release manifest must supply these unresolved runtime values without
+recording their secret contents: `CHAIN_ID`, `POOL_ADDRESS`, `TREE_DEPTH`,
+`ZERO_HANDLE`, `EMPTY_HASHES_JSON`, `DEPLOYMENT_BLOCK`, `PRIMARY_RPC_URL`,
+`HISTORICAL_RPC_URL`, `ALLOWED_ORIGINS`, and the optional `OPERATOR_BEARER`.
+`POOL_ADDRESS` must be a checksummed Sepolia candidate-pool address and must
+never name a legacy pool or the retention-canary pool.
+
+Local readiness evidence recorded on 2026-11-06: pnpm 10.11.1 frozen offline
+install completed; Worker tests passed (52); retained restore tests passed
+(23); RPC-backfill tests passed (14); both TypeScript checks passed; and
+Wrangler 4.149.0 completed a dry-run build. None of these checks deployed the
+Worker, changed D1, or contacted a candidate RPC namespace.
+
 ## Before deployment
 
 Set `CHAIN_ID`, checksum `POOL_ADDRESS`, `TREE_DEPTH`, `ZERO_HANDLE`,
