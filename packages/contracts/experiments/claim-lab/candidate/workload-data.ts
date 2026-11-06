@@ -1,8 +1,9 @@
-import { decodeEventLog, getAddress, type Address, type Hex } from "viem";
+import { decodeEventLog, encodeAbiParameters, getAddress, type Address, type Hex } from "viem";
 
 import { confidentialPrizePoolAbi, confidentialUsdcAbi } from "../../../../protocol/src/index.ts";
-// @ts-expect-error The accepted graph is authored as checked JavaScript.
-import { workloadFingerprint } from "./eoa-workload-definition.mjs";
+// prettier-ignore
+// @ts-ignore The accepted graph is authored as checked JavaScript.
+import { validateCompiledCandidateWorkload, workloadFingerprint } from "./eoa-workload-definition.mjs";
 
 type Sdk = {
   encrypt(input: {
@@ -150,7 +151,38 @@ export async function decryptPublic(input: {
       throw new Error("workload data: public decrypt missing handle");
     return clearUint(result.clearValues[handle], "public clear value");
   });
-  return { values, proof: bytes(result.decryptionProof, "decryption proof") };
+  const proof = proofBytes(result.decryptionProof);
+  const encoded = encodeAbiParameters(
+    handles.map(() => ({ type: "uint64" as const })),
+    values.map((value) => BigInt(value)),
+  );
+  if (bytes(result.abiEncodedClearValues, "ABI clear values") !== encoded)
+    throw new Error("workload data: public clear values do not match ABI encoding");
+  return { values, proof };
+}
+
+export async function decryptPublicMarker(input: {
+  sdk: Pick<Sdk, "decryption">;
+  handle: Hex;
+}): Promise<{ value: boolean; proof: Hex }> {
+  if (!input.sdk.decryption) throw new Error("workload data: public decryption unavailable");
+  const handle = h32(input.handle, "marker handle");
+  const result = await input.sdk.decryption.decryptPublicValues([handle]);
+  if (!Object.hasOwn(result.clearValues, handle) || typeof result.clearValues[handle] !== "boolean")
+    throw new Error("workload data: invalid marker clear value");
+  const value = result.clearValues[handle] as boolean;
+  if (
+    bytes(result.abiEncodedClearValues, "marker ABI clear value") !==
+    encodeAbiParameters([{ type: "bool" }], [value])
+  )
+    throw new Error("workload data: marker ABI clear value mismatch");
+  return { value, proof: proofBytes(result.decryptionProof) };
+}
+
+function proofBytes(value: unknown): Hex {
+  const proof = bytes(value, "decryption proof");
+  if (proof === "0x") throw new Error("workload data: empty decryption proof");
+  return proof;
 }
 
 /** Resolves only the graph's encryption inputs and matching proofs. Receipt and proof evidence stays injected. */
@@ -158,9 +190,9 @@ export async function resolveSdkReferences(input: {
   compiled: { actions: Action[]; definition: { contracts: Record<string, string> } };
   actionId: string;
   sdk: Sdk;
-  readCurrentPrincipal?: (reference: Reference) => Promise<Hex>;
 }): Promise<readonly ResolvedReference[]> {
-  const action = actionFor(input.compiled, input.actionId),
+  const compiled = validateCompiledCandidateWorkload(input.compiled),
+    action = actionFor(compiled, input.actionId),
     result: ResolvedReference[] = [],
     inputs = new Map<string, { ref: Reference; value: { handle: Hex; proof: Hex } }>();
   for (const ref of refs(action.operation)) {
@@ -169,18 +201,13 @@ export async function resolveSdkReferences(input: {
       (ref.amount as Reference | undefined)?.kind === "currentPrincipal"
         ? (ref.amount as Reference)
         : undefined;
-    const contract = principal
-      ? addr(principal.contract, "principal contract")
-      : roleContract(input.compiled, ref);
+    if (principal) throw new Error("workload data: current principal requires pinned evidence");
+    const contract = roleContract(compiled, ref);
     if (!contract) throw new Error("workload data: SDK input has no contract");
-    const actor = principal
-      ? addr(principal.account, "principal account")
-      : addr(ref.actor, "SDK actor");
-    const amount = principal
-      ? await resolveCurrentPrincipal(input.sdk, principal, contract, input.readCurrentPrincipal)
-      : decimal(ref.amount, "SDK amount", UINT64_MAX);
+    const actor = addr(ref.actor, "SDK actor");
+    const amount = decimal(ref.amount, "SDK amount", UINT64_MAX);
     const value = await resolveSdkInput({ sdk: input.sdk, contract, actor, amount });
-    const scope = scopeFor(input.compiled, action, ref, contract, {
+    const scope = scopeFor(compiled, action, ref, contract, {
       producer: ref.producer,
       contractRole: ref.contractRole,
       actor,
@@ -199,22 +226,11 @@ export async function resolveSdkReferences(input: {
         Object.freeze({
           reference: ref,
           value: paired.value.proof,
-          scope: scopeFor(input.compiled, action, ref, null, { inputReference: paired.ref }),
+          scope: scopeFor(compiled, action, ref, null, { inputReference: paired.ref }),
         }),
       );
     }
   return Object.freeze(result);
-}
-
-async function resolveCurrentPrincipal(
-  sdk: Sdk,
-  ref: Reference,
-  pool: Address,
-  reader?: (reference: Reference) => Promise<Hex>,
-) {
-  if (!reader) throw new Error("workload data: current principal reader unavailable");
-  const handle = await reader(ref);
-  return decryptOwnedUint64({ sdk, handle: h32(handle, "principal handle"), pool });
 }
 
 export type CanonicalReceipt = Readonly<{
