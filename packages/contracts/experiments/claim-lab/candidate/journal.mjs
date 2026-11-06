@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
+import { Buffer } from "node:buffer";
 import { join } from "node:path";
 import { acquireLease, assertLease, persist, releaseLease } from "./persistence.mjs";
 import { findIntent, serializeReceipt, validateReceipt } from "./receipt.mjs";
@@ -54,6 +55,7 @@ function newState(envelope, identity) {
     safePolicy: null,
     safePolicyIdentity: null,
     workloadDefinition: null,
+    actionResults: [],
     startedAt: null,
     deadlineAt: null,
     budget: budgetZero(),
@@ -133,6 +135,16 @@ export class CandidateRunJournal {
   workloadDefinition() {
     return this.state.workloadDefinition ? clone(this.state.workloadDefinition) : null;
   }
+  actionResult(actionId) {
+    const result = this.state.actionResults.find((entry) => entry.actionId === actionId);
+    return result ? clone(result) : undefined;
+  }
+  actionResults() {
+    return clone(this.state.actionResults);
+  }
+  journalBytes() {
+    return Buffer.byteLength(JSON.stringify(this.state));
+  }
 
   async bindWorkloadDefinition(binding) {
     return this.#mutate(async () => {
@@ -148,6 +160,23 @@ export class CandidateRunJournal {
       proposed.workloadDefinition = clone(canonicalBinding);
       await this.#commit(proposed);
       return clone(proposed.workloadDefinition);
+    });
+  }
+  async recordActionResult(actionId, result) {
+    return this.#mutate(async () => {
+      const workload = this.state.workloadDefinition;
+      if (!workload) fail("workload definition required");
+      const action = workload.actions.find((entry) => entry.id === actionId);
+      if (!action || !validActionResult(result, actionId)) fail("invalid action result");
+      const existing = this.state.actionResults.find((entry) => entry.actionId === actionId);
+      if (existing) {
+        if (canonical(existing) !== canonical(result)) fail("action result replacement refused");
+        return clone(existing);
+      }
+      const proposed = clone(this.state);
+      proposed.actionResults.push(clone(result));
+      await this.#commit(proposed);
+      return clone(result);
     });
   }
   async close() {
@@ -369,6 +398,22 @@ export class CandidateRunJournal {
     });
     this.tail = next.catch(() => {});
     return next;
+  }
+}
+
+function validActionResult(result, actionId) {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    result.actionId !== actionId ||
+    !["canonical-success", "conditional-SKIPPED"].includes(result.kind)
+  )
+    return false;
+  try {
+    return Buffer.byteLength(JSON.stringify(result)) <= 65_536;
+  } catch {
+    return false;
   }
 }
 

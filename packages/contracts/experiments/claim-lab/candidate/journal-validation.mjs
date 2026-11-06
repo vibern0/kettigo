@@ -97,7 +97,34 @@ function validStateMetadata(state) {
     !state.safePolicy || state.safePolicyIdentity === state.safePolicy.policyIdentity;
   const noDanglingIdentity =
     state.safePolicy || state.safePolicyIdentity === undefined || state.safePolicyIdentity === null;
-  return validPolicy && validPolicyIdentity && validWorkload && policyMatches && noDanglingIdentity;
+  const actionResults = state.actionResults === undefined || validActionResults(state);
+  return (
+    validPolicy &&
+    validPolicyIdentity &&
+    validWorkload &&
+    actionResults &&
+    policyMatches &&
+    noDanglingIdentity
+  );
+}
+
+function validActionResults(state) {
+  if (!Array.isArray(state.actionResults)) return false;
+  if (state.actionResults.length > 512) return false;
+  const actions = new Set((state.workloadDefinition?.actions ?? []).map((action) => action.id));
+  return (
+    new Set(state.actionResults.map((result) => result?.actionId)).size ===
+      state.actionResults.length &&
+    state.actionResults.every(
+      (result) =>
+        result &&
+        typeof result === "object" &&
+        !Array.isArray(result) &&
+        actions.has(result.actionId) &&
+        ["canonical-success", "conditional-SKIPPED"].includes(result.kind) &&
+        JSON.stringify(result).length <= 65_536,
+    )
+  );
 }
 
 function validWorkloadDefinition(value) {

@@ -1,6 +1,34 @@
 # Merkle + FHE integration progress — 6 November 2026
 
-## Scoped resume: cleanup and SDK/evidence integration
+## Scoped resume: executable workload driver
+
+The executable finite workload driver is now complete at the source/local
+acceptance boundary. [PR #52](https://github.com/vibern0/kettigo/pull/52)
+remains a draft.
+
+- **Journal-authoritative execution:** the new driver reads only the bound
+  workload definition, reconciles every saved intent before scheduling work
+  (including terminal intents), persists immutable action results, and runs an
+  action only after every dependency has a durable result. Conditional claim
+  outcomes are persisted before later dependent work can proceed.
+- **Finite recovery and reporting:** unresolved submissions remain pending for
+  the rest of the run rather than being re-submitted; non-EOA actions remain
+  blocked for the later Safe/browser step. The runner reports completed,
+  submitted, unresolved, failed, blocked, backlog, and measured journal-byte
+  counts. Its sanitized report formatter omits transaction payloads, signatures,
+  and provider details. Journal action results are bounded and the driver refuses
+  to continue once the journal size reaches its configured limit.
+- **Fresh validation:** all **194** candidate tests passed with no failures,
+  cancellations, or skips. Candidate TypeScript checks passed. The focused
+  driver tests cover terminal-intent recovery, persisted conditional skips,
+  dependency barriers, and duplicate suppression within a single run.
+
+The immediate next implementation work is constrained Safe ACL and browser
+budget attachment. Deployment, funding, financial signatures, live runs, and
+application/browser exercise remain out of scope for this completed step. The
+whole-PR quality gate remains open as described below.
+
+## Previous scoped resume: cleanup and SDK/evidence integration
 
 The user resumed only the first two immediate next steps, using parallel
 GPT-5.6 medium agents. [PR #52](https://github.com/vibern0/kettigo/pull/52)
@@ -51,9 +79,10 @@ evidence. Wiring that authority into an executable, recovering workload driver
 is a later step. No deployment, funding, financial signature, live run, or
 application/browser exercise was resumed. The retention canary is untouched.
 
-The next implementation work after these two steps is the executable finite
-workload driver, followed by constrained Safe/browser attachment and concrete
-deployment/run readiness. The original spending envelope remains unchanged.
+The next implementation work after these two steps was the executable finite
+workload driver. It is now complete as recorded above; constrained Safe/browser
+attachment and concrete deployment/run readiness remain. The original spending
+envelope remains unchanged.
 
 ## Historical stopped checkpoint
 
