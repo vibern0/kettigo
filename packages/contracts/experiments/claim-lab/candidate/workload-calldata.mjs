@@ -39,11 +39,13 @@ const fail = (message) => {
   throw new Error(`candidate workload calldata: ${message}`);
 };
 const hex = (value, label, bytes) => {
-  if (typeof value !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) fail(`invalid ${label}`);
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]*$/.test(value) || value.length % 2)
+    fail(`invalid ${label}`);
   if (bytes !== undefined && value.length !== 2 + bytes * 2) fail(`invalid ${label} width`);
   return value.toLowerCase();
 };
 const uint = (value, label, maximum = 2n ** 256n - 1n) => {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) fail(`invalid ${label}`);
   try {
     const result = BigInt(value);
     if (result < 0n || result > maximum) throw new Error();
@@ -212,6 +214,7 @@ class RecordIndex {
       return { ...record, used: false };
     });
     this.proofBundles = new Map();
+    this.sdkInputs = new Set();
   }
 
   take(reference, action, workload) {
@@ -220,30 +223,59 @@ class RecordIndex {
     );
     if (matches.length !== 1) fail("unresolved reference or mixed provenance");
     const record = matches[0];
-    const scope = record.scope;
-    if (
-      !scope ||
-      typeof scope !== "object" ||
-      scope.actionId !== action.id ||
-      scope.workloadFingerprint !== workloadFingerprint(workload)
-    )
-      fail("resolved reference has wrong scope");
-    if (reference.kind === "sdkInput") {
-      if (
-        scope.producer !== reference.producer ||
-        scope.contractRole !== reference.contractRole ||
-        scope.actor !== reference.actor
-      )
-        fail("SDK input provenance mismatch");
-      if (
-        reference.amount?.kind === "currentPrincipal" &&
-        canonical(scope.currentPrincipal) !== canonical(reference.amount)
-      )
-        fail("current principal provenance mismatch");
-    }
+    const scope = this.#scope(reference, record.scope, action, workload);
+    if (reference.kind === "sdkInput") this.#sdkInput(reference, scope, workload);
+    if (reference.kind === "sdkProof") this.#sdkProof(reference, scope, action);
     if (reference.kind === "historicalProof") this.#proofScope(reference, scope, action.id);
     record.used = true;
+    if (reference.kind === "sdkInput") this.sdkInputs.add(canonical(reference));
     return record;
+  }
+
+  #scope(reference, scope, action, workload) {
+    if (!scope || typeof scope !== "object" || Array.isArray(scope))
+      fail("resolved reference has wrong scope");
+    if (scope.actionId !== action.id || scope.workloadFingerprint !== workloadFingerprint(workload))
+      fail("resolved reference has wrong scope");
+    if (canonical(scope.reference) !== canonical(reference))
+      fail("resolved reference provenance mismatch");
+    const expectedContract = reference.contractRole
+      ? workload.definition.contracts[reference.contractRole]
+      : null;
+    if (scope.contract !== expectedContract) fail("resolved reference contract mismatch");
+    return scope;
+  }
+
+  #sdkInput(reference, scope, workload) {
+    if (
+      scope.producer !== reference.producer ||
+      scope.contractRole !== reference.contractRole ||
+      scope.actor !== reference.actor ||
+      scope.purpose !== reference.purpose
+    )
+      fail("SDK input provenance mismatch");
+    const principal = reference.amount?.kind === "currentPrincipal" ? reference.amount : null;
+    if (principal && canonical(scope.currentPrincipal) !== canonical(principal))
+      fail("current principal provenance mismatch");
+    const encryption = {
+      contract: principal?.contract ?? workload.definition.contracts[reference.contractRole],
+      actor: principal?.account ?? reference.actor,
+      type: "euint64",
+    };
+    if (canonical(scope.encryption) !== canonical(encryption))
+      fail("SDK input encryption mismatch");
+  }
+
+  #sdkProof(reference, scope, action) {
+    const input = references(action.operation).find(
+      (entry) => entry.kind === "sdkInput" && entry.producer === reference.producer,
+    );
+    if (
+      !input ||
+      canonical(scope.inputReference) !== canonical(input) ||
+      !this.sdkInputs.has(canonical(input))
+    )
+      fail("SDK proof input pairing mismatch");
   }
 
   #proofScope(reference, scope, actionId) {
@@ -264,4 +296,13 @@ class RecordIndex {
   assertConsumed() {
     if (this.records.some((record) => !record.used)) fail("unrelated resolved reference");
   }
+}
+
+function references(value, found = []) {
+  if (Array.isArray(value)) value.forEach((entry) => references(entry, found));
+  else if (value && typeof value === "object") {
+    if (typeof value.kind === "string") found.push(value);
+    else Object.values(value).forEach((entry) => references(entry, found));
+  }
+  return found;
 }
