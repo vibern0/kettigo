@@ -8,8 +8,8 @@ const webConfig = JSON.parse(webWrangler);
 const publicRuntimeVars = [
   ["NEXT_PUBLIC_CHAIN_ID", "11155111"],
   ["NEXT_PUBLIC_RPC_URL", "https://ethereum-sepolia-rpc.publicnode.com"],
-  ["NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS", "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b"],
-  ["NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS", "0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a"],
+  ["NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS", "0x30530991e296a663a32567C170b290fB88578408"],
+  ["NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS", "0xe64c1836b96253104a753E60188f691173Ded624"],
   ["NEXT_PUBLIC_PASSKEY_RP_NAME", "Kettigo"],
   ["NEXT_PUBLIC_USDC_ADDRESS", "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"],
 ];
@@ -52,5 +52,5 @@ test("Worker previews use their workers.dev account domain as the passkey relyin
 test("web Worker schedules only the lightweight keeper dispatcher", () => {
   assert.deepEqual(webConfig.triggers?.crons, ["*/5 * * * *"]);
   assert.equal(webWrangler.split('"DRAW_KEEPER_MINIMUM_PRIZE": "1000000"').length, 3);
-  assert.equal(webWrangler.split('"MORPHO_KEEPER_START_BLOCK": "11864127"').length, 3);
+  assert.equal(webWrangler.split('"MORPHO_KEEPER_START_BLOCK": "12078643"').length, 3);
 });

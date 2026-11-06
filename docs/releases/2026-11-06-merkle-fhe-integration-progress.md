@@ -23,10 +23,11 @@ remains a draft.
   driver tests cover terminal-intent recovery, persisted conditional skips,
   dependency barriers, and duplicate suppression within a single run.
 
-The immediate next implementation work is constrained Safe ACL and browser
-budget attachment. Deployment, funding, financial signatures, live runs, and
-application/browser exercise remain out of scope for this completed step. The
-whole-PR quality gate remains open as described below.
+Fresh candidate contracts are deployed and their checksum addresses plus
+runtime bytecode hashes are recorded in the candidate manifest. The next
+actions are candidate proof-Worker configuration/deployment, app deployment
+with the candidate scope, and a bounded lifecycle run. The whole-PR quality
+gate remains open as described below.
 
 ## Previous scoped resume: cleanup and SDK/evidence integration
 
@@ -80,9 +81,10 @@ is a later step. No deployment, funding, financial signature, live run, or
 application/browser exercise was resumed. The retention canary is untouched.
 
 The next implementation work after these two steps was the executable finite
-workload driver. It is now complete as recorded above; constrained Safe/browser
-attachment and concrete deployment/run readiness remain. The original spending
-envelope remains unchanged.
+workload driver. It is now complete as recorded above. The constrained
+Safe/browser attachment was deliberately not implemented; concrete
+deployment/run readiness remains. The original spending envelope remains
+unchanged.
 
 ## Historical stopped checkpoint
 
@@ -198,30 +200,18 @@ and review reports retain the detailed execution history. They are not staged.
 
 ## Still pending, in order
 
-1. Verify and finish the stopped pinned-reader cleanup; retain its complete
-   dependency and historical skip checks. Recheck the current code before reuse.
-2. Complete the closed canonical event-to-reference resolver and historical proof
-   bundle adapter. Cover withdrawal batch IDs, receipt/log identity, unwrap
-   correlation, positive admission and exact draw-close log positions.
-3. Complete graph-bound conditional credit evidence for EOA and Safe owned reads.
-   The existing placeholder condition helper is not an accepted skip authority.
-   Run the combined SDK/evidence task review after these pieces are complete.
-4. Implement the executable finite workload driver: recovery of all saved intents,
-   including terminals; conditional results in the existing journal; complete
-   failure/timeout metrics; sanitized CLI; and measured journal-size gates.
-5. Implement and test constrained Safe ACL prefixes and the private browser budget
-   attachment, including genuine Confirm ordering, SDK wire equivalence and stop
-   behavior. The public delegate/expiry handoff design still needs actual frozen-
-   build preflight. Standalone access grants are outside the declared workload.
-6. Prepare the final deployment manifest and concrete run readiness. Obtain any
-   necessary amendment to the Safe fee envelope before financial execution.
-7. Deploy/verify fresh Sepolia candidate contracts, configure/deploy the proof
-   Worker and app, and run the bounded live lifecycle/capacity/recovery tests.
-   Exercise actual retained restore, separate RPC backfill, failover, rollback,
-   checkpoint lag and platform limits. Report assisted operation honestly.
-8. Complete the whole-branch review, final validation **here on local main**,
+1. Configure and deploy the proof Worker for the new candidate pool, including
+   its deployment block, tree parameters, RPC sources, allowed origins, and
+   retained namespace record.
+2. Deploy the app with the candidate scope and proof-service URL, while retaining
+   legacy scope routing for earlier positions.
+3. Run the bounded lifecycle/capacity/recovery exercise. This includes a funded
+   end-to-end flow, Worker ingestion and proof retrieval, retained restore,
+   independent RPC backfill/failover, rollback, checkpoint lag, and platform
+   limits. Report assisted operation honestly.
+4. Complete the whole-branch review, final validation **here on local main**,
    explicit 4,096-account scenario, sanitized build and deployment checks,
-   Codacy PR gates/blocked-Cloud report, and then open the PR. No merge is authorized.
+   Codacy PR gates/blocked-Cloud report, and PR readiness. No merge is authorized.
 
 ## Execution note
 
