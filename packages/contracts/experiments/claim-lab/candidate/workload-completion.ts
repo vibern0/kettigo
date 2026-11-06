@@ -1,5 +1,7 @@
-import { getAddress, type Address, type Hex } from "viem";
+import { type Address, type Hex } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
+import { canonical } from "./journal-values.mjs";
+import { addr, decimal, h32 } from "./workload-values.ts";
 
 export type CanonicalDecimalString = string;
 export type CanonicalDependency =
@@ -51,29 +53,12 @@ export type CompletionAction = Readonly<{
 export const FIXED_ENTRY_POINT_07 = getAddress(entryPoint07Address);
 export const ZERO_HANDLE = `0x${"00".repeat(32)}` as Hex;
 
-export const h32 = (value: unknown, label: string): Hex => {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value))
-    throw new Error(`workload data: invalid ${label}`);
-  return value.toLowerCase() as Hex;
-};
-export const addr = (value: unknown, label: string): Address => {
-  try {
-    return getAddress(value as Address);
-  } catch {
-    throw new Error(`workload data: invalid ${label}`);
-  }
-};
-export const decimal = (value: unknown, label: string): string => {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value))
-    throw new Error(`workload data: invalid ${label}`);
-  return value;
-};
+export { addr, decimal, h32 } from "./workload-values.ts";
 export const pin = (value: unknown, label: string) => {
   const record = value as PinnedRead;
   return { number: BigInt(decimal(record?.number, label)), hash: h32(record?.hash, label) };
 };
 
-const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 const conditionalId = (id: string) =>
   /^claim-stage(?:8|33)-eoa-[0-9]{2}$/.test(id) || id === "safe-conditional-wallet-claim";
 
@@ -115,13 +100,14 @@ export async function validateCompletion(input: {
 }): Promise<void> {
   const { observed, action, actions, compiled, pool, principalPin } = input;
   const saved = await input.completionFor(action.id);
-  if (!saved || !same(observed, saved) || observed.actionId !== action.id)
+  if (!saved || canonical(observed) !== canonical(saved) || observed.actionId !== action.id)
     throw new Error("workload data: untrusted dependency completion");
   if (observed.kind === "canonical-success")
     return validateCanonicalDependency(observed.evidence, action, principalPin.number);
   const evidence = observed.evidence;
   if (
     observed.kind !== "conditional-SKIPPED" ||
+    !["user-decrypt", "uninitialized-zero-handle"].includes(evidence.resolution) ||
     !conditionalId(action.id) ||
     evidence.actionId !== action.id ||
     h32(evidence.workloadFingerprint, "conditional fingerprint") !==

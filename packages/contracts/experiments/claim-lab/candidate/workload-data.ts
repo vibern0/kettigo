@@ -1,4 +1,4 @@
-import { decodeEventLog, encodeAbiParameters, getAddress, type Address, type Hex } from "viem";
+import { decodeEventLog, encodeAbiParameters, type Address, type Hex } from "viem";
 
 import { confidentialPrizePoolAbi, confidentialUsdcAbi } from "../../../../protocol/src/index.ts";
 import {
@@ -9,6 +9,7 @@ import {
   resolvePinnedCurrentPrincipal,
   type PinnedCurrentPrincipalInput,
 } from "./workload-principal.ts";
+import { addr, bytes, decimal, h32, refs, scope, UINT64_MAX } from "./workload-values.ts";
 
 export type {
   CanonicalDecimalString,
@@ -53,31 +54,6 @@ export type ResolvedReference = Readonly<{
   value: RecordValue;
   scope: Record<string, unknown>;
 }>;
-const UINT64_MAX = (1n << 64n) - 1n;
-const h32 = (value: unknown, label: string): Hex => {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value))
-    throw new Error(`workload data: invalid ${label}`);
-  return value.toLowerCase() as Hex;
-};
-const bytes = (value: unknown, label: string): Hex => {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]*$/.test(value) || value.length % 2)
-    throw new Error(`workload data: invalid ${label}`);
-  return value.toLowerCase() as Hex;
-};
-const addr = (value: unknown, label: string): Address => {
-  try {
-    return getAddress(value as Address);
-  } catch {
-    throw new Error(`workload data: invalid ${label}`);
-  }
-};
-const decimal = (value: unknown, label: string, max = (1n << 256n) - 1n): string => {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value))
-    throw new Error(`workload data: invalid ${label}`);
-  const parsed = BigInt(value);
-  if (parsed > max) throw new Error(`workload data: invalid ${label}`);
-  return value;
-};
 const clearUint = (value: unknown, label: string): string => {
   if (typeof value !== "bigint" || value < 0n || value > UINT64_MAX)
     throw new Error(`workload data: invalid ${label}`);
@@ -87,15 +63,6 @@ const nonzeroH32 = (value: unknown, label: string): Hex => {
   const result = h32(value, label);
   if (result === `0x${"00".repeat(32)}`) throw new Error(`workload data: invalid ${label}`);
   return result;
-};
-const refs = (value: unknown, found: Reference[] = []): Reference[] => {
-  if (Array.isArray(value)) value.forEach((entry) => refs(entry, found));
-  else if (value && typeof value === "object") {
-    const record = value as Reference;
-    if (typeof record.kind === "string") found.push(record);
-    else Object.values(record).forEach((entry) => refs(entry, found));
-  }
-  return found;
 };
 const actionFor = (compiled: { actions: Action[] }, actionId: string) => {
   const action = compiled.actions.find((entry) => entry.id === actionId);
@@ -110,20 +77,6 @@ const roleContract = (
   ref.contractRole
     ? addr(compiled.definition.contracts[String(ref.contractRole)], "reference contract")
     : null;
-const scopeFor = (
-  compiled: unknown,
-  action: Action,
-  ref: Reference,
-  contract: Address | null,
-  extra: Record<string, unknown> = {},
-) =>
-  Object.freeze({
-    actionId: action.id,
-    workloadFingerprint: workloadFingerprint(compiled),
-    reference: ref,
-    contract,
-    ...extra,
-  });
 
 /** One euint64 encryption; this data-only helper never gains a write route. */
 export async function resolveSdkInput(input: {
@@ -231,10 +184,13 @@ export async function resolveSdkReferences(input: {
   ) {
     if (!input.pinnedCurrentPrincipal)
       throw new Error("workload data: current principal requires pinned evidence");
+    const { pinnedRead, dependencyCompletions, authority } = input.pinnedCurrentPrincipal;
     return resolvePinnedCurrentPrincipal({
+      pinnedRead,
+      dependencyCompletions,
+      authority,
       compiled,
       actionId: input.actionId,
-      ...input.pinnedCurrentPrincipal,
     });
   }
   return staticSdkReferences(compiled, action, input.sdk);
@@ -258,7 +214,7 @@ async function staticSdkReferences(
     const actor = addr(ref.actor, "SDK actor");
     const amount = decimal(ref.amount, "SDK amount", UINT64_MAX);
     const value = await resolveSdkInput({ sdk, contract, actor, amount });
-    const scope = scopeFor(compiled, action, ref, contract, {
+    const recordScope = scope(workloadFingerprint(compiled), action.id, ref, contract, {
       producer: ref.producer,
       contractRole: ref.contractRole,
       actor,
@@ -266,7 +222,7 @@ async function staticSdkReferences(
       ...(principal ? { currentPrincipal: principal } : {}),
       encryption: { contract, actor, type: "euint64" },
     });
-    result.push(Object.freeze({ reference: ref, value: value.handle, scope }));
+    result.push(Object.freeze({ reference: ref, value: value.handle, scope: recordScope }));
     inputs.set(String(ref.producer), { ref, value });
   }
   for (const ref of refs(action.operation))
@@ -277,14 +233,15 @@ async function staticSdkReferences(
         Object.freeze({
           reference: ref,
           value: paired.value.proof,
-          scope: scopeFor(compiled, action, ref, null, { inputReference: paired.ref }),
+          scope: scope(workloadFingerprint(compiled), action.id, ref, null, {
+            inputReference: paired.ref,
+          }),
         }),
       );
     }
   return Object.freeze(result);
 }
 
-/* Retired in favor of the closed completion/principal modules. Kept in history, not runtime. */
 /* export type PinnedCurrentPrincipalInput = Readonly<{
   compiled: { actions: Action[]; definition: { contracts: Record<string, string> } };
   actionId: string;

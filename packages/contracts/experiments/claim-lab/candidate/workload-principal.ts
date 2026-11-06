@@ -1,16 +1,15 @@
-import { getAddress, type Address, type Hex } from "viem";
+import { type Address, type Hex } from "viem";
 import {
   validateCompiledCandidateWorkload,
   workloadFingerprint,
 } from "./eoa-workload-definition.mjs";
 import {
-  decimal,
-  h32,
   pin,
   type DependencyCompletion,
   type PinnedRead,
   validateCompletion,
 } from "./workload-completion.ts";
+import { addr, bytes, h32, refs, scope, UINT64_MAX } from "./workload-values.ts";
 
 type Reference = Record<string, unknown>;
 type Action = {
@@ -46,42 +45,6 @@ export type PinnedCurrentPrincipalInput = Readonly<{
   authority: CurrentPrincipalReadAuthority;
 }>;
 
-const UINT64_MAX = (1n << 64n) - 1n;
-const addr = (value: unknown, label: string) => {
-  try {
-    return getAddress(value as Address);
-  } catch {
-    throw new Error(`workload data: invalid ${label}`);
-  }
-};
-const bytes = (value: unknown, label: string): Hex => {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]*$/.test(value) || value.length % 2)
-    throw new Error(`workload data: invalid ${label}`);
-  return value.toLowerCase() as Hex;
-};
-const refs = (value: unknown, found: Reference[] = []): Reference[] => {
-  if (Array.isArray(value)) value.forEach((entry) => refs(entry, found));
-  else if (value && typeof value === "object") {
-    const record = value as Reference;
-    if (typeof record.kind === "string") found.push(record);
-    else Object.values(record).forEach((entry) => refs(entry, found));
-  }
-  return found;
-};
-const scope = (
-  compiled: unknown,
-  action: Action,
-  ref: Reference,
-  contract: Address | null,
-  extra: Record<string, unknown> = {},
-) =>
-  Object.freeze({
-    actionId: action.id,
-    workloadFingerprint: workloadFingerprint(compiled),
-    reference: ref,
-    contract,
-    ...extra,
-  });
 const clear = (value: unknown) => {
   if (typeof value !== "bigint" || value < 0n || value > UINT64_MAX)
     throw new Error("workload data: invalid current principal clear value");
@@ -159,8 +122,8 @@ async function validateDependencies(
       compiled,
       pool,
       principalPin,
-      completionFor: input.authority.completionFor,
-      blockAt: input.authority.blockAt,
+      completionFor: (actionId) => input.authority.completionFor(actionId),
+      blockAt: (number) => input.authority.blockAt(number),
     });
   }
 }
@@ -219,12 +182,14 @@ export async function resolvePinnedCurrentPrincipal(
     Object.freeze({
       reference: sdkInput,
       value: handle,
-      scope: scope(compiled, action, sdkInput, pool, common),
+      scope: scope(workloadFingerprint(compiled), action.id, sdkInput, pool, common),
     }),
     Object.freeze({
       reference: sdkProof,
       value: proof,
-      scope: scope(compiled, action, sdkProof, null, { inputReference: sdkInput }),
+      scope: scope(workloadFingerprint(compiled), action.id, sdkProof, null, {
+        inputReference: sdkInput,
+      }),
     }),
   ]);
 }
