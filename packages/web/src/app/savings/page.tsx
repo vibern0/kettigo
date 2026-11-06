@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal, flushSync } from "react-dom";
+import { flushSync } from "react-dom";
 import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
 import { sepolia } from "viem/chains";
 import {
@@ -25,11 +25,13 @@ import {
 import { reportClientToast } from "@/lib/client-errors";
 import { afterNextPaint } from "@/lib/paint";
 import { useToast } from "@/components/Toast";
-import { SheetViewport } from "@/components/SheetViewport";
-import { AmountInput } from "@/components/AmountInput";
-import { LoadingAmount } from "@/components/LoadingAmount";
+import { DepositSheet } from "@/components/savings/DepositSheet";
+import { WithdrawalSheet } from "@/components/savings/WithdrawalSheet";
+import { SavingsStatus } from "@/components/savings/SavingsStatus";
+import { ParticipationPanel, type ParticipationPanelHandle } from "@/components/savings/ParticipationPanel";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
 import type { ActionPatch } from "@/lib/action-center-model";
 import {
   balanceBucketLabels,
@@ -164,6 +166,7 @@ export default function SavingsPage() {
     principal,
     confidentialBalancesLoading,
     confidentialBalancesError,
+    confidentialBalancesReadState,
     refreshConfidentialBalances,
   } = useWallet();
   const toast = useToast();
@@ -180,28 +183,41 @@ export default function SavingsPage() {
   const [withdrawalRefreshError, setWithdrawalRefreshError] = useState(false);
   const [depositSheetStep, setDepositSheetStep] = useState<SheetStep>();
   const [withdrawSheetStep, setWithdrawSheetStep] = useState<SheetStep>();
+  const [accessReviewStep, setAccessReviewStep] = useState<SheetStep>();
   const preparedDeposit = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const preparedAccess = useRef<{ session: PasskeySmartSession; transaction: PreparedSmartTransaction; preparedAt: number }>();
+  const participation = useRef<ParticipationPanelHandle>(null);
+  const reviewAbort = useRef<AbortController>();
   const [preparingDeposit, setPreparingDeposit] = useState(false);
   const depositPreparationId = useRef(0);
 
-  useEffect(() => {
+  function cancelOwnedReview() {
+    participation.current?.cancel();
+    reviewAbort.current?.abort();
+    reviewAbort.current = undefined;
     depositPreparationId.current += 1;
+    withdrawalPreparationId.current += 1;
     preparedDeposit.current?.transaction.cancel();
+    preparedWithdrawal.current?.transaction.cancel();
+    preparedAccess.current?.transaction.cancel();
     preparedDeposit.current = undefined;
+    preparedWithdrawal.current = undefined;
+    preparedAccess.current = undefined;
     setPreparingDeposit(false);
+    setPreparingWithdrawal(false);
+  }
+
+  useEffect(() => {
+    cancelOwnedReview();
   }, [session, depositAmount]);
 
   useEffect(() => {
     if (depositSheetStep === "confirm") return;
-    depositPreparationId.current += 1;
-    preparedDeposit.current?.transaction.cancel();
-    preparedDeposit.current = undefined;
-    setPreparingDeposit(false);
+    cancelOwnedReview();
   }, [depositSheetStep]);
 
   useEffect(() => () => {
-    depositPreparationId.current += 1;
-    preparedDeposit.current?.transaction.cancel();
+    cancelOwnedReview();
   }, []);
 
   const preparedWithdrawal = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
@@ -209,23 +225,16 @@ export default function SavingsPage() {
   const withdrawalPreparationId = useRef(0);
 
   useEffect(() => {
-    withdrawalPreparationId.current += 1;
-    preparedWithdrawal.current?.transaction.cancel();
-    preparedWithdrawal.current = undefined;
-    setPreparingWithdrawal(false);
+    cancelOwnedReview();
   }, [session, withdrawAmount]);
 
   useEffect(() => {
     if (withdrawSheetStep === "confirm") return;
-    withdrawalPreparationId.current += 1;
-    preparedWithdrawal.current?.transaction.cancel();
-    preparedWithdrawal.current = undefined;
-    setPreparingWithdrawal(false);
+    cancelOwnedReview();
   }, [withdrawSheetStep]);
 
   useEffect(() => () => {
-    withdrawalPreparationId.current += 1;
-    preparedWithdrawal.current?.transaction.cancel();
+    cancelOwnedReview();
   }, []);
 
   const [confirmingAction, setConfirmingAction] = useState<"deposit" | "withdraw">();
@@ -246,7 +255,9 @@ export default function SavingsPage() {
   const usdcReady = isAddress(addresses.usdc);
   const wrapperReady = usdcReady && isAddress(addresses.confidentialUsdc);
   const poolReady = wrapperReady && isAddress(addresses.pool);
-  const hasWithdrawablePrincipal = principal !== undefined && principal > 0n;
+  // The pool caps the encrypted request, so a user can still request a known
+  // amount while the optional balance display is unavailable.
+  const hasWithdrawablePrincipal = principal === undefined ? Boolean(session && poolReady) : principal > 0n;
   const withdrawalUnwrapIds = new Set(
     pendingWithdrawals
       .map((request) => request.unwrapRequestId?.toLowerCase())
@@ -257,6 +268,9 @@ export default function SavingsPage() {
   );
   const showWithdraw = hasWithdrawablePrincipal || pendingWithdrawals.length > 0 || standalonePendingUnwraps.length > 0;
   const withdrawalInProgress = pendingWithdrawalTotal(pendingWithdrawals);
+  const freshDepositEnabled = Boolean(
+    SELECTED_SCOPE && (SELECTED_SCOPE.id !== "candidate-v2" || SELECTED_SCOPE.onboardingEnabled),
+  );
 
   useEffect(() => {
     if (!session?.address) return;
@@ -510,11 +524,11 @@ export default function SavingsPage() {
     await refreshPendingWithdrawals(user);
   }
 
-  async function prepareDeposit(value: bigint) {
+  async function prepareDeposit(value: bigint, signal?: AbortSignal) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Valor invalido.");
-    if (!poolReady) throw new Error("Deposits are unavailable right now.");
+    if (!poolReady || !freshDepositEnabled) throw new Error("New savings are not available right now.");
     const maxDeposit = remainingDepositCapacity();
     if (value > maxDeposit) throw new Error("Amount is above the current account limit.");
 
@@ -558,10 +572,11 @@ export default function SavingsPage() {
     calls.push({ to: token, data });
 
     const readCalls = await prepareSmartReadSessionCalls(currentSession);
-    return currentSession.prepareTransaction([...readCalls, ...calls]);
+    return currentSession.prepareTransaction([...readCalls, ...calls], { signal });
   }
 
   async function depositConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
+    if (!freshDepositEnabled) throw new Error("New savings are not available right now.");
     const currentSession = activeSession();
     const prepared = preparedDeposit.current;
     if (!prepared || prepared.session !== currentSession || prepared.value !== value || Date.now() - prepared.preparedAt > 60_000) {
@@ -597,7 +612,7 @@ export default function SavingsPage() {
     await refreshBalances(user);
   }
 
-  async function prepareWithdrawal(value: bigint) {
+  async function prepareWithdrawal(value: bigint, signal?: AbortSignal) {
     const currentSession = activeSession();
     const user = currentSession.address;
     if (value === 0n) throw new Error("Enter an amount first.");
@@ -613,7 +628,7 @@ export default function SavingsPage() {
       functionName: "requestWithdrawal",
       args: [encrypted.handle, encrypted.inputProof],
     });
-    return currentSession.prepareTransaction([...readCalls, { to: pool, data }]);
+    return currentSession.prepareTransaction([...readCalls, { to: pool, data }], { signal });
   }
 
   async function withdrawConfidential(value: bigint, update: (patch: ActionPatch) => void, onSigned: () => void) {
@@ -831,6 +846,7 @@ export default function SavingsPage() {
 
   function closeSheets() {
     if (confirmingAction) return;
+    cancelOwnedReview();
     setDepositSheetStep(undefined);
     setWithdrawSheetStep(undefined);
   }
@@ -861,6 +877,10 @@ export default function SavingsPage() {
     principal === undefined || parsedWithdrawAmount > principal ? undefined : principal - parsedWithdrawAmount;
 
   async function reviewDeposit() {
+    if (!freshDepositEnabled) {
+      toast({ tone: "error", title: "New savings are not available right now." });
+      return;
+    }
     if (parsedDepositAmount === 0n) {
       reportClientToast({ title: "Enter an amount first." }, { action: "deposit", stage: "validation" });
       toast({ tone: "error", title: "Enter an amount first." });
@@ -876,11 +896,14 @@ export default function SavingsPage() {
       toast({ tone: "error", title: "Amount is above the current account limit." });
       return;
     }
+    cancelOwnedReview();
     const requestId = ++depositPreparationId.current;
+    const controller = new AbortController();
+    reviewAbort.current = controller;
     const currentSession = activeSession();
     setPreparingDeposit(true);
     try {
-      const transaction = await prepareDeposit(parsedDepositAmount);
+      const transaction = await prepareDeposit(parsedDepositAmount, controller.signal);
       if (requestId !== depositPreparationId.current) {
         transaction.cancel();
         return;
@@ -918,11 +941,14 @@ export default function SavingsPage() {
       toast({ tone: "error", title: "Amount is above your pool balance." });
       return;
     }
+    cancelOwnedReview();
     const requestId = ++withdrawalPreparationId.current;
+    const controller = new AbortController();
+    reviewAbort.current = controller;
     const currentSession = activeSession();
     setPreparingWithdrawal(true);
     try {
-      const transaction = await prepareWithdrawal(parsedWithdrawAmount);
+      const transaction = await prepareWithdrawal(parsedWithdrawAmount, controller.signal);
       if (requestId !== withdrawalPreparationId.current) {
         transaction.cancel();
         return;
@@ -978,6 +1004,11 @@ export default function SavingsPage() {
             celebration: type === "deposit" ? "deposit" : undefined,
           });
         } catch (error) {
+          if (session?.getPendingOperation?.()?.phase === "attempted") {
+            update({ status: "confirming", error: "Still processing. Check status to see the latest update." });
+            toast({ tone: "success", title: "Still processing. Follow progress in Activity." });
+            throw error;
+          }
           const errorMessage = getErrorMessage(error);
           reportClientToast(
             { title: "Transaction failed", description: errorMessage },
@@ -1017,6 +1048,68 @@ export default function SavingsPage() {
     }
   }
 
+  async function reviewBalanceAccess() {
+    const currentSession = activeSession();
+    cancelOwnedReview();
+    const controller = new AbortController();
+    reviewAbort.current = controller;
+    setAccessReviewStep("entry");
+    try {
+      const calls = await prepareSmartReadSessionCalls(currentSession);
+      if (controller.signal.aborted) return;
+      if (calls.length === 0) {
+        await refreshConfidentialBalances();
+        if (!controller.signal.aborted) setAccessReviewStep(undefined);
+        return;
+      }
+      const transaction = await currentSession.prepareTransaction(calls, { signal: controller.signal });
+      if (controller.signal.aborted || reviewAbort.current !== controller) {
+        transaction.cancel();
+        return;
+      }
+      preparedAccess.current = { session: currentSession, transaction, preparedAt: Date.now() };
+      setAccessReviewStep("confirm");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      reportClientToast({ title: "Could not review balance access", description: "Please try again." }, { action: "balance-access", stage: "preparation" }, error);
+      toast({ tone: "error", title: "Could not review balance access", description: "Please try again." });
+      setAccessReviewStep(undefined);
+    }
+  }
+
+  function confirmBalanceAccess() {
+    const currentSession = activeSession();
+    const prepared = preparedAccess.current;
+    if (!prepared || prepared.session !== currentSession || Date.now() - prepared.preparedAt > 60_000) {
+      preparedAccess.current?.transaction.cancel();
+      preparedAccess.current = undefined;
+      setAccessReviewStep(undefined);
+      toast({ tone: "error", title: "Please review access again." });
+      return;
+    }
+    preparedAccess.current = undefined;
+    setAccessReviewStep(undefined);
+    // runAction invokes this runner immediately; do not await before send.
+    runAction(
+      { label: "Show savings balance", type: "approval", account: currentSession.address },
+      async ({ update }) => {
+        update({ status: "waiting-wallet" });
+        try {
+          const submitted = prepared.transaction.send({
+            onOperationPrepared: (operation) => update({ status: "confirming", operation }),
+          });
+          await submitted;
+          update({ status: "updating" });
+          await refreshConfidentialBalances();
+          update({ status: "completed" });
+        } catch (error) {
+          reportClientToast({ title: "Could not update balance access", description: "Check Activity for the latest status." }, { action: "balance-access", stage: "submission" }, error);
+          throw error;
+        }
+      },
+    );
+  }
+
   async function copyPendingHash(hash: `0x${string}`) {
     await navigator.clipboard.writeText(hash);
     toast({ tone: "success", title: "Withdrawal ID copied." });
@@ -1033,48 +1126,15 @@ export default function SavingsPage() {
 
       <TestnetWarning />
 
-      <div className="card space-y-3">
-        <p className="label">Personal status</p>
-        <div className="flex items-center justify-between">
-          <span className="text-muted text-sm">{balanceBucketLabels.walletUsdc}</span>
-          <span className="font-semibold tabular-nums">{formatUSDC(usdcBalance)} USDC</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted text-sm">{balanceBucketLabels.withdrawalInProgress}</span>
-          <span className="font-semibold tabular-nums">
-            {pendingWithdrawals.some((request) => request.amount === undefined)
-              ? `${pendingWithdrawals.length} pending`
-              : `${formatUSDC(withdrawalInProgress)} USDC`}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted text-sm">{balanceBucketLabels.savingsBalance}</span>
-          <span className="font-semibold tabular-nums text-text">
-            {confidentialBalancesLoading ? <LoadingAmount /> : `${formatUSDC(principal)} USDC`}
-          </span>
-        </div>
-        {confidentialBalancesError && <p className="text-xs text-danger">{confidentialBalancesError}</p>}
-      </div>
+      <SavingsStatus walletBalance={usdcBalance} principal={principal} pendingTotal={withdrawalInProgress} pendingWithdrawals={pendingWithdrawals} loading={confidentialBalancesLoading} error={confidentialBalancesError} accessRequired={confidentialBalancesReadState === "access-required"} accessConfirming={accessReviewStep === "confirm"} accessAvailable={Boolean(session)} automaticWithdrawals={automaticWithdrawals} withdrawalRefreshError={withdrawalRefreshError} onAccessBack={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }} onAccessConfirm={confirmBalanceAccess} onAccessReview={() => void reviewBalanceAccess()} />
 
-      {pendingWithdrawals.length > 0 && (
-        <section className="space-y-3 border-t border-text/10 py-4" aria-label="Pending withdrawals" aria-live="polite">
-          <h2 className="text-sm font-semibold">Pending withdrawals</h2>
-          {automaticWithdrawals && <p className="text-sm text-muted">USDC will arrive in your wallet automatically.</p>}
-          {withdrawalRefreshError && <p className="text-sm text-muted">Updates are delayed. Your withdrawals are still pending.</p>}
-          {pendingWithdrawals.map((request) => (
-            <div key={request.batchId.toString()} className="flex items-center justify-between gap-3 text-sm">
-              <span>{withdrawalStageCopy[request.stage]}</span>
-              <span className="tabular-nums">{request.amount === undefined ? "Amount pending" : `${formatUSDC(request.amount)} USDC`}</span>
-            </div>
-          ))}
-        </section>
-      )}
+      <ParticipationPanel ref={participation} account={session?.address} pool={poolReady ? asAddress(addresses.pool, "Prize pool") : undefined} session={session ?? undefined} onReviewStart={cancelOwnedReview} />
 
       <div className="grid grid-cols-2 gap-3">
         <button
           type="button"
-          onClick={() => setDepositSheetStep("entry")}
-          disabled={!session || !poolReady}
+          onClick={() => { cancelOwnedReview(); setDepositSheetStep("entry"); }}
+          disabled={!session || !poolReady || !freshDepositEnabled}
           className="btn-primary w-full"
         >
           <svg
@@ -1096,7 +1156,7 @@ export default function SavingsPage() {
 
         <button
           type="button"
-          onClick={() => setWithdrawSheetStep("entry")}
+          onClick={() => { cancelOwnedReview(); setWithdrawSheetStep("entry"); }}
           disabled={!showWithdraw}
           className="btn-secondary w-full"
         >
@@ -1118,353 +1178,95 @@ export default function SavingsPage() {
         </button>
       </div>
 
-      {depositSheetStep && createPortal(
-        <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 backdrop-blur-sm sm:px-4 sm:pb-4">
-          <button
-            type="button"
-            aria-label="Close deposit sheet"
-            className="absolute inset-0 h-full w-full cursor-default"
-            onClick={closeSheets}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="deposit-sheet-title"
-            className="glass-surface relative max-h-[min(86dvh,100%)] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
-          >
-            <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="label">Deposit</p>
-                <h2 id="deposit-sheet-title" className="font-display text-xl font-bold">
-                  Add to savings
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label="Close deposit sheet"
-                onClick={closeSheets}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/40 text-muted transition-colors hover:bg-white/60 hover:text-text"
-              >
-                <svg
-                  aria-hidden="true"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <AmountInput
-              label="Amount"
-              maxLabel={`${formatUSDC(usdcBalance !== undefined && usdcBalance < remainingDeposit ? usdcBalance : remainingDeposit)} USDC`}
-              value={depositAmount}
-              onChange={setDepositAmount}
-              onMax={() => {
-                const max = usdcBalance !== undefined && usdcBalance < remainingDeposit ? usdcBalance : remainingDeposit;
-                setDepositAmount(formatUSDC(max, 6));
-              }}
-              disabled={depositSheetStep === "confirm" || preparingDeposit}
-            />
-            <p className="rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
-              Current account limit: 1,000.00 USDC.
-            </p>
-
-            {depositSheetStep === "entry" ? (
-              <button
-                onClick={reviewDeposit}
-                disabled={!session || !poolReady || preparingDeposit}
-                className="btn-primary w-full"
-              >
-                {preparingDeposit ? "Preparing deposit..." : "Review deposit"}
-              </button>
-            ) : (
-              <div className="space-y-4">
-                <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
-                  <p className="label">Confirm</p>
-                  <div className="mt-3 space-y-2 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Deposit</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(parsedDepositAmount)} USDC</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Wallet after</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(depositBalanceAfter)} USDC</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Pool after</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(depositPoolAfter)} USDC</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary !px-3"
-                    onClick={() => setDepositSheetStep("entry")}
-                    disabled={Boolean(confirmingAction)}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary !px-3"
-                    disabled={!session || !poolReady || confirmingAction === "deposit"}
-                    onClick={() =>
-                      void runTrackedTransaction(
-                        `Deposit ${formatUSDC(parsedDepositAmount)} USDC`,
-                        "deposit",
-                        (update, onSigned) => depositConfidential(parsedDepositAmount, update, onSigned),
-                        "Deposit complete.",
-                      )
-                    }
-                  >
-                    {confirmingAction === "deposit" ? (
-                      <>
-                        <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                        Confirming...
-                      </>
-                    ) : (
-                      "Confirm"
-                    )}
-                  </button>
-                </div>
-                {confirmingAction === "deposit" && (
-                  <p role="status" className="text-sm text-muted">
-                    Approve with your passkey when asked. Your deposit will then continue in Activity.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        </SheetViewport>,
-        document.body,
+      {depositSheetStep && (
+        <DepositSheet
+          step={depositSheetStep}
+          amount={depositAmount}
+          parsedAmount={parsedDepositAmount}
+          walletBalance={usdcBalance}
+          remainingDeposit={remainingDeposit}
+          walletAfter={depositBalanceAfter}
+          poolAfter={depositPoolAfter}
+          preparing={preparingDeposit}
+          confirming={confirmingAction === "deposit"}
+          canReview={Boolean(session && poolReady && freshDepositEnabled)}
+          canConfirm={Boolean(session && poolReady && freshDepositEnabled && confirmingAction !== "deposit")}
+          onAmountChange={setDepositAmount}
+          onMax={() => {
+            const max = usdcBalance !== undefined && usdcBalance < remainingDeposit ? usdcBalance : remainingDeposit;
+            setDepositAmount(formatUSDC(max, 6));
+          }}
+          onReview={reviewDeposit}
+          onBack={() => setDepositSheetStep("entry")}
+          onConfirm={() =>
+            void runTrackedTransaction(
+              `Deposit ${formatUSDC(parsedDepositAmount)} USDC`,
+              "deposit",
+              async (update, onSigned) => {
+                await depositConfidential(parsedDepositAmount, update, onSigned);
+                participation.current?.refresh();
+              },
+              "Deposit complete.",
+            )
+          }
+          onClose={closeSheets}
+        />
       )}
 
-      {withdrawSheetStep && createPortal(
-        <SheetViewport className="fixed inset-0 z-50 flex items-end justify-center bg-text/35 backdrop-blur-sm sm:px-4 sm:pb-4">
-          <button
-            type="button"
-            aria-label="Close withdrawal sheet"
-            className="absolute inset-0 h-full w-full cursor-default"
-            onClick={closeSheets}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="withdraw-sheet-title"
-            className="glass-surface relative max-h-[min(86dvh,100%)] w-full sm:max-w-[448px] space-y-4 overflow-y-auto rounded-t-[30px] p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-28px_64px_-38px_rgb(43_45_50_/_0.55)] animate-fade-in"
-          >
-            <div className="mx-auto h-1.5 w-12 rounded-full bg-text/20" />
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="label">Withdraw</p>
-                <h2 id="withdraw-sheet-title" className="font-display text-xl font-bold">
-                  Move savings to USDC
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label="Close withdrawal sheet"
-                onClick={closeSheets}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/40 text-muted transition-colors hover:bg-white/60 hover:text-text"
-              >
-                <svg
-                  aria-hidden="true"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {hasWithdrawablePrincipal && (
-              <AmountInput
-                label="Amount"
-                maxLabel={`${formatUSDC(principal)} USDC`}
-                value={withdrawAmount}
-                onChange={setWithdrawAmount}
-                onMax={() => setWithdrawAmount(principal !== undefined ? formatUSDC(principal, 6) : "0")}
-                disabled={withdrawSheetStep === "confirm"}
-              />
-            )}
-
-            {hasWithdrawablePrincipal && withdrawSheetStep === "entry" && (
-              <button
-                onClick={reviewWithdraw}
-                disabled={!session || !poolReady || status === "working" || preparingWithdrawal}
-                className="btn-secondary w-full"
-              >
-                {preparingWithdrawal ? "Preparing..." : "Review withdrawal"}
-              </button>
-            )}
-
-            {hasWithdrawablePrincipal && withdrawSheetStep === "confirm" && (
-              <div className="space-y-4">
-                <div className="rounded-3xl border border-white/55 bg-white/35 p-4">
-                  <p className="label">Confirm</p>
-                  <div className="mt-3 space-y-2 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Withdraw</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(parsedWithdrawAmount)} USDC</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted">Savings after</span>
-                      <span className="font-semibold tabular-nums">{formatUSDC(withdrawPoolAfter)} USDC</span>
-                    </div>
-                  </div>
-                  <p className="mt-3 rounded-2xl bg-white/45 px-3 py-2 text-xs text-muted">
-                    Your chances of winning update after this request.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary !px-3"
-                    onClick={() => setWithdrawSheetStep("entry")}
-                    disabled={Boolean(confirmingAction)}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary !px-3"
-                    disabled={!session || !poolReady || confirmingAction === "withdraw"}
-                    onClick={() =>
-                      void runTrackedTransaction(
-                        `Withdraw ${formatUSDC(parsedWithdrawAmount)} USDC`,
-                        "withdraw",
-                        (update, onSigned) => withdrawConfidential(parsedWithdrawAmount, update, onSigned),
-                        "Withdrawal requested.",
-                      )
-                    }
-                  >
-                    {confirmingAction === "withdraw" ? (
-                      <>
-                        <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                        Confirming...
-                      </>
-                    ) : (
-                      "Confirm"
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {(pendingWithdrawals.length > 0 || standalonePendingUnwraps.length > 0) && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted text-sm">Pending withdrawals</span>
-                  <button
-                    className="btn-ghost !py-1 !px-3 !text-xs bg-surface2"
-                    disabled={!session || !wrapperReady || status === "working"}
-                    onClick={() =>
-                      void run(
-                        async () => {
-                          await refreshPendingWithdrawals();
-                          await refreshPendingUnwraps();
-                        },
-                        "Pending withdrawals refreshed.",
-                        "pending",
-                      )
-                    }
-                  >
-                    {workingAction === "pending" ? "Refreshing..." : "Refresh"}
-                  </button>
-                </div>
-                {pendingWithdrawals.map((request) => (
-                  <div key={`${request.batchId.toString()}:${request.txHash}`} className="space-y-2 rounded-2xl bg-white/35 p-3">
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="font-semibold">{withdrawalStageCopy[request.stage]}</span>
-                      {request.amount !== undefined && (
-                        <span className="font-semibold tabular-nums">{formatUSDC(request.amount)} USDC</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted">{pendingWithdrawalBatchLabel(request)}</p>
-                    {request.stage === "requested" && request.closesAt !== undefined && (
-                      <p className="text-xs text-muted">
-                        Batch closes {new Intl.DateTimeFormat("en-US", { timeStyle: "short" }).format(new Date(Number(request.closesAt) * 1000))}.
-                      </p>
-                    )}
-                    {!automaticWithdrawals && request.stage === "claimable" && (
-                      <button
-                        className="btn-secondary w-full"
-                        disabled={status === "working"}
-                        onClick={() =>
-                          void run(
-                            () => claimWithdrawal(request.batchId),
-                            "Withdrawal ready to finalize.",
-                            "pending",
-                          )
-                        }
-                      >
-                        {workingAction === "pending" ? "Receiving..." : "Receive USDC"}
-                      </button>
-                    )}
-                    {!automaticWithdrawals && request.stage === "finalizing" && request.unwrapRequestId && (
-                      <button
-                        className="btn-secondary w-full"
-                        disabled={status === "working"}
-                        onClick={() =>
-                          void run(
-                            () => finalizeUnwrap(request.unwrapRequestId!),
-                            "Your USDC withdrawal is finalized.",
-                            "pending",
-                          )
-                        }
-                      >
-                        {workingAction === "pending" ? "Finalizing..." : "Finalize withdrawal"}
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {standalonePendingUnwraps.map((request) => (
-                  <div key={request.requestId} className="space-y-2">
-                    <button
-                      type="button"
-                      className="font-mono text-xs text-muted underline-offset-2 transition-colors hover:text-text hover:underline"
-                      title="Copy withdrawal ID"
-                      onClick={() => void copyPendingHash(request.requestId)}
-                    >
-                      {formatShortHash(request.requestId)}
-                    </button>
-                    <button
-                      className="btn-secondary w-full"
-                      disabled={status === "working"}
-                      onClick={() =>
-                        void run(
-                          () => finalizeUnwrap(request.requestId),
-                          "Your USDC withdrawal is finalized.",
-                          "pending",
-                        )
-                      }
-                    >
-                      {workingAction === "pending" ? "Finalizing..." : "Finalize withdrawal"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {!showWithdraw && <p className="text-sm text-muted">No deposited funds or pending withdrawals yet.</p>}
-          </div>
-        </SheetViewport>,
-        document.body,
+      {withdrawSheetStep && (
+        <WithdrawalSheet
+          step={withdrawSheetStep}
+          amount={withdrawAmount}
+          parsedAmount={parsedWithdrawAmount}
+          principal={principal}
+          poolAfter={withdrawPoolAfter}
+          canEnterAmount={hasWithdrawablePrincipal}
+          showWithdraw={showWithdraw}
+          pendingWithdrawals={pendingWithdrawals}
+          pendingUnwraps={standalonePendingUnwraps}
+          automaticWithdrawals={automaticWithdrawals}
+          preparing={preparingWithdrawal}
+          confirming={confirmingAction === "withdraw"}
+          working={status === "working"}
+          pendingWorking={workingAction === "pending"}
+          canReview={Boolean(session && poolReady && status !== "working")}
+          canRefresh={Boolean(session && wrapperReady && status !== "working")}
+          canConfirm={Boolean(session && poolReady && confirmingAction !== "withdraw")}
+          onAmountChange={setWithdrawAmount}
+          onMax={() => setWithdrawAmount(principal !== undefined ? formatUSDC(principal, 6) : "0")}
+          onReview={reviewWithdraw}
+          onBack={() => setWithdrawSheetStep("entry")}
+          onConfirm={() =>
+            void runTrackedTransaction(
+              `Withdraw ${formatUSDC(parsedWithdrawAmount)} USDC`,
+              "withdraw",
+              async (update, onSigned) => {
+                await withdrawConfidential(parsedWithdrawAmount, update, onSigned);
+                participation.current?.refresh();
+              },
+              "Withdrawal requested.",
+            )
+          }
+          onClose={closeSheets}
+          onRefresh={() =>
+            void run(
+              async () => {
+                await refreshPendingWithdrawals();
+                await refreshPendingUnwraps();
+              },
+              "Pending withdrawals refreshed.",
+              "pending",
+            )
+          }
+          onClaim={(batchId) =>
+            void run(() => claimWithdrawal(batchId), "Withdrawal ready to finalize.", "pending")
+          }
+          onFinalize={(requestId) =>
+            void run(() => finalizeUnwrap(requestId), "Your USDC withdrawal is finalized.", "pending")
+          }
+          onCopy={(requestId) => void copyPendingHash(requestId)}
+          formatShortHash={formatShortHash}
+        />
       )}
 
     </div>

@@ -38,12 +38,13 @@ test("adds and updates a background action lifecycle", () => {
   assert.equal(completed.status, "completed");
 });
 
-test("keeps only the newest action history records", () => {
+test("keeps only the newest completed history records", () => {
   const actions = Array.from({ length: ACTION_HISTORY_LIMIT + 2 }).reduce((current, _, index) => {
     const next = addAction(current, {
       ...baseAction,
       label: `Action ${index}`,
       type: "withdraw",
+      status: "completed",
       createdAt: index,
     });
     return next;
@@ -67,9 +68,22 @@ test("dismisses only completed or failed actions", () => {
 });
 
 test("counts only pending actions for the activity access point", () => {
-  const [running] = addAction([], { ...baseAction, label: "Deposit", type: "deposit", createdAt: 1_000 });
-  const [createdFailure] = addAction([], { ...baseAction, label: "Withdraw", type: "withdraw", createdAt: 2_000 });
-  const [failed] = updateAction([createdFailure], createdFailure.id, { status: "failed", updatedAt: 2_500 });
+  const [running] = addAction([], {
+    ...baseAction,
+    label: "Deposit",
+    type: "deposit",
+    createdAt: 1_000,
+  });
+  const [createdFailure] = addAction([], {
+    ...baseAction,
+    label: "Withdraw",
+    type: "withdraw",
+    createdAt: 2_000,
+  });
+  const [failed] = updateAction([createdFailure], createdFailure.id, {
+    status: "failed",
+    updatedAt: 2_500,
+  });
 
   assert.equal(countPendingActions([running, failed]), 1);
 });

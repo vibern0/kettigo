@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.11.1",
   "description": "Kettigo — mobile-first no-loss prize savings with passkey-owned Safe accounts.",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "workspaces": [
     "packages/*"

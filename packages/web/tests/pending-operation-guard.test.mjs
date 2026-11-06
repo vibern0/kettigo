@@ -1,0 +1,291 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { getAddress } from "viem";
+
+import {
+  PendingOperationBusyError,
+  PendingOperationRecoveryBlockedError,
+  createPendingOperationManager,
+} from "../src/lib/pending-operation-guard.ts";
+
+const ENTRY_POINT = getAddress("0x0000000071727De22E5E9d8BAf0edAc6f37da032");
+const SENDER = getAddress("0x00000000000000000000000000000000000000bb");
+const OTHER_SENDER = getAddress("0x00000000000000000000000000000000000000cc");
+const HASH_A = `0x${"aa".repeat(32)}`;
+const HASH_B = `0x${"bb".repeat(32)}`;
+
+class SharedStorage {
+  #values = new Map();
+  getItem(key) {
+    return this.#values.get(key) ?? null;
+  }
+  setItem(key, value) {
+    this.#values.set(key, value);
+  }
+  removeItem(key) {
+    this.#values.delete(key);
+  }
+  value(key) {
+    return this.getItem(key);
+  }
+}
+
+class SharedLocks {
+  #held = new Set();
+  async request(name, options, callback) {
+    if (options?.ifAvailable && this.#held.has(name)) return callback(null);
+    this.#held.add(name);
+    try {
+      return await callback({ name });
+    } finally {
+      this.#held.delete(name);
+    }
+  }
+}
+
+function identity(hash = HASH_A, sender = SENDER) {
+  return { chainId: 11155111, entryPoint: ENTRY_POINT, sender, userOperationHash: hash };
+}
+function manager(storage = new SharedStorage(), locks = new SharedLocks(), sender = SENDER) {
+  return createPendingOperationManager({
+    storage,
+    locks,
+    sender,
+    entryPoint: ENTRY_POINT,
+    now: () => 123,
+  });
+}
+
+test("only one same-origin review lease can stage and release permits a retry", async () => {
+  const storage = new SharedStorage();
+  const locks = new SharedLocks();
+  const first = manager(storage, locks);
+  const second = manager(storage, locks);
+  const lease = await first.acquireReview();
+  await assert.rejects(second.acquireReview(), PendingOperationBusyError);
+  lease.stagePrepared(identity());
+  await lease.release();
+  await assert.rejects(second.acquireReview(), PendingOperationRecoveryBlockedError);
+  const recovery = await second.acquireRecovery();
+  recovery.clearMatching(identity());
+  await recovery.release();
+  const retry = await second.acquireReview();
+  await retry.release();
+});
+
+test("one Safe keeps its v1 record and global review lock across app scopes", async () => {
+  const storage = new SharedStorage();
+  const lockNames = [];
+  const locks = new SharedLocks();
+  const request = locks.request.bind(locks);
+  locks.request = (name, options, callback) => {
+    lockNames.push(name);
+    return request(name, options, callback);
+  };
+  const e65 = manager(storage, locks);
+  const candidate = manager(storage, locks);
+  const expectedKey = `kettigo:pending-user-operation:v1:11155111:${ENTRY_POINT.toLowerCase()}:${SENDER.toLowerCase()}`;
+  const expectedLock = `kettigo:pending-user-operation:11155111:${ENTRY_POINT.toLowerCase()}:${SENDER.toLowerCase()}`;
+
+  assert.equal(e65.storageKey, expectedKey);
+  assert.equal(candidate.storageKey, expectedKey);
+  const first = await e65.acquireReview();
+  await assert.rejects(candidate.acquireReview(), PendingOperationBusyError);
+  assert.deepEqual(lockNames, [expectedLock, expectedLock]);
+  first.stagePrepared(identity());
+  assert.ok(storage.value(expectedKey));
+  await first.release();
+  const recovery = await candidate.acquireRecovery();
+  assert.equal(recovery.clearMatching(identity()), true);
+  await recovery.release();
+  assert.equal(storage.value(expectedKey), null);
+});
+
+test("stages a frozen durable public record and preserves its original creation time", async () => {
+  const storage = new SharedStorage();
+  const subject = manager(storage);
+  const lease = await subject.acquireReview();
+  const prepared = lease.stagePrepared(identity());
+  assert.deepEqual(prepared, { version: 1, ...identity(), createdAt: 123, phase: "prepared" });
+  assert.equal(Object.isFrozen(prepared), true);
+  assert.equal(lease.stagePrepared(identity()).createdAt, 123);
+  const attempted = lease.markAttempted(identity());
+  assert.equal(attempted.phase, "attempted");
+  assert.equal(subject.readCurrent().phase, "attempted");
+  await lease.release();
+  assert.equal(manager(storage).readCurrent().phase, "attempted");
+});
+
+test("an attempted durable record blocks review while recovery clears only its matching hash", async () => {
+  const storage = new SharedStorage();
+  const subject = manager(storage);
+  const review = await subject.acquireReview();
+  review.stagePrepared(identity());
+  review.markAttempted(identity());
+  await review.release();
+  await assert.rejects(
+    subject.acquireReview(),
+    (error) =>
+      error instanceof PendingOperationRecoveryBlockedError &&
+      error.record.userOperationHash === HASH_A,
+  );
+  const recovery = await subject.acquireRecovery();
+  assert.equal(recovery.readCurrent().phase, "attempted");
+  assert.equal(recovery.clearMatching(identity(HASH_B)), false);
+  assert.equal(recovery.clearMatching(identity(HASH_A)), true);
+  assert.equal(subject.readCurrent(), null);
+  await recovery.release();
+});
+
+test("prepared orphan can be cleared by recovery but never by an inactive lease", async () => {
+  const storage = new SharedStorage();
+  const subject = manager(storage);
+  const review = await subject.acquireReview();
+  review.stagePrepared(identity());
+  await review.release();
+  const recovery = await subject.acquireRecovery();
+  await recovery.release();
+  assert.throws(() => recovery.clearMatching(identity()), PendingOperationRecoveryBlockedError);
+  const next = await subject.acquireRecovery();
+  assert.equal(next.clearMatching(identity()), true);
+  await next.release();
+});
+
+test("malformed, cross-scope, and oversized persisted values fail closed without deletion", () => {
+  const storage = new SharedStorage();
+  const subject = manager(storage);
+  const key = subject.storageKey;
+  for (const value of [
+    "{",
+    JSON.stringify({
+      version: 1,
+      ...identity(HASH_A, OTHER_SENDER),
+      createdAt: 1,
+      phase: "prepared",
+    }),
+    "x".repeat(16_385),
+  ]) {
+    storage.setItem(key, value);
+    assert.throws(() => subject.readCurrent(), PendingOperationRecoveryBlockedError);
+    assert.equal(storage.value(key), value);
+  }
+});
+
+test("storage failures and readback mutations fail closed before records become usable", async () => {
+  const storage = new SharedStorage();
+  const subject = manager(storage);
+  const lease = await subject.acquireReview();
+  storage.setItem = () => {
+    throw new Error("quota");
+  };
+  assert.throws(() => lease.stagePrepared(identity()), PendingOperationRecoveryBlockedError);
+  await lease.release();
+  // A separate storage fake makes writes appear successful but returns altered bytes.
+  let written = false;
+  const altered = {
+    getItem: () => (written ? "{}" : null),
+    setItem: () => {
+      written = true;
+    },
+    removeItem: () => undefined,
+  };
+  const another = manager(altered);
+  const anotherLease = await another.acquireReview();
+  assert.throws(() => anotherLease.stagePrepared(identity()), PendingOperationRecoveryBlockedError);
+  await anotherLease.release();
+});
+
+test("a failed verification permanently revokes its lease without hiding the prepared record", async () => {
+  let raw = null;
+  let obscureNextRead = false;
+  let writes = 0;
+  let removals = 0;
+  const storage = {
+    getItem: () => {
+      if (obscureNextRead) {
+        obscureNextRead = false;
+        return "{}";
+      }
+      return raw;
+    },
+    setItem: (_key, value) => {
+      raw = value;
+      writes += 1;
+      obscureNextRead = true;
+    },
+    removeItem: () => {
+      removals += 1;
+      raw = null;
+    },
+  };
+  const subject = manager(storage);
+  const lease = await subject.acquireReview();
+  let failure;
+  assert.throws(
+    () => lease.stagePrepared(identity()),
+    (error) => {
+      failure = error;
+      return error instanceof PendingOperationRecoveryBlockedError;
+    },
+  );
+  assert.equal(subject.readCurrent().phase, "prepared");
+  assert.throws(
+    () => lease.assertActive(),
+    (error) => error === failure,
+  );
+  assert.throws(
+    () => lease.markAttempted(identity()),
+    (error) => error === failure,
+  );
+  assert.throws(
+    () => lease.clearMatching(identity()),
+    (error) => error === failure,
+  );
+  assert.equal(writes, 1);
+  assert.equal(removals, 0);
+  assert.equal(subject.readCurrent().phase, "prepared");
+  await lease.release();
+  await lease.release();
+});
+
+test("missing, rejected, and delayed lock acquisition never yields a usable late lease", async () => {
+  const storage = new SharedStorage();
+  await assert.rejects(
+    createPendingOperationManager({
+      storage,
+      sender: SENDER,
+      entryPoint: ENTRY_POINT,
+    }).acquireReview(),
+    PendingOperationRecoveryBlockedError,
+  );
+  const rejecting = {
+    request: async () => {
+      throw new Error("locks unavailable");
+    },
+  };
+  await assert.rejects(
+    manager(storage, rejecting).acquireReview(),
+    PendingOperationRecoveryBlockedError,
+  );
+  let grant;
+  const delayed = {
+    request: (_name, _opts, callback) =>
+      new Promise((resolve) => {
+        grant = () => resolve(callback({ name: "late" }));
+      }),
+  };
+  const subject = createPendingOperationManager({
+    storage,
+    locks: delayed,
+    sender: SENDER,
+    entryPoint: ENTRY_POINT,
+    acquisitionTimeoutMs: 1,
+  });
+  await assert.rejects(subject.acquireReview(), PendingOperationBusyError);
+  grant();
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+  const healthy = manager(storage);
+  const lease = await healthy.acquireReview();
+  await lease.release();
+});

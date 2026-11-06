@@ -1,157 +1,62 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { createPublicClient, encodeFunctionData, getAddress, http, isAddress } from "viem";
 import { sepolia } from "viem/chains";
-import {
-  CONTRACTS,
-  RPC_URL,
-  confidentialPrizePoolAbi,
-} from "@/lib/contracts";
+import { CONTRACTS, RPC_URL, confidentialPrizePoolAbi } from "@/lib/contracts";
 import { Countdown } from "@/components/Countdown";
 import { TestnetWarning } from "@/components/TestnetWarning";
-import { formatUSDC } from "@/lib/format";
 import { useWallet } from "@/lib/wallet-context";
-import { sendSmartTransaction, type PasskeySmartSession } from "@/lib/smart-session";
-import {
-  asChecksumAddress,
-  decryptSmartUint64,
-  isZeroEncryptedHandle,
-} from "@/lib/zama";
+import { type PreparedSmartTransaction } from "@/lib/smart-session";
+import { decryptExistingSmartUint64, isZeroEncryptedHandle } from "@/lib/zama";
 import { reportClientToast } from "@/lib/client-errors";
 import { useToast, type ToastInput } from "@/components/Toast";
 import { getPrizeActions, getPrizeRevealFeedback, type PrizeActionId } from "@/lib/prize-actions";
+import { createLatestBlockRefresher } from "@/lib/morpho-yield";
+import { PrizeHistory } from "@/components/draw/PrizeHistory";
+import { DrawPoolSummary } from "@/components/draw/DrawPoolSummary";
+import { readDrawSnapshot } from "@/components/draw/draw-snapshot";
 import {
-  createLatestBlockRefresher,
-  readProjectedMorphoYield,
-} from "@/lib/morpho-yield";
+  asDrawAddress as asAddress,
+  drawOperationKey,
+  drawErrorMessage as getErrorMessage,
+  isStoredDrawOperation,
+  drawRuntimeConfig,
+  formatDrawDateTime as formatDateTime,
+  formatDrawInterval as formatInterval,
+} from "@/components/draw/draw-page-utils";
+import { PrizeCreditPanel } from "@/components/draw/PrizeCreditPanel";
+import { useActionCenter } from "@/components/ActionCenter";
+import type { AsyncAction } from "@/lib/action-center-model";
+import { createReviewLease } from "@/components/draw/review-lease";
+import {
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationRejectedError,
+} from "@/lib/passkey-operation";
+import { SELECTED_SCOPE } from "@/lib/runtime-config";
+import { scopeHref } from "@/lib/scope-navigation";
 
 type Status = "idle" | "working" | "success" | "error";
 type WorkingAction = PrizeActionId | undefined;
-
-type DrawSnapshot = {
-  blockNumber: bigint;
-  source: "projected" | "stored";
-  drawId: bigint;
-  drawInterval: bigint;
-  nextDrawAt: bigint;
-  participantCount: bigint;
-  publicPrizeReserve: bigint;
-  accruedYieldAssets: bigint;
-};
+type CreditReview = Readonly<{
+  action: "claimPrize" | "addPrizeToSavings";
+  owner: symbol;
+  prepared: PreparedSmartTransaction;
+}>;
 
 const publicClient = createPublicClient({
   chain: sepolia,
   transport: http(RPC_URL),
 });
 
-function asAddress(value: unknown, label: string) {
-  return asChecksumAddress(value, label);
-}
-
-function getErrorMessage(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /encrypted|confidential|public|private|mock|testnet|sepolia|prototype|faucet|leakage|decrypted/i.test(message)
-    ? "Something went wrong. Please try again."
-    : message;
-}
-
-function formatDateTime(timestamp: bigint | undefined) {
-  if (timestamp === undefined) return "-";
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(Number(timestamp) * 1000));
-}
-
-function formatInterval(seconds: bigint | undefined) {
-  if (seconds === undefined) return "-";
-  const value = Number(seconds);
-  const unit = (amount: number, singular: string, plural: string) =>
-    `${amount} ${amount === 1 ? singular : plural}`;
-
-  if (value > 86_400) {
-    const days = Math.floor(value / 86_400);
-    const hours = Math.floor((value % 86_400) / 3_600);
-    return hours > 0
-      ? `${unit(days, "day", "days")} ${unit(hours, "hour", "hours")}`
-      : unit(days, "day", "days");
-  }
-
-  if (value > 3_600) {
-    const hours = Math.floor(value / 3_600);
-    const minutes = Math.floor((value % 3_600) / 60);
-    return minutes > 0
-      ? `${unit(hours, "hour", "hours")} ${unit(minutes, "minute", "minutes")}`
-      : unit(hours, "hour", "hours");
-  }
-
-  if (value > 60) return unit(Math.round(value / 60), "minute", "minutes");
-  return unit(value, "second", "seconds");
-}
-
-async function readDrawSnapshot(
-  pool: `0x${string}`,
-  requestedBlockNumber?: bigint,
-): Promise<DrawSnapshot> {
-  const blockNumber = requestedBlockNumber ?? await publicClient.getBlockNumber();
-  const [
-    drawId,
-    drawInterval,
-    nextDrawAt,
-    participantCount,
-    publicPrizeReserve,
-    projectedYield,
-  ] = await Promise.all([
-    publicClient.readContract({
-      address: pool,
-      abi: confidentialPrizePoolAbi,
-      functionName: "drawId",
-      blockNumber,
-    }),
-    publicClient.readContract({
-      address: pool,
-      abi: confidentialPrizePoolAbi,
-      functionName: "drawInterval",
-      blockNumber,
-    }),
-    publicClient.readContract({
-      address: pool,
-      abi: confidentialPrizePoolAbi,
-      functionName: "nextDrawAt",
-      blockNumber,
-    }),
-    publicClient.readContract({
-      address: pool,
-      abi: confidentialPrizePoolAbi,
-      functionName: "participantCount",
-      blockNumber,
-    }),
-    publicClient.readContract({
-      address: pool,
-      abi: confidentialPrizePoolAbi,
-      functionName: "publicPrizeReserve",
-      blockNumber,
-    }),
-    readProjectedMorphoYield(publicClient, pool, blockNumber),
-  ]);
-
-  return {
-    blockNumber,
-    source: projectedYield.source,
-    drawId,
-    drawInterval,
-    nextDrawAt,
-    participantCount,
-    publicPrizeReserve,
-    accruedYieldAssets: projectedYield.accruedYieldAssets,
-  };
-}
-
 // Draw page for checking prizes, claiming winnings, and viewing round timing.
 export default function DrawPage() {
   const { session, refreshConfidentialBalances } = useWallet();
+  const { actions = [], runAction, updateTrackedAction } = useActionCenter();
   const toast = useToast();
+  const [hydrated, setHydrated] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const [workingAction, setWorkingAction] = useState<WorkingAction>();
   const [drawId, setDrawId] = useState<bigint | undefined>();
@@ -159,31 +64,37 @@ export default function DrawPage() {
   const [nextDrawAt, setNextDrawAt] = useState<bigint | undefined>();
   const [participantCount, setParticipantCount] = useState<bigint | undefined>();
   const [publicPrizeReserve, setPublicPrizeReserve] = useState<bigint | undefined>();
-  const [accruedYieldAssets, setAccruedYieldAssets] = useState<bigint | undefined>();
   const [winnings, setWinnings] = useState<bigint | undefined>();
   const [winningsOwner, setWinningsOwner] = useState<`0x${string}` | undefined>();
+  const [creditReview, setCreditReview] = useState<CreditReview>();
+  const [participationPending, setParticipationPending] = useState(false);
+  const [creditRefreshAction, setCreditRefreshAction] = useState<AsyncAction>();
   const winningsRequestId = useRef(0);
+  const reviewLeaseRef = useRef(createReviewLease());
+  const pendingCreditOwnersRef = useRef(new Map<string, symbol>());
   const winningsSessionRef = useRef(session?.address);
+  const scopeRef = useRef("");
+  const refreshedCreditOperationsRef = useRef(new Set<string>());
   winningsSessionRef.current = session?.address;
   const refreshRef = useRef<(blockNumber?: bigint) => Promise<void>>(async () => undefined);
-  const addresses = useMemo(
-    () => ({
-      pool: isAddress(CONTRACTS.confidentialPrizePool)
-        ? getAddress(CONTRACTS.confidentialPrizePool)
-        : CONTRACTS.confidentialPrizePool,
-    }),
-    [],
-  );
+  const addresses = {
+    pool: isAddress(CONTRACTS.confidentialPrizePool)
+      ? getAddress(CONTRACTS.confidentialPrizePool)
+      : CONTRACTS.confidentialPrizePool,
+  };
 
   const ready = isAddress(addresses.pool);
+  const runtime = drawRuntimeConfig();
+  const currentHref = typeof window === "undefined" ? undefined : window.location.href;
+  const scopeId = SELECTED_SCOPE?.id;
+  const savingsHref = scopeId ? scopeHref("/savings", scopeId, currentHref) : "/savings";
+  const scope = `${session?.address?.toLowerCase() ?? ""}:${addresses.pool.toLowerCase()}:${runtime.mode2 ? "2" : "legacy1"}`;
+  scopeRef.current = scope;
+  const mode2 = hydrated && runtime.mode2;
   const activeDrawId = drawId === undefined ? undefined : drawId + 1n;
   const roundsClosed = drawId ?? 0n;
   const visibleWinnings = session?.address === winningsOwner ? winnings : undefined;
   const hasPrizeToClaim = visibleWinnings !== undefined && visibleWinnings > 0n;
-  const prizeAssets =
-    publicPrizeReserve === undefined || accruedYieldAssets === undefined
-      ? undefined
-      : publicPrizeReserve + accruedYieldAssets;
   const prizeActions = getPrizeActions({
     connected: Boolean(session),
     ready,
@@ -191,6 +102,57 @@ export default function DrawPage() {
     hasPrizeToClaim,
     workingAction,
   });
+  const displayedPrizeActions = creditReview
+    ? [
+        {
+          id: creditReview.action,
+          label: "Confirm",
+          busyLabel: "Confirm",
+          disabled: false,
+          variant: "primary" as const,
+        },
+      ]
+    : prizeActions;
+
+  useEffect(() => setHydrated(true), []);
+
+  useEffect(
+    () => () => {
+      reviewLeaseRef.current.dispose();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    reviewLeaseRef.current.dispose();
+    pendingCreditOwnersRef.current.clear();
+    setCreditReview(undefined);
+    setParticipationPending(false);
+    setCreditRefreshAction(undefined);
+  }, [session?.address, addresses.pool, runtime.mode2]);
+
+  useEffect(
+    () => () => {
+      if (scopeRef.current === scope) scopeRef.current = "";
+    },
+    [scope],
+  );
+
+  useEffect(() => {
+    for (const action of actions) {
+      if (
+        !action.operation ||
+        !isStoredDrawOperation(action.operation) ||
+        !["completed", "failed", "rejected", "not-submitted"].includes(action.status)
+      )
+        continue;
+      const key = drawOperationKey(action.operation);
+      const owner = pendingCreditOwnersRef.current.get(key);
+      if (!owner) continue;
+      reviewLeaseRef.current.complete(owner);
+      pendingCreditOwnersRef.current.delete(key);
+    }
+  }, [actions]);
 
   useEffect(() => {
     if (!ready) return;
@@ -204,7 +166,6 @@ export default function DrawPage() {
         setNextDrawAt(snapshot.nextDrawAt);
         setParticipantCount(snapshot.participantCount);
         setPublicPrizeReserve(snapshot.publicPrizeReserve);
-        setAccruedYieldAssets(snapshot.accruedYieldAssets);
       },
     );
     refreshRef.current = refresher.refresh;
@@ -227,25 +188,22 @@ export default function DrawPage() {
     setWinningsOwner(undefined);
     if (!session?.address) return;
     void refresh();
-  }, [session?.address]);
+  }, [addresses.pool, runtime.mode2, session?.address]);
 
   function activeSession() {
     if (!session) throw new Error("Connect your smart account first.");
     return session;
   }
 
-  async function sendTx(currentSession: PasskeySmartSession, to: `0x${string}`, data: `0x${string}`) {
-    const tx = await sendSmartTransaction(currentSession, to, data);
-    await publicClient.waitForTransactionReceipt({ hash: tx });
-  }
-
   async function refresh() {
     await refreshRef.current();
   }
 
-  async function decryptWinnings() {
-    const currentSession = activeSession();
+  const decryptWinnings = useCallback(async () => {
+    if (!session) throw new Error("Connect your smart account first.");
+    const currentSession = session;
     const user = currentSession.address;
+    const requestScope = scope;
     const requestId = winningsRequestId.current + 1;
     winningsRequestId.current = requestId;
     if (!ready) throw new Error("Prize checks are unavailable right now.");
@@ -259,7 +217,12 @@ export default function DrawPage() {
     });
 
     if (isZeroEncryptedHandle(handle)) {
-      if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return false;
+      if (
+        scopeRef.current !== requestScope ||
+        winningsSessionRef.current !== user ||
+        winningsRequestId.current !== requestId
+      )
+        return false;
       setWinnings(0n);
       setWinningsOwner(user);
       return getPrizeRevealFeedback(0n);
@@ -267,68 +230,225 @@ export default function DrawPage() {
 
     let revealedWinnings: bigint;
     try {
-      revealedWinnings = await decryptSmartUint64(
+      revealedWinnings = await decryptExistingSmartUint64(
         currentSession,
         handle as `0x${string}`,
         pool,
       );
     } catch (error) {
-      if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return false;
+      if (
+        scopeRef.current !== requestScope ||
+        winningsSessionRef.current !== user ||
+        winningsRequestId.current !== requestId
+      )
+        return false;
       throw error;
     }
-    if (winningsSessionRef.current !== user || winningsRequestId.current !== requestId) return false;
+    if (
+      scopeRef.current !== requestScope ||
+      winningsSessionRef.current !== user ||
+      winningsRequestId.current !== requestId
+    )
+      return false;
     setWinnings(revealedWinnings);
     setWinningsOwner(user);
     return getPrizeRevealFeedback(revealedWinnings);
-  }
+  }, [addresses.pool, ready, scope, session]);
 
-  async function claimPrize() {
+  const refreshCompletedCredit = useCallback(
+    async (action: AsyncAction) => {
+      const creditScope = action.creditScope;
+      const actionAccount = action.account;
+      if (
+        !["completed", "updating"].includes(action.status) ||
+        !isCreditScope(creditScope) ||
+        !action.operation ||
+        !isStoredDrawOperation(action.operation) ||
+        typeof actionAccount !== "string" ||
+        !isAddress(actionAccount) ||
+        !session?.address ||
+        !isAddress(addresses.pool) ||
+        getAddress(actionAccount) !== getAddress(session.address) ||
+        getAddress(creditScope.pool) !== getAddress(addresses.pool) ||
+        creditScope.mode !== (runtime.mode2 ? "2" : "legacy1")
+      )
+        return;
+      const operationKey = drawOperationKey(action.operation);
+      if (refreshedCreditOperationsRef.current.has(operationKey)) return;
+      const requestScope = scope;
+      try {
+        await decryptWinnings();
+        if (scopeRef.current !== requestScope) return;
+        await Promise.all([refreshRef.current(), refreshConfidentialBalances()]);
+        if (
+          scopeRef.current !== requestScope ||
+          creditScope.action !== "addPrizeToSavings" ||
+          !runtime.mode2
+        ) {
+          refreshedCreditOperationsRef.current.add(operationKey);
+          setCreditRefreshAction(undefined);
+          return;
+        }
+        const pool = asAddress(addresses.pool, "Prize pool");
+        const account = asAddress(session?.address, "Smart account");
+        const [membership, pending] = await Promise.all([
+          publicClient.readContract({
+            address: pool,
+            abi: confidentialPrizePoolAbi,
+            functionName: "membershipIndexOf",
+            args: [account],
+          }),
+          publicClient.readContract({
+            address: pool,
+            abi: confidentialPrizePoolAbi,
+            functionName: "pendingAdmissionOf",
+            args: [account],
+          }),
+        ]);
+        if (scopeRef.current === requestScope)
+          setParticipationPending(membership === 0n && pending.requested);
+        refreshedCreditOperationsRef.current.add(operationKey);
+        setCreditRefreshAction(undefined);
+      } catch {
+        if (scopeRef.current === requestScope) {
+          // The canonical action is complete; only its display reads need another try.
+          setWinnings(undefined);
+          setWinningsOwner(undefined);
+          setCreditRefreshAction(action);
+          updateTrackedAction(action.id, {
+            status: "updating",
+            error: "Your action is complete. Results are updating.",
+          });
+        }
+      }
+    },
+    [
+      addresses.pool,
+      decryptWinnings,
+      refreshConfidentialBalances,
+      runtime.mode2,
+      scope,
+      session?.address,
+      updateTrackedAction,
+    ],
+  );
+
+  useEffect(() => {
+    for (const action of actions) {
+      if (action.status === "completed") void refreshCompletedCredit(action);
+    }
+  }, [actions, refreshCompletedCredit]);
+
+  async function reviewCreditAction(action: "claimPrize" | "addPrizeToSavings") {
     const currentSession = activeSession();
     if (!ready) throw new Error("Prize claims are unavailable right now.");
-
+    const owner = Symbol(action);
+    const controller = new AbortController();
+    if (!reviewLeaseRef.current.begin(owner, () => controller.abort())) return;
     const data = encodeFunctionData({
       abi: confidentialPrizePoolAbi,
-      functionName: "claimPrize",
+      functionName: action === "claimPrize" ? "claimPrize" : "claimPrizeToSavings",
       args: [],
     });
-    await sendTx(currentSession, asAddress(addresses.pool, "Prize pool"), data);
-    setWinnings(undefined);
-    setWinningsOwner(undefined);
-    await refresh();
-    await refreshConfidentialBalances();
+    try {
+      const prepared = await currentSession.prepareTransaction(
+        [{ to: asAddress(addresses.pool, "Prize pool"), data }],
+        { signal: controller.signal },
+      );
+      if (!reviewLeaseRef.current.ready(owner, prepared.cancel)) {
+        prepared.cancel();
+        return;
+      }
+      setCreditReview({ action, owner, prepared });
+    } catch (error) {
+      reviewLeaseRef.current.release(owner);
+      if (!controller.signal.aborted) throw error;
+    }
   }
 
-  async function claimPrizeToSavings() {
-    const currentSession = activeSession();
-    if (!ready) throw new Error("Prize claims are unavailable right now.");
-
-    const data = encodeFunctionData({
-      abi: confidentialPrizePoolAbi,
-      functionName: "claimPrizeToSavings",
-      args: [],
-    });
-    await sendTx(currentSession, asAddress(addresses.pool, "Prize pool"), data);
-    setWinnings(undefined);
-    setWinningsOwner(undefined);
-    await refresh();
-    await refreshConfidentialBalances();
+  function confirmCreditAction(review: CreditReview) {
+    if (!reviewLeaseRef.current.confirm(review.owner)) return;
+    runAction(
+      {
+        label: review.action === "claimPrize" ? "Claim prize" : "Add prize to savings",
+        type: "claim",
+        account: session?.address,
+        creditScope: {
+          kind: "prize-credit",
+          action: review.action,
+          pool: asAddress(addresses.pool, "Prize pool"),
+          mode: runtime.mode2 ? "2" : "legacy1",
+        },
+      },
+      async ({ update }) => {
+        update({ status: "waiting-wallet" });
+        try {
+          await review.prepared.send({
+            onOperationPrepared: (operation) => {
+              pendingCreditOwnersRef.current.set(drawOperationKey(operation), review.owner);
+              update({ status: "confirming", operation });
+            },
+          });
+          update({ status: "completed" });
+          reviewLeaseRef.current.complete(review.owner);
+        } catch (error) {
+          if (
+            error instanceof SafeUserOperationFailedError ||
+            error instanceof SafeUserOperationNotSubmittedError ||
+            error instanceof SafeUserOperationRejectedError
+          ) {
+            pendingCreditOwnersRef.current.delete(drawOperationKey(error.operation));
+            reviewLeaseRef.current.complete(review.owner);
+          }
+          throw error;
+        } finally {
+          setCreditReview((current) => (current === review ? undefined : current));
+        }
+      },
+    );
   }
 
   function runPrizeAction(action: PrizeActionId) {
+    if (creditReview) {
+      confirmCreditAction(creditReview);
+      return;
+    }
     if (action === "addPrizeToSavings") {
-      return run(claimPrizeToSavings, "Prize added to savings.", "addPrizeToSavings");
+      return void reviewCreditAction(action).catch((error) => {
+        const description = "Please review your request again.";
+        reportClientToast(
+          { title: "Unable to prepare", description },
+          { action, stage: "preparing" },
+          error,
+        );
+        toast({ tone: "error", title: "Unable to prepare", description });
+      });
     }
     if (action === "claimPrize") {
-      return run(claimPrize, "Prize claimed.", "claimPrize");
+      return void reviewCreditAction(action).catch((error) => {
+        const description = "Please review your request again.";
+        reportClientToast(
+          { title: "Unable to prepare", description },
+          { action, stage: "preparing" },
+          error,
+        );
+        toast({ tone: "error", title: "Unable to prepare", description });
+      });
     }
     return run(decryptWinnings, "Winnings revealed.", "checkPrize");
   }
 
-  async function run(action: () => Promise<void | false | ToastInput>, ok: string, currentAction?: WorkingAction) {
+  async function run(
+    action: () => Promise<void | false | ToastInput>,
+    ok: string,
+    currentAction?: WorkingAction,
+  ) {
     setStatus("working");
     setWorkingAction(currentAction);
+    let stale = false;
     try {
       const completed = await action();
+      stale = completed === false;
       if (completed === false) return;
       setStatus("success");
       toast(completed ?? { tone: "success", title: ok });
@@ -342,6 +462,7 @@ export default function DrawPage() {
       setStatus("error");
       toast({ tone: "error", title: "Transaction failed", description: errorMessage });
     } finally {
+      if (stale) setStatus("idle");
       setWorkingAction(undefined);
     }
   }
@@ -349,9 +470,7 @@ export default function DrawPage() {
   return (
     <div className="space-y-5">
       <section className="space-y-3">
-        <h1 className="font-display text-3xl font-bold leading-tight">
-          Results and winnings.
-        </h1>
+        <h1 className="font-display text-3xl font-bold leading-tight">Results and winnings.</h1>
         <p className="text-sm leading-relaxed text-muted">
           See when results are expected and check whether you have winnings to claim.
         </p>
@@ -374,62 +493,60 @@ export default function DrawPage() {
         </div>
       </div>
 
-      <div className="card space-y-3">
-        <p className="label">Global pool</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-            <p className="text-xs text-muted">Selection ID</p>
-            <p className="font-display text-2xl font-bold tabular-nums">
-              #{activeDrawId === undefined ? "-" : activeDrawId.toString()}
-            </p>
-          </div>
-          <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-            <p className="text-xs text-muted">Participants</p>
-            <p className="font-display text-2xl font-bold tabular-nums">
-              {participantCount === undefined ? "-" : participantCount.toString()}
-            </p>
-          </div>
-          <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-            <p className="text-xs text-muted">Past results</p>
-            <p className="font-display text-2xl font-bold tabular-nums">
-              {roundsClosed.toString()}
-            </p>
-          </div>
-          <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-            <p className="text-xs text-muted">Prize</p>
-            <p className="font-display text-xl font-bold tabular-nums">
-              {formatUSDC(prizeAssets, 6)} USDC
-            </p>
-          </div>
-        </div>
-      </div>
+      <DrawPoolSummary
+        activeDrawId={activeDrawId}
+        participantCount={participantCount}
+        publicPrizeReserve={publicPrizeReserve}
+        roundsClosed={roundsClosed}
+      />
 
-      <div className="card space-y-3">
-        <div>
-          <p className="label">My winnings</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted">
-            Check your result once a winner has been selected.
-            If you’ve won, claim your winnings here.
-          </p>
-        </div>
-        <div className="flex min-h-20 items-center justify-between gap-3 rounded-2xl border border-white/50 bg-white/35 px-4 py-3">
-          <span className="text-xs font-semibold text-muted">Prize ready</span>
-          <span className="min-w-32 max-w-[68%] text-right font-display text-2xl font-bold leading-none tabular-nums text-brand break-words">
-            {formatUSDC(visibleWinnings, 6)} USDC
-          </span>
-        </div>
-        {prizeActions.map((action) => (
-          <button
-            key={action.id}
-            className={`${action.variant === "primary" ? "btn-primary" : "btn-secondary"} w-full`}
-            disabled={action.disabled}
-            onClick={() => void runPrizeAction(action.id)}
-          >
-            {action.label}
-          </button>
-        ))}
-      </div>
+      {mode2 && session && ready && isAddress(addresses.pool) && (
+        <PrizeHistory
+          account={getAddress(session.address)}
+          pool={getAddress(addresses.pool)}
+          proofUrl={runtime.proofUrl}
+          reviewLease={reviewLeaseRef.current}
+          session={session}
+        />
+      )}
 
+      <PrizeCreditPanel
+        actions={displayedPrizeActions}
+        onAction={(action) => void runPrizeAction(action)}
+        winnings={visibleWinnings}
+      />
+      {creditRefreshAction && (
+        <button
+          className="btn-secondary w-full"
+          onClick={() => void refreshCompletedCredit(creditRefreshAction)}
+        >
+          Refresh winnings
+        </button>
+      )}
+      {participationPending && (
+        <p className="text-sm text-muted">
+          Your savings are waiting to be included in a future draw. Review participation in{" "}
+          <Link href={savingsHref} className="text-brand hover:underline">
+            Savings
+          </Link>
+          .
+        </p>
+      )}
     </div>
+  );
+}
+
+function isCreditScope(value: unknown): value is NonNullable<AsyncAction["creditScope"]> {
+  const pool =
+    typeof value === "object" && value !== null ? (value as { pool?: unknown }).pool : undefined;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === "prize-credit" &&
+    ((value as { action?: unknown }).action === "claimPrize" ||
+      (value as { action?: unknown }).action === "addPrizeToSavings") &&
+    typeof pool === "string" &&
+    isAddress(pool) &&
+    ((value as { mode?: unknown }).mode === "legacy1" || (value as { mode?: unknown }).mode === "2")
   );
 }

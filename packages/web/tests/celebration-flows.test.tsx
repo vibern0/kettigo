@@ -20,7 +20,7 @@ const fixture = vi.hoisted(() => {
 });
 
 vi.mock("viem", async (original) => ({
-  ...await original<typeof import("viem")>(),
+  ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     readContract: async ({ functionName }: { functionName: string }) => {
       if (functionName === "balanceOf") return 1_000_000_000n;
@@ -34,12 +34,16 @@ vi.mock("viem", async (original) => ({
   }),
 }));
 vi.mock("@/lib/contracts", async (original) => ({
-  ...await original<typeof import("@/lib/contracts")>(),
+  ...(await original<typeof import("@/lib/contracts")>()),
   CONTRACTS: {
     usdc: "0x1111111111111111111111111111111111111111",
     confidentialUsdc: "0x2222222222222222222222222222222222222222",
     confidentialPrizePool: "0x3333333333333333333333333333333333333333",
   },
+}));
+vi.mock("@/lib/runtime-config", () => ({
+  SELECTED_SCOPE: { id: "legacy-e65", mode: "legacy1", onboardingEnabled: false },
+  publicConfig: (_name: string, fallback?: string) => fallback ?? "",
 }));
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
@@ -61,9 +65,11 @@ vi.mock("@/lib/zama", async () => {
     createPublicZamaSDK: vi.fn(),
     decryptUint64: fixture.decrypt,
     decryptSmartUint64: fixture.decrypt,
+    decryptExistingSmartUint64: fixture.decrypt,
     decryptPublicUint64: vi.fn(),
     encryptUint64: async () => ({ handle: fixture.handle, inputProof: "0x" }),
-    withSmartZamaSDK: async (_session: unknown, action: (sdk: unknown) => Promise<unknown>) => action({ terminate() {} }),
+    withSmartZamaSDK: async (_session: unknown, action: (sdk: unknown) => Promise<unknown>) =>
+      action({ terminate() {} }),
     prepareSmartReadSessionCalls: async () => [],
     isZeroEncryptedHandle: (handle: string) => handle === `0x${"0".repeat(64)}`,
   };
@@ -89,9 +95,13 @@ vi.mock("canvas-confetti", () => ({
 }));
 
 function Feedback({ children }: { children: React.ReactNode }) {
-  return <MotionConfig reducedMotion="user"><LazyMotion features={domMax}>
-    <ToastProvider>{children}</ToastProvider>
-  </LazyMotion></MotionConfig>;
+  return (
+    <MotionConfig reducedMotion="user">
+      <LazyMotion features={domMax}>
+        <ToastProvider>{children}</ToastProvider>
+      </LazyMotion>
+    </MotionConfig>
+  );
 }
 
 function mount(page: React.ReactNode) {
@@ -125,7 +135,11 @@ beforeEach(() => {
 describe("deposit celebrations", () => {
   it("waits for confirmation before celebrating a deposit", async () => {
     let confirm!: (receipt: { status: string }) => void;
-    fixture.receipt.mockReturnValue(new Promise(resolve => { confirm = resolve; }));
+    fixture.receipt.mockReturnValue(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
     const { container } = await deposit();
     await waitFor(() => expect(fixture.receipt).toHaveBeenCalled());
     expect(container.querySelector("canvas")).toBeNull();
@@ -154,7 +168,11 @@ describe("deposit celebrations", () => {
 describe("prize reveals", () => {
   it("celebrates only after a positive prize amount is available", async () => {
     let reveal!: (amount: bigint) => void;
-    fixture.decrypt.mockReturnValue(new Promise(resolve => { reveal = resolve; }));
+    fixture.decrypt.mockReturnValue(
+      new Promise((resolve) => {
+        reveal = resolve;
+      }),
+    );
     const { container } = mount(<DrawPage />);
     fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
     await waitFor(() => expect(fixture.decrypt).toHaveBeenCalled());
@@ -170,7 +188,7 @@ describe("prize reveals", () => {
     if (scenario === "empty balance") fixture.handle = `0x${"0".repeat(64)}`;
     const { container } = mount(<DrawPage />);
     fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
-    await screen.findByText("No prize this time.");
+    await screen.findByText("Nothing ready to claim.");
     expect(container.querySelector("canvas")).toBeNull();
     expect(screen.getByRole("button", { name: "Check prize" })).toBeTruthy();
   });
@@ -185,7 +203,11 @@ describe("prize reveals", () => {
 
   it("does not reveal or celebrate a prize from an account that has been switched away", async () => {
     let reveal!: (amount: bigint) => void;
-    fixture.decrypt.mockReturnValue(new Promise(resolve => { reveal = resolve; }));
+    fixture.decrypt.mockReturnValue(
+      new Promise((resolve) => {
+        reveal = resolve;
+      }),
+    );
     const { container, rerender } = mount(<DrawPage />);
     fireEvent.click(screen.getByRole("button", { name: "Check prize" }));
     await waitFor(() => expect(fixture.decrypt).toHaveBeenCalled());

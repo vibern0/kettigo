@@ -5,9 +5,8 @@ import Safe, {
   buildSignatureBytes,
   getP256VerifierAddress,
   type ExtractedPasskeyData,
-  type PasskeyArgType,
 } from "@safe-global/protocol-kit";
-import { PimlicoFeeEstimator, Safe4337Pack } from "@safe-global/relay-kit";
+import { Safe4337Pack } from "@safe-global/relay-kit";
 import { getSafeWebAuthnShareSignerDeployment } from "@safe-global/safe-modules-deployments";
 import {
   createPublicClient,
@@ -18,36 +17,71 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import { entryPoint07Address } from "viem/account-abstraction";
+import { entryPoint07Address, type UserOperation } from "viem/account-abstraction";
 import { sepolia } from "viem/chains";
+import {
+  lookupCanonicalUserOperationReceipt,
+  SafeUserOperationIntegrityError,
+  type EthereumBlock,
+  type EthereumReceipt,
+} from "./canonical-user-operation-receipt.ts";
+import {
+  getSafeUserOperationIdentity,
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
+  SafeUserOperationRejectedError,
+} from "./passkey-operation.ts";
+import { createPasskeyFeeEstimator } from "./passkey-fee-estimator.ts";
+import { createDeferredPasskeyAssertion } from "./passkey-prepared-assertion.ts";
+import {
+  canonicalReceiptDependencies,
+  sendPasskeyCalls,
+  submitSignedPasskeyOperation,
+  submissionTimedOut,
+  withinSubmissionDeadline,
+  type PasskeySubmissionDependencies,
+  type SubmissionRelay,
+} from "./passkey-submission.ts";
+import {
+  createGuardedPasskeySession,
+  type PendingOperationLockManager,
+} from "./pending-operation-session.ts";
+import { withDirectCredentialLease } from "./direct-signing-fence.ts";
+import { buildPasskeySigner } from "./passkey-signer.ts";
 
+import { writePasskeyMetadata, type PasskeyMetadata } from "./passkey-metadata.ts";
+import { createKettigoCredential, getKettigoCredential } from "./passkey-webauthn.ts";
+import { PIMLICO_API_KEY, PIMLICO_URL, RPC_URL } from "./contracts.ts";
 import {
-  writePasskeyMetadata,
-  type PasskeyMetadata,
-} from "./passkey-metadata.ts";
-import {
-  createKettigoCredential,
-  getKettigoCredential,
-} from "./passkey-webauthn.ts";
-import { publicConfig } from "./runtime-config.ts";
-import { createPasskeyVerifierGasProbe, withPasskeyStage, type PasskeyGasDiagnostics } from "./passkey-gas.ts";
-import type { PasskeySmartSession, SmartAccountCall, SmartTransactionOptions } from "./smart-session.ts";
+  createPasskeyVerifierGasProbe,
+  withPasskeyStage,
+  type PasskeyGasDiagnostics,
+} from "./passkey-gas.ts";
+import type {
+  PasskeySmartSession,
+  SafeUserOperationIdentity,
+  SafeUserOperationReceipt,
+  SmartAccountCall,
+  SmartTransactionOptions,
+} from "./smart-session.ts";
+export type { SafeUserOperationIdentity, SafeUserOperationReceipt } from "./smart-session.ts";
+export { SafeUserOperationIntegrityError } from "./canonical-user-operation-receipt.ts";
+export {
+  getSafeUserOperationIdentity,
+  SafeUserOperationFailedError,
+  SafeUserOperationNotSubmittedError,
+  SafeUserOperationPendingError,
+  SafeUserOperationRejectedError,
+} from "./passkey-operation.ts";
+export { createPasskeyFeeEstimator } from "./passkey-fee-estimator.ts";
+export { buildPasskeySigner } from "./passkey-signer.ts";
 
 const SAFE_VERSION = "1.4.1" as const;
 const SAFE_MODULES_VERSION = "0.3.0";
 const SAFE_PASSKEY_MODULE_VERSION = "0.2.1";
 const DEFAULT_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RECEIPT_POLL_MS = 1_500;
-const PASSKEY_VERIFICATION_GAS_MARGIN = 50_000n;
-const PASSKEY_DISPATCH_GAS = 100_000n;
-// Sepolia's real P256 assertion needed ~417k for Safe.checkSignatures even
-// though the dummy-signature estimate was ~309k. The captured operation failed
-// validateUserOp at 358,778 gas and passed at 450k; leave headroom for the
-// complete validation path and signature-dependent verifier cost.
-const PASSKEY_MIN_VERIFICATION_GAS = 600_000n;
-const RPC_URL = publicConfig("NEXT_PUBLIC_RPC_URL", process.env.NEXT_PUBLIC_RPC_URL);
-const PIMLICO_API_KEY = publicConfig("NEXT_PUBLIC_PIMLICO_API_KEY", process.env.NEXT_PUBLIC_PIMLICO_API_KEY);
-const PIMLICO_URL = `https://api.pimlico.io/v2/sepolia/rpc?apikey=${PIMLICO_API_KEY}`;
 const SHARED_SIGNER_ADDRESS = sharedSignerAddress();
 
 type PasskeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -73,30 +107,32 @@ type SafeOperationLike = {
 type UserOperationReceiptLike = {
   success: boolean;
   receipt: { transactionHash: string };
+  userOpHash: string;
+  sender: string;
 };
 
-type RelayLike = {
+type RelayLike = SubmissionRelay & {
   protocolKit: ProtocolKitLike;
-  createTransaction(input: {
-    transactions: Array<{ to: string; data: string; value: string }>;
-    options?: { feeEstimator?: ReturnType<typeof createPasskeyFeeEstimator> };
-  }): Promise<unknown>;
-  signSafeOperation(operation: unknown): Promise<unknown>;
-  executeTransaction(input: { executable: unknown }): Promise<string>;
-  getUserOperationReceipt(userOperationHash: string): Promise<UserOperationReceiptLike | null>;
 };
 
 type RelayInitOptions = Parameters<typeof Safe4337Pack.init>[0];
 
-type PasskeySafeDependencies = {
+type PasskeySafeDependencies = PasskeySubmissionDependencies & {
   createCredential(input: { rpId: string; rpName: string }): Promise<Credential>;
   extractPasskeyData(credential: Credential): Promise<ExtractedPasskeyData>;
   getVerifierAddress(chainId: string): string;
   initRelay(options: RelayInitOptions): Promise<RelayLike>;
   getCode(address: Address): Promise<Hex | undefined>;
-  getCredential(rawId: string, rpId: string, options?: CredentialRequestOptions): Promise<Credential>;
+  getCredential(
+    rawId: string,
+    rpId: string,
+    options?: CredentialRequestOptions,
+  ): Promise<Credential>;
   estimateVerifierGas(address: Address): Promise<bigint>;
   sleep(milliseconds: number): Promise<void>;
+  pendingOperationLocks?: PendingOperationLockManager;
+  pendingOperationStorage?: PasskeyStorage;
+  preparationTimeoutMs?: number;
 };
 
 type ReceiptWaitOptions = {
@@ -116,10 +152,13 @@ const defaultDependencies: PasskeySafeDependencies = {
   extractPasskeyData: (credential) => Safe.createPasskeySigner(credential),
   getVerifierAddress: getP256VerifierAddress,
   initRelay: async (options) => {
-    const relay = await Safe4337Pack.init(options) as RelayLike;
+    const relay = (await Safe4337Pack.init(options)) as RelayLike;
     return "safeAddress" in options.options ? prepareDeployedRelay(relay) : relay;
   },
   getCode: (address) => publicClient.getCode({ address }),
+  getTransactionReceipt: (input) =>
+    publicClient.getTransactionReceipt(input) as unknown as Promise<EthereumReceipt>,
+  getBlock: (input) => publicClient.getBlock(input) as unknown as Promise<EthereumBlock>,
   getCredential: (rawId, rpId, options) => getKettigoCredential(rawId, { rpId }, options),
   sleep: (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds)),
 };
@@ -132,26 +171,29 @@ export async function createPasskeyAccount(
   const credential = await deps.createCredential({ rpId: input.rpId, rpName: input.rpName });
   const extracted = await deps.extractPasskeyData(credential);
   const metadata = signerMetadata(extracted, deps.getVerifierAddress(String(sepolia.id)));
-  const relay = await deps.initRelay(relayOptions(metadata, predictedOptions(metadata.rawId), input.rpId, deps));
+  const relay = await deps.initRelay(
+    relayOptions(metadata, predictedOptions(metadata.rawId), input.rpId, deps),
+  );
   const address = getAddress(await relay.protocolKit.getAddress());
   const stored = writePasskeyMetadata({ ...metadata, safeAddress: address }, input.storage);
-  return createSession(relay, stored, input.rpId, deps, true);
+  return createGuardedPasskeySession(createSession(relay, stored, input.rpId, deps, true), {
+    storage: input.storage ?? deps.pendingOperationStorage,
+    locks: deps.pendingOperationLocks,
+    preparationTimeoutMs: deps.preparationTimeoutMs,
+  });
 }
 
 export async function restorePasskeyAccount(
-  input: { metadata: PasskeyMetadata; rpId: string },
+  input: { metadata: PasskeyMetadata; rpId: string; storage?: PasskeyStorage },
   dependencies: Partial<PasskeySafeDependencies> = {},
 ): Promise<PasskeySmartSession> {
   const deps = withDependencies({
     ...dependencies,
   });
   const expectedAddress = getAddress(input.metadata.safeAddress);
-  const predictedRelay = await deps.initRelay(relayOptions(
-    input.metadata,
-    predictedOptions(input.metadata.rawId),
-    input.rpId,
-    deps,
-  ));
+  const predictedRelay = await deps.initRelay(
+    relayOptions(input.metadata, predictedOptions(input.metadata.rawId), input.rpId, deps),
+  );
   const derivedAddress = getAddress(await predictedRelay.protocolKit.getAddress());
   if (derivedAddress !== expectedAddress) {
     throw new Error("The restored Safe address does not match the saved account.");
@@ -159,88 +201,20 @@ export async function restorePasskeyAccount(
   const code = await deps.getCode(expectedAddress);
   const isDeployed = Boolean(code && code !== "0x");
   const relay = isDeployed
-    ? await prepareDeployedRelay(await deps.initRelay(relayOptions(
-      input.metadata,
-      { safeAddress: expectedAddress },
-      input.rpId,
-      deps,
-    )))
+    ? await prepareDeployedRelay(
+        await deps.initRelay(
+          relayOptions(input.metadata, { safeAddress: expectedAddress }, input.rpId, deps),
+        ),
+      )
     : predictedRelay;
-  return createSession(relay, input.metadata, input.rpId, deps, !isDeployed);
-}
-
-export function buildPasskeySigner(
-  metadata: Pick<PasskeyMetadata, "rawId" | "coordinates" | "verifierAddress">,
-  rpId: string,
-  dependencies: Pick<PasskeySafeDependencies, "getCredential">,
-): PasskeyArgType {
-  return {
-    rawId: metadata.rawId,
-    coordinates: metadata.coordinates,
-    verifierAddress: getAddress(metadata.verifierAddress),
-    getFn: (options) => dependencies.getCredential(metadata.rawId, rpId, options),
-  };
-}
-
-type PimlicoFeeEstimatorLike = Pick<
-  PimlicoFeeEstimator,
-  "preEstimateUserOperationGas" | "postEstimateUserOperationGas"
->;
-
-export function createPasskeyFeeEstimator(
-  baseEstimator: PimlicoFeeEstimatorLike = new PimlicoFeeEstimator(),
-  options: { estimateVerifierGas?: () => Promise<bigint>; diagnostics?: PasskeyGasDiagnostics } = {},
-) {
-  const diagnostics = options.diagnostics ?? {};
-  return {
-    preEstimateUserOperationGas: (
-      input: Parameters<PimlicoFeeEstimator["preEstimateUserOperationGas"]>[0],
-    ) => baseEstimator.preEstimateUserOperationGas(input),
-    async postEstimateUserOperationGas(
-      input: Parameters<PimlicoFeeEstimator["postEstimateUserOperationGas"]>[0],
-    ) {
-      // Let the bundler and paymaster validate their network's limits. Account
-      // deployment estimates can exceed a locally assumed verification ceiling.
-      const bundlerGas = BigInt(input.userOperation.verificationGasLimit);
-      diagnostics.bundlerVerificationGas = bundlerGas.toString();
-      const proportionalMargin = (bundlerGas + 3n) / 4n;
-      const estimatedVerificationGas = bundlerGas + (proportionalMargin > PASSKEY_VERIFICATION_GAS_MARGIN
-        ? proportionalMargin : PASSKEY_VERIFICATION_GAS_MARGIN);
-      let measuredVerificationGas = 0n;
-      diagnostics.verifierProbe = "fallback";
-      if (options.estimateVerifierGas) {
-        try {
-          const verifierGas = await options.estimateVerifierGas();
-          if (verifierGas <= 0n) throw new Error("Invalid verifier gas estimate.");
-          diagnostics.verifierGas = verifierGas.toString();
-          diagnostics.verifierProbe = "measured";
-          // Account for WebAuthn/Safe dispatch and signature-dependent P256 work.
-          measuredVerificationGas = verifierGas + (verifierGas + 3n) / 4n + PASSKEY_DISPATCH_GAS;
-        } catch {
-          // Probe availability must not prevent the proven fallback from working.
-        }
-      }
-      const minimumVerificationGas = [PASSKEY_MIN_VERIFICATION_GAS, estimatedVerificationGas, measuredVerificationGas]
-        .reduce((maximum, value) => value > maximum ? value : maximum);
-      diagnostics.requestedVerificationGas = minimumVerificationGas.toString();
-      diagnostics.phase = "sponsorship";
-      const sponsored = await baseEstimator.postEstimateUserOperationGas({
-        ...input,
-        userOperation: {
-          ...input.userOperation,
-          verificationGasLimit: minimumVerificationGas,
-        },
-      });
-      const sponsoredVerificationGas = sponsored.verificationGasLimit == null
-        ? 0n
-        : BigInt(sponsored.verificationGasLimit);
-      diagnostics.sponsoredVerificationGas = sponsoredVerificationGas.toString();
-      if (sponsoredVerificationGas < minimumVerificationGas) {
-        throw new Error("The paymaster returned insufficient verification gas for the passkey.");
-      }
-      return sponsored;
+  return createGuardedPasskeySession(
+    createSession(relay, input.metadata, input.rpId, deps, !isDeployed),
+    {
+      storage: input.storage ?? deps.pendingOperationStorage,
+      locks: deps.pendingOperationLocks,
+      preparationTimeoutMs: deps.preparationTimeoutMs,
     },
-  };
+  );
 }
 
 export async function signSafeTypedData(
@@ -286,81 +260,121 @@ function createSession(
   let usingCounterfactualRelay = counterfactual;
   let refreshRequired = false;
 
-  async function ensureDeployedRelay(): Promise<void> {
+  async function refreshDeploymentState(): Promise<void> {
     if (!refreshRequired) return;
-    const refreshedRelay = await prepareDeployedRelay(await deps.initRelay(relayOptions(
-      metadata,
-      { safeAddress: getAddress(metadata.safeAddress) },
-      rpId,
-      deps,
-    )));
+    const code = await withinSubmissionDeadline(
+      () => deps.getCode(getAddress(metadata.safeAddress)),
+      deps.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
+    );
+    if (code === submissionTimedOut) throw new Error("Safe deployment state refresh timed out.");
+    if (!code || code === "0x") {
+      if (!usingCounterfactualRelay) {
+        relay = await deps.initRelay(
+          relayOptions(metadata, predictedOptions(metadata.rawId), rpId, deps),
+        );
+        usingCounterfactualRelay = true;
+      }
+      refreshRequired = false;
+      return;
+    }
+    const refreshedRelay = await prepareDeployedRelay(
+      await deps.initRelay(
+        relayOptions(metadata, { safeAddress: getAddress(metadata.safeAddress) }, rpId, deps),
+      ),
+    );
     relay = refreshedRelay;
+    usingCounterfactualRelay = false;
     refreshRequired = false;
   }
 
   return {
     address: getAddress(metadata.safeAddress),
     signTypedData: async (typedData) => {
-      await ensureDeployedRelay();
+      await refreshDeploymentState();
       return signSafeTypedData(relay.protocolKit, typedData);
     },
+    lookupUserOperation: async (operation) => {
+      if (
+        operation.chainId !== sepolia.id ||
+        operation.entryPoint !== getAddress(entryPoint07Address)
+      ) {
+        throw new SafeUserOperationIntegrityError(
+          operation,
+          "The operation is not for this network.",
+        );
+      }
+      if (operation.sender !== getAddress(metadata.safeAddress)) {
+        throw new SafeUserOperationIntegrityError(operation, "The operation is not for this Safe.");
+      }
+      const outcome = await lookupCanonicalUserOperationReceipt(
+        canonicalReceiptDependencies(relay, deps),
+        operation,
+      );
+      if (usingCounterfactualRelay) refreshRequired = true;
+      return outcome;
+    },
     prepareTransaction: async (calls) => {
+      await refreshDeploymentState();
       // Each prepared approval owns its relay and WebAuthn gate. Other wallet
       // actions cannot consume this operation's challenge or assertion.
-      let requestAssertion: (() => Promise<Credential>) | undefined;
-      let ready!: () => void;
-      let failed!: (error: unknown) => void;
-      const assertionReady = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
-      let resolveAssertion!: (credential: Credential) => void;
-      let rejectAssertion!: (error: unknown) => void;
-      const signingDeps = {
-        ...deps,
-        getCredential(rawId: string, relyingParty: string, options?: CredentialRequestOptions) {
-          requestAssertion = () => deps.getCredential(rawId, relyingParty, options);
-          const assertion = new Promise<Credential>((resolve, reject) => {
-            resolveAssertion = resolve;
-            rejectAssertion = reject;
-          });
-          ready();
-          return assertion;
-        },
-      };
-      const preparedRelay = await deps.initRelay(relayOptions(
-        metadata,
-        usingCounterfactualRelay ? predictedOptions(metadata.rawId) : { safeAddress: getAddress(metadata.safeAddress) },
-        rpId,
-        signingDeps,
-      ));
+      const assertion = createDeferredPasskeyAssertion(deps);
+      const signingDeps = { ...deps, ...assertion.signingDependencies };
+      const preparedRelay = await deps.initRelay(
+        relayOptions(
+          metadata,
+          usingCounterfactualRelay
+            ? predictedOptions(metadata.rawId)
+            : { safeAddress: getAddress(metadata.safeAddress) },
+          rpId,
+          signingDeps,
+        ),
+      );
       const diagnostics: PasskeyGasDiagnostics = {};
-      const operation = await withPasskeyStage(diagnostics, "estimation", () => preparedRelay.createTransaction({
-        transactions: calls.map((call) => ({ to: getAddress(call.to), data: call.data, value: (call.value ?? 0n).toString() })),
-        options: { feeEstimator: createPasskeyFeeEstimator(undefined, {
-          estimateVerifierGas: () => deps.estimateVerifierGas(getAddress(metadata.verifierAddress)), diagnostics,
-        }) },
-      }));
-      const signedOperation = withPasskeyStage(diagnostics, "signing", () => preparedRelay.signSafeOperation(operation));
+      const operation = await withPasskeyStage(diagnostics, "estimation", () =>
+        preparedRelay.createTransaction({
+          transactions: calls.map((call) => ({
+            to: getAddress(call.to),
+            data: call.data,
+            value: (call.value ?? 0n).toString(),
+          })),
+          options: {
+            feeEstimator: createPasskeyFeeEstimator(undefined, {
+              estimateVerifierGas: () =>
+                deps.estimateVerifierGas(getAddress(metadata.verifierAddress)),
+              diagnostics,
+            }),
+          },
+        }),
+      );
+      const signedOperation = withPasskeyStage(diagnostics, "signing", () =>
+        preparedRelay.signSafeOperation(operation),
+      );
       // Run Safe's RPC checks now; pause only when its actual assertion is ready.
-      void signedOperation.then(ready, failed);
-      await assertionReady;
+      void signedOperation.then(assertion.markReady, assertion.fail);
+      await assertion.waitUntilReady();
       let used = false;
       return {
         cancel() {
           if (used) return;
           used = true;
-          rejectAssertion?.(new Error("Transaction review closed."));
+          assertion.cancel();
         },
         async send(options?: SmartTransactionOptions): Promise<Hex> {
           if (used) throw new Error("Please go back and review your transaction again.");
           used = true;
-          if (requestAssertion) {
-            // Invoke credentials.get in the Confirm click's call stack.
-            try { requestAssertion().then(resolveAssertion, rejectAssertion); }
-            catch (error) { rejectAssertion(error); }
-          }
+          assertion.requestFromConfirmation();
           const signed = normalizePasskeySignature(await signedOperation);
-          const tx = await submitSignedOperation(preparedRelay, signed, deps, diagnostics, options);
-          usingCounterfactualRelay = false;
-          refreshRequired = true;
+          const tx = await submitSignedPasskeyOperation(
+            preparedRelay,
+            signed,
+            deps,
+            diagnostics,
+            getAddress(metadata.safeAddress),
+            options,
+            () => {
+              if (usingCounterfactualRelay) refreshRequired = true;
+            },
+          );
           return tx;
         },
       };
@@ -371,62 +385,39 @@ function createSession(
       // valid passkey assertion fail AA24. Refreshing before signing avoids a
       // second WebAuthn prompt and keeps the claim to one user confirmation.
       if (!usingCounterfactualRelay) refreshRequired = true;
-      await ensureDeployedRelay();
-      const transactionHash = await sendCalls(relay, calls, deps, getAddress(metadata.verifierAddress), options);
-      if (usingCounterfactualRelay) {
-        usingCounterfactualRelay = false;
-        refreshRequired = true;
-      }
-      return transactionHash;
+      await refreshDeploymentState();
+      const active = (
+        options as SmartTransactionOptions & { __assertPendingOperationLease?: () => void }
+      ).__assertPendingOperationLease;
+      const signingRelay = active
+        ? await prepareDeployedRelay(
+            await deps.initRelay(
+              relayOptions(
+                metadata,
+                usingCounterfactualRelay
+                  ? predictedOptions(metadata.rawId)
+                  : { safeAddress: getAddress(metadata.safeAddress) },
+                rpId,
+                withDirectCredentialLease(deps, active),
+              ),
+            ),
+          )
+        : relay;
+      return sendPasskeyCalls(
+        signingRelay,
+        calls,
+        deps,
+        getAddress(metadata.verifierAddress),
+        getAddress(metadata.safeAddress),
+        normalizePasskeySignature,
+        active,
+        options,
+        () => {
+          if (usingCounterfactualRelay) refreshRequired = true;
+        },
+      );
     },
   };
-}
-
-async function sendCalls(
-  relay: RelayLike,
-  calls: SmartAccountCall[],
-  deps: PasskeySafeDependencies,
-  verifierAddress: Address,
-  options?: SmartTransactionOptions,
-): Promise<Hex> {
-  const diagnostics: PasskeyGasDiagnostics = {};
-  const operation = await withPasskeyStage(diagnostics, "estimation", () => relay.createTransaction({
-    transactions: calls.map((call) => ({
-      to: getAddress(call.to),
-      data: call.data,
-      value: (call.value ?? 0n).toString(),
-    })),
-    options: { feeEstimator: createPasskeyFeeEstimator(undefined, {
-      estimateVerifierGas: () => deps.estimateVerifierGas(verifierAddress), diagnostics,
-    }) },
-  }));
-  const signed = normalizePasskeySignature(await withPasskeyStage(diagnostics, "signing", () => relay.signSafeOperation(operation)));
-  return submitSignedOperation(relay, signed, deps, diagnostics, options);
-}
-
-async function submitSignedOperation(
-  relay: RelayLike,
-  signed: unknown,
-  deps: PasskeySafeDependencies,
-  diagnostics: PasskeyGasDiagnostics,
-  options?: SmartTransactionOptions,
-): Promise<Hex> {
-  // Read the final signed gas fields only; never copy identity, calldata,
-  // paymaster data, or credential/signature material into diagnostics.
-  const operation = signed as { getUserOperation?: () => Record<string, unknown> };
-  const gas = operation.getUserOperation?.();
-  const fields = {
-    verificationGasLimit: "submittedVerificationGas", callGasLimit: "submittedCallGas",
-    preVerificationGas: "submittedPreVerificationGas", maxFeePerGas: "submittedMaxFeePerGas",
-    maxPriorityFeePerGas: "submittedMaxPriorityFeePerGas",
-  } as const;
-  for (const [field, diagnostic] of Object.entries(fields)) {
-    const value = gas?.[field];
-    if (typeof value === "bigint") diagnostics[diagnostic] = value.toString();
-  }
-  options?.onSigned?.();
-  const hash = await withPasskeyStage(diagnostics, "submission", () => relay.executeTransaction({ executable: signed }));
-  return withPasskeyStage(diagnostics, "receipt", () => waitForUserOperationTransaction(relay, hash, { sleep: deps.sleep }));
 }
 
 function normalizePasskeySignature(operation: unknown): unknown {
@@ -439,7 +430,8 @@ function normalizePasskeySignature(operation: unknown): unknown {
   if (
     signature.isContractSignature &&
     signature.signer.toLowerCase() === SHARED_SIGNER_ADDRESS.toLowerCase()
-  ) return operation;
+  )
+    return operation;
   signatures.clear();
   safeOperation.addSignature(new EthSafeSignature(SHARED_SIGNER_ADDRESS, signature.data, true));
   return operation;
@@ -495,8 +487,9 @@ function sharedSignerAddress(): Address {
     released: true,
     network: String(sepolia.id),
   });
-  const address = Object.entries(deployment?.networkAddresses ?? {})
-    .find(([network]) => network === String(sepolia.id))?.[1];
+  const address = Object.entries(deployment?.networkAddresses ?? {}).find(
+    ([network]) => network === String(sepolia.id),
+  )?.[1];
   if (!address) throw new Error("Safe passkey signer is unavailable on this network.");
   return getAddress(address);
 }

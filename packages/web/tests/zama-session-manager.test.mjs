@@ -4,10 +4,7 @@ import { recoverTypedDataAddress } from "viem";
 
 import * as zamaSessionManagers from "../src/lib/zama-session-manager.ts";
 
-const {
-  createPersistentCredentialOptions,
-  createZamaSessionManager,
-} = zamaSessionManagers;
+const { createPersistentCredentialOptions, createZamaSessionManager } = zamaSessionManagers;
 
 test("persistent credentials expire after seven days", () => {
   const storage = { name: "browser-storage" };
@@ -60,13 +57,7 @@ test("a delegated read session authorizes the local signer before decrypting", a
   const second = await manager.run(session, ["pool"], async (resource) => resource);
 
   assert.equal(first, second);
-  assert.deepEqual(events, [
-    "key",
-    "resource",
-    "delegate:token,pool",
-    "decrypt",
-    "delegate:pool",
-  ]);
+  assert.deepEqual(events, ["key", "resource", "delegate:token,pool", "decrypt", "delegate:pool"]);
 });
 
 test("a delegated read session rotates its key after expiry without a reload", async () => {
@@ -89,7 +80,9 @@ test("a delegated read session rotates its key after expiry without a reload", a
       return {
         id: key.id,
         permits: { async clear() {} },
-        terminate() { terminated.push(key.id); },
+        terminate() {
+          terminated.push(key.id);
+        },
       };
     },
     async ensureDelegated() {},
@@ -121,8 +114,14 @@ test("delegated cleanup loads persisted credentials before a session runs", asyn
       assert.equal(receivedKey, key);
       events.push("resource");
       return {
-        permits: { async clear() { events.push("clear"); } },
-        terminate() { events.push("terminate"); },
+        permits: {
+          async clear() {
+            events.push("clear");
+          },
+        },
+        terminate() {
+          events.push("terminate");
+        },
       };
     },
     async ensureDelegated() {},
@@ -187,7 +186,9 @@ test("concurrent delegated cleanup shares one credential removal", async () => {
         permits: {
           async clear() {
             clearAttempts += 1;
-            await new Promise((resolve) => { releaseClear = resolve; });
+            await new Promise((resolve) => {
+              releaseClear = resolve;
+            });
           },
         },
         terminate() {},
@@ -211,10 +212,10 @@ test("read-session requests authorize the complete allowlist and reject other co
   const pool = "0x00000000000000000000000000000000000000bb";
   const other = "0x00000000000000000000000000000000000000cc";
 
-  assert.deepEqual(
-    zamaSessionManagers.prepareZamaReadContracts([token], [token, pool]),
-    { requestedContracts: [token], delegationContracts: [token, pool] },
-  );
+  assert.deepEqual(zamaSessionManagers.prepareZamaReadContracts([token], [token, pool]), {
+    requestedContracts: [token],
+    delegationContracts: [token, pool],
+  });
   assert.throws(
     () => zamaSessionManagers.prepareZamaReadContracts([other], [token, pool]),
     /not authorized for balance reads/,
@@ -226,15 +227,23 @@ test("the local read key is reused for seven days and then replaced", () => {
 
   const values = new Map();
   const storage = {
-    getItem(key) { return values.get(key) ?? null; },
-    setItem(key, value) { values.set(key, value); },
-    removeItem(key) { values.delete(key); },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
   };
   const safe = "0x00000000000000000000000000000000000000bb";
   const generated = [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`];
   let generation = 0;
   const deps = {
-    generatePrivateKey() { return generated[generation++]; },
+    generatePrivateKey() {
+      return generated[generation++];
+    },
     getAccountAddress(privateKey) {
       return privateKey === generated[0]
         ? "0x00000000000000000000000000000000000000aa"
@@ -244,10 +253,13 @@ test("the local read key is reused for seven days and then replaced", () => {
 
   const first = zamaSessionManagers.getOrCreateZamaReadSessionKey(storage, safe, 1_000, deps);
   const [storageKey] = values.keys();
-  values.set(storageKey, JSON.stringify({
-    ...first,
-    address: "0x00000000000000000000000000000000000000dd",
-  }));
+  values.set(
+    storageKey,
+    JSON.stringify({
+      ...first,
+      address: "0x00000000000000000000000000000000000000dd",
+    }),
+  );
   const reused = zamaSessionManagers.getOrCreateZamaReadSessionKey(
     storage,
     safe,
@@ -287,10 +299,7 @@ test("the local read key produces a canonical 65-byte EIP-712 signature", async 
     message: { expires: 123n },
   };
 
-  const signature = await zamaSessionManagers.signZamaReadSessionTypedData(
-    privateKey,
-    typedData,
-  );
+  const signature = await zamaSessionManagers.signZamaReadSessionTypedData(privateKey, typedData);
 
   assert.match(signature, /^0x[0-9a-f]{130}$/);
   assert.equal(
@@ -335,7 +344,10 @@ test("grantPermit authorizes all requested contracts through the reused SDK", as
   await manager.grantPermit(session, ["token", "pool"]);
   await manager.grantPermit(session, ["token", "pool"]);
 
-  assert.deepEqual(grants, [["token", "pool"], ["token", "pool"]]);
+  assert.deepEqual(grants, [
+    ["token", "pool"],
+    ["token", "pool"],
+  ]);
 });
 
 test("clear removes persistent credentials and terminates the SDK", async () => {
@@ -361,7 +373,10 @@ test("clear removes persistent credentials and terminates the SDK", async () => 
   await manager.clear(session);
 
   assert.deepEqual(events, ["clear:1", "terminate:1"]);
-  await assert.rejects(manager.run(session, async (sdk) => sdk), /closed/);
+  await assert.rejects(
+    manager.run(session, async (sdk) => sdk),
+    /closed/,
+  );
 });
 
 test("clear creates an SDK to remove credentials persisted before reload", async () => {
@@ -386,7 +401,9 @@ test("clear creates an SDK to remove credentials persisted before reload", async
 test("clear waits for active work before removing credentials", async () => {
   const events = [];
   let finishWork;
-  const workGate = new Promise((resolve) => { finishWork = resolve; });
+  const workGate = new Promise((resolve) => {
+    finishWork = resolve;
+  });
   const session = {};
   const manager = createZamaSessionManager(() => ({
     permits: {
@@ -409,7 +426,10 @@ test("clear waits for active work before removing credentials", async () => {
   await Promise.resolve();
 
   assert.deepEqual(events, ["work:start"]);
-  await assert.rejects(manager.run(session, async () => {}), /closed/);
+  await assert.rejects(
+    manager.run(session, async () => {}),
+    /closed/,
+  );
   finishWork();
   await Promise.all([work, clearing]);
   assert.deepEqual(events, ["work:start", "work:end", "clear", "terminate"]);
@@ -435,5 +455,8 @@ test("clear still terminates and can retry when credential removal fails", async
 
   assert.equal(attempts, 2);
   assert.equal(terminations, 2);
-  await assert.rejects(manager.run(session, async () => {}), /closed/);
+  await assert.rejects(
+    manager.run(session, async () => {}),
+    /closed/,
+  );
 });

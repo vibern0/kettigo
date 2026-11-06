@@ -1,0 +1,26 @@
+{
+  "name": "@kettigo/proof-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --config vitest.worker.config.ts",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tools": "tsc --project tsconfig.tools.json",
+    "build": "wrangler deploy --dry-run --config wrangler.jsonc",
+    "test:restore": "node --experimental-transform-types --test tools/retained-sqlite.test.mts",
+    "test:backfill": "node --experimental-transform-types --test tools/rpc-backfill.test.mts"
+  },
+  "dependencies": {
+    "@kettigo/protocol": "workspace:*",
+    "viem": "2.55.19"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.2.7",
+    "@cloudflare/workers-types": "5.20260924.1",
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.149.0"
+  }
+}

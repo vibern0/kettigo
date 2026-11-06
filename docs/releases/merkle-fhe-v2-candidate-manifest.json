@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "status": "contracts-deployed",
+  "chainId": 11155111,
+  "sourceCommit": "752c7ab",
+  "contracts": {
+    "confidentialUSDC": { "address": "0xe64c1836b96253104a753E60188f691173Ded624", "runtimeBytecodeHash": "0x77e5d7ef9d18264f5538ec9b5e6b8bf617ab5a75db3154fba8a2f91dc8c770b3" },
+    "confidentialPrizePool": { "address": "0x30530991e296a663a32567C170b290fB88578408", "deploymentBlock": 12078643, "runtimeBytecodeHash": "0x805275497079dc5cf9c18a541acd00ec6764aed99ead5dad389235b6d1059ad7" },
+    "morphoYieldAdapter": { "address": "0x6c180a345F6eA433AfE59c35c2a611B0d15d1c09", "runtimeBytecodeHash": "0x0d26454f92928dc3811a43f0e5a0fab01ea645b7bac17eb926c6c6b1f97405fc" }
+  },
+  "proofService": { "workerUrl": null, "d1Database": "kettigo-proof-v2-sepolia" },
+  "application": { "url": null, "buildHash": null },
+  "runEnvelope": "docs/releases/merkle-fhe-v2-run-envelope.md",
+  "unresolved": ["Worker configuration and URL", "app URL", "source verification"]
+}

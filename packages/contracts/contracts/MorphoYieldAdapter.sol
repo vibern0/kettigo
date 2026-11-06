@@ -162,6 +162,8 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
 
   // The access-control modifier cannot call untrusted code and runs before the reentrancy guard.
   // aderyn-fp-next-line(non-reentrant-not-first)
+  // onlyPrizePool and nonReentrant protect post-withdraw accounting from callback reentry.
+  // aderyn-fp-next-line(reentrancy-state-change)
   function restorePrincipalToPool(
     uint256 assets
   )
@@ -170,17 +172,18 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
     nonReentrant
     returns (uint256 restoredAssets)
   {
-    if (assets > suppliedPrincipal) {
-      revert PrincipalWithdrawalExceedsSupply(assets, suppliedPrincipal);
-    }
-
     uint256 supplied = suppliedPrincipal;
-    bool fullPrincipalRestore = assets == supplied;
-    // The adapter is nonReentrant, and only the trusted pool can call this flow.
+    uint256 availableIdlePrincipal = usdc.balanceOf(address(this)) - idlePrincipal; // aderyn-fp(reentrancy-state-change)
+    uint256 idleAssets = assets < availableIdlePrincipal ? assets : availableIdlePrincipal;
+    uint256 morphoAssets = assets - idleAssets;
+    if (morphoAssets > supplied) {
+      revert PrincipalWithdrawalExceedsSupply(morphoAssets, supplied);
+    }
+    bool fullPrincipalRestore = morphoAssets > 0 && morphoAssets == supplied;
     // aderyn-fp-next-line(reentrancy-state-change)
     uint256 sharesToWithdraw =
       fullPrincipalRestore ? morpho.position(marketId, address(this)).supplyShares : 0;
-    uint256 assetsToWithdraw = fullPrincipalRestore ? 0 : assets;
+    uint256 assetsToWithdraw = fullPrincipalRestore ? 0 : morphoAssets;
 
     uint256 withdrawnAssets;
     uint256 withdrawnShares;
@@ -197,17 +200,17 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
 
     uint256 reserveUsed = fullPrincipalRestore ? idlePrincipal : 0;
     uint256 available = withdrawnAssets + reserveUsed;
-    if (available < assets) {
-      revert PrincipalLoss(assets, available);
+    if (available < morphoAssets) {
+      revert PrincipalLoss(morphoAssets, available);
     }
 
-    suppliedPrincipal = supplied - assets;
+    suppliedPrincipal = supplied - morphoAssets;
     if (fullPrincipalRestore) {
       idlePrincipal = 0;
     }
     _wrapAndSendToPool(assets, false);
 
-    uint256 surplusAssets = available - assets;
+    uint256 surplusAssets = available - morphoAssets;
     if (surplusAssets > 0) {
       _wrapAndSendToPool(surplusAssets, true);
       emit YieldHarvested(surplusAssets, withdrawnShares);
