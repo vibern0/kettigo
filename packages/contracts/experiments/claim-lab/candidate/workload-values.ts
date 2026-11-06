@@ -42,16 +42,16 @@ export const refs = (value: unknown, found: Reference[] = []): Reference[] => {
 };
 
 export const scope = (
-  workloadFingerprint: Hex,
+  workloadFingerprint: string,
   actionId: string,
   reference: Reference,
   contract: Address | null,
   extra: Record<string, unknown> = {},
 ) =>
   Object.freeze({
+    ...extra,
     actionId,
-    workloadFingerprint,
+    workloadFingerprint: h32(workloadFingerprint, "workload fingerprint"),
     reference,
     contract,
-    ...extra,
   });

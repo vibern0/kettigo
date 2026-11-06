@@ -12,6 +12,11 @@
     "./zama-data-signer.ts",
     "./zama-data-signer-core.ts",
     "./workload-data.ts",
+    "./canonical-event.ts",
+    "./workload-conditions.ts",
+    "./workload-resolver.ts",
+    "./workload-completion.ts",
+    "./workload-principal.ts",
     "./eoa-workload-definition.d.mts"
   ]
 }

@@ -1,4 +1,61 @@
-# Merkle + FHE integration progress — stopped 6 November 2026
+# Merkle + FHE integration progress — 6 November 2026
+
+## Scoped resume: cleanup and SDK/evidence integration
+
+The user resumed only the first two immediate next steps, using parallel
+GPT-5.6 medium agents. [PR #52](https://github.com/vibern0/kettigo/pull/52)
+remains a draft. Commit `9f3c214` had already preserved the six unfinished
+cleanup files; the stopped checkpoint below predates that preservation commit
+and the opening of the PR.
+
+- **Pinned-reader cleanup:** fixed the missing runtime `getAddress` import,
+  canonical fingerprint typing, and reserved-scope metadata overrides; removed
+  retired source and split SDK/principal tests while retaining historical skip,
+  dependency-order, object-key-order, and method-receiver checks.
+- **SDK/evidence implementation:** added closed canonical receipt readers,
+  operation-specific Safe log ownership, a historical proof adapter using the
+  existing proof client, graph-bound conditional credit evidence, and a finite
+  resolver producing the approved encoder's reference records. Real compiled
+  graph tests cover deposits, admission, all prize-funding actions, historical
+  checks, pinned principal, withdrawal batches, account/Morpho unwraps, Safe
+  initial batches, and reference-free EOA actions.
+- **Fresh combined verification:** 190 candidate tests passed with no failures,
+  cancellations, or skips. Candidate and contracts TypeScript checks passed;
+  formatting passed for the changed/new candidate files. Shared proof-client
+  tests passed 26/26 and protocol tests passed 24/24 during this resume.
+- **Steps 1–2 source/local accepted:** the independent combined review and its
+  scoped re-review approved the result. Review found and verified fixes for
+  cross-producer evidence substitution (including Safe/EOA downgrade) and
+  surplus historical configuration overriding graph-derived proof scope. The
+  resolver now binds producer action ID, kind, and owner before sensitive work
+  and copies only the four permitted historical configuration fields.
+- **Qualified local analysis:** the final candidate scan supplied 20 paths;
+  Lizard and ESLint9 each routed 19 source/test files (`tsconfig.json` is not a
+  source route). Lizard reported zero findings. ESLint9 reported 16 High,
+  122 Warning, and 3 Info findings, plus two analyzer configuration warnings.
+  Guarded canonical handle-map access, graph-bounded array indexes, test
+  fixtures, propagated async errors, and mismatched test-framework rules were
+  inspected and qualified locally by the reviewer; this is not a clean ESLint
+  or Cloud pass. Codacy Cloud API access still returns `Unauthorized`; no Cloud
+  false-positive disposition or clean release gate is claimed.
+- **Whole-PR gate remains open:** a fresh local PR scan with the current user
+  configuration returned 120 ESLint8 High findings, a TypeScript parser-services
+  warning, and a Trivy timeout at the explicit 30-second tool bound. Semgrep,
+  Jackson, and Markdownlint reported zero findings. These results cover the
+  broader existing PR, not just the two resumed steps; they have not all been
+  adjudicated in this resume. The candidate's separate Lizard/ESLint9 review
+  does not replace this remaining whole-branch quality gate.
+
+The resolver remains a data-only layer with injected canonical recovery/read
+evidence. Wiring that authority into an executable, recovering workload driver
+is a later step. No deployment, funding, financial signature, live run, or
+application/browser exercise was resumed. The retention canary is untouched.
+
+The next implementation work after these two steps is the executable finite
+workload driver, followed by constrained Safe/browser attachment and concrete
+deployment/run readiness. The original spending envelope remains unchanged.
+
+## Historical stopped checkpoint
 
 Status recorded at **2026-11-06 01:30 UTC**. Work was stopped at the user's
 request. **The integration is not complete or ready for release.**

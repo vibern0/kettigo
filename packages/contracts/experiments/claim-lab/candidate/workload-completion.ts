@@ -1,4 +1,4 @@
-import { type Address, type Hex } from "viem";
+import { getAddress, type Address, type Hex } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { canonical } from "./journal-values.mjs";
 import { addr, decimal, h32 } from "./workload-values.ts";
