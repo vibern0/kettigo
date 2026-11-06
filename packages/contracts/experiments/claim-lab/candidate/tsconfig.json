@@ -8,5 +8,10 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["./zama-data-signer.ts", "./zama-data-signer-core.ts", "./workload-data.ts", "./eoa-workload-definition.d.mts"]
+  "include": [
+    "./zama-data-signer.ts",
+    "./zama-data-signer-core.ts",
+    "./workload-data.ts",
+    "./eoa-workload-definition.d.mts"
+  ]
 }

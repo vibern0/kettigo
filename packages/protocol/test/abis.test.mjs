@@ -157,7 +157,7 @@ test("token and event exports come from the canonical ABI surfaces", () => {
 test("prize proof selectors match the compiled pool artifact", () => {
   const artifact = JSON.parse(
     readFileSync(
-      new URL(
+      new globalThis.URL(
         "../../contracts/artifacts/contracts/ConfidentialPrizePool.sol/ConfidentialPrizePool.json",
         import.meta.url,
       ),
