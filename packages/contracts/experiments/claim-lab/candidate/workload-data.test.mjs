@@ -8,6 +8,7 @@ import {
   resolveSdkReferences,
 } from "./workload-data.ts";
 import { compileCandidateWorkload } from "./eoa-workload-definition.mjs";
+import { encodeCandidateEoaAction } from "./workload-calldata.mjs";
 import {
   workloadDefinitionFixture,
   workloadManifestFixture,
@@ -160,4 +161,38 @@ test("unverified current-principal callback cannot reach SDK encryption", async 
     /pinned evidence/,
   );
   assert.equal(calls, 0);
+});
+
+test("SDK deposit records feed the approved encoder in nested wrapper order", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  const actionId = "eoa-00-deposit",
+    action = compiled.actions.find((entry) => entry.id === actionId);
+  const records = [
+    ...(await resolveSdkReferences({
+      compiled,
+      actionId,
+      sdk: {
+        encrypt: async () => ({ encryptedValues: ["0x" + "ab".repeat(32)], inputProof: "0x1234" }),
+      },
+    })),
+  ];
+  const delegate = action.operation.args[0][1].args[3];
+  records.push({
+    reference: delegate,
+    value: "0x",
+    scope: {
+      actionId,
+      workloadFingerprint: compiled.fingerprint,
+      reference: delegate,
+      contract: null,
+    },
+  });
+  const encoded = encodeCandidateEoaAction({
+    compiled,
+    actionId,
+    resolved: { actionId, workloadFingerprint: compiled.fingerprint, references: records },
+  });
+  assert.match(encoded.data, /^0x/);
+  assert.equal(records[0].value, "0x" + "ab".repeat(32));
+  assert.equal(records[1].value, "0x1234");
 });

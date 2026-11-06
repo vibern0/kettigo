@@ -1,9 +1,10 @@
 import { decodeEventLog, encodeAbiParameters, getAddress, type Address, type Hex } from "viem";
 
 import { confidentialPrizePoolAbi, confidentialUsdcAbi } from "../../../../protocol/src/index.ts";
-// prettier-ignore
-// @ts-ignore The accepted graph is authored as checked JavaScript.
-import { validateCompiledCandidateWorkload, workloadFingerprint } from "./eoa-workload-definition.mjs";
+import {
+  validateCompiledCandidateWorkload,
+  workloadFingerprint,
+} from "./eoa-workload-definition.mjs";
 
 type Sdk = {
   encrypt(input: {
@@ -114,6 +115,8 @@ export async function resolveSdkInput(input: {
   });
   if (!Array.isArray(encrypted.encryptedValues) || encrypted.encryptedValues.length !== 1)
     throw new Error("workload data: expected one encrypted value");
+  if (bytes(encrypted.inputProof, "input proof") === "0x")
+    throw new Error("workload data: empty input proof");
   return {
     handle: h32(encrypted.encryptedValues[0], "encrypted value"),
     proof: bytes(encrypted.inputProof, "input proof"),
