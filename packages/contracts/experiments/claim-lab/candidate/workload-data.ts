@@ -5,6 +5,20 @@ import {
   validateCompiledCandidateWorkload,
   workloadFingerprint,
 } from "./eoa-workload-definition.mjs";
+import {
+  resolvePinnedCurrentPrincipal,
+  type PinnedCurrentPrincipalInput,
+} from "./workload-principal.ts";
+
+export type {
+  CanonicalDecimalString,
+  CanonicalDependency,
+  ConditionalCreditEvidence,
+  DependencyCompletion,
+  PinnedRead,
+} from "./workload-completion.ts";
+export { FIXED_ENTRY_POINT_07 } from "./workload-completion.ts";
+export { resolvePinnedCurrentPrincipal } from "./workload-principal.ts";
 
 type Sdk = {
   encrypt(input: {
@@ -24,7 +38,15 @@ type Sdk = {
   };
 };
 type Reference = Record<string, unknown>;
-type Action = { id: string; kind: string; operation?: unknown };
+type Action = {
+  id: string;
+  kind: string;
+  phase?: string;
+  actor?: string;
+  target?: string;
+  dependencies?: readonly string[];
+  operation?: unknown;
+};
 type RecordValue = Hex | string | boolean | readonly Hex[];
 export type ResolvedReference = Readonly<{
   reference: Reference;
@@ -60,6 +82,11 @@ const clearUint = (value: unknown, label: string): string => {
   if (typeof value !== "bigint" || value < 0n || value > UINT64_MAX)
     throw new Error(`workload data: invalid ${label}`);
   return value.toString();
+};
+const nonzeroH32 = (value: unknown, label: string): Hex => {
+  const result = h32(value, label);
+  if (result === `0x${"00".repeat(32)}`) throw new Error(`workload data: invalid ${label}`);
+  return result;
 };
 const refs = (value: unknown, found: Reference[] = []): Reference[] => {
   if (Array.isArray(value)) value.forEach((entry) => refs(entry, found));
@@ -193,10 +220,32 @@ export async function resolveSdkReferences(input: {
   compiled: { actions: Action[]; definition: { contracts: Record<string, string> } };
   actionId: string;
   sdk: Sdk;
+  pinnedCurrentPrincipal?: Omit<PinnedCurrentPrincipalInput, "compiled" | "actionId">;
 }): Promise<readonly ResolvedReference[]> {
   const compiled = validateCompiledCandidateWorkload(input.compiled),
-    action = actionFor(compiled, input.actionId),
-    result: ResolvedReference[] = [],
+    action = actionFor(compiled, input.actionId);
+  if (
+    refs(action.operation).some(
+      (ref) => (ref.amount as Reference | undefined)?.kind === "currentPrincipal",
+    )
+  ) {
+    if (!input.pinnedCurrentPrincipal)
+      throw new Error("workload data: current principal requires pinned evidence");
+    return resolvePinnedCurrentPrincipal({
+      compiled,
+      actionId: input.actionId,
+      ...input.pinnedCurrentPrincipal,
+    });
+  }
+  return staticSdkReferences(compiled, action, input.sdk);
+}
+
+async function staticSdkReferences(
+  compiled: { actions: Action[]; definition: { contracts: Record<string, string> } },
+  action: Action,
+  sdk: Sdk,
+): Promise<readonly ResolvedReference[]> {
+  const result: ResolvedReference[] = [],
     inputs = new Map<string, { ref: Reference; value: { handle: Hex; proof: Hex } }>();
   for (const ref of refs(action.operation)) {
     if (ref.kind !== "sdkInput") continue;
@@ -204,12 +253,11 @@ export async function resolveSdkReferences(input: {
       (ref.amount as Reference | undefined)?.kind === "currentPrincipal"
         ? (ref.amount as Reference)
         : undefined;
-    if (principal) throw new Error("workload data: current principal requires pinned evidence");
     const contract = roleContract(compiled, ref);
     if (!contract) throw new Error("workload data: SDK input has no contract");
     const actor = addr(ref.actor, "SDK actor");
     const amount = decimal(ref.amount, "SDK amount", UINT64_MAX);
-    const value = await resolveSdkInput({ sdk: input.sdk, contract, actor, amount });
+    const value = await resolveSdkInput({ sdk, contract, actor, amount });
     const scope = scopeFor(compiled, action, ref, contract, {
       producer: ref.producer,
       contractRole: ref.contractRole,
@@ -235,6 +283,178 @@ export async function resolveSdkReferences(input: {
     }
   return Object.freeze(result);
 }
+
+/* Retired in favor of the closed completion/principal modules. Kept in history, not runtime. */
+/* export type PinnedCurrentPrincipalInput = Readonly<{
+  compiled: { actions: Action[]; definition: { contracts: Record<string, string> } };
+  actionId: string;
+  pinnedRead: PinnedRead;
+  dependencyCompletions: readonly DependencyCompletion[];
+  authority: CurrentPrincipalReadAuthority;
+}>;
+
+// Resolves only the graph's fixed-block current-principal withdrawal input.
+export async function resolvePinnedCurrentPrincipal(
+  input: PinnedCurrentPrincipalInput,
+): Promise<readonly ResolvedReference[]> {
+  const compiled = validateCompiledCandidateWorkload(input.compiled);
+  const action = actionFor(compiled, input.actionId) as Action;
+  if (!/^final-request-eoa-[0-9]{2}$/.test(action.id) || action.phase !== "final")
+    throw new Error("workload data: action is not a final EOA withdrawal");
+  const pool = addr(action.target, "current principal pool");
+  const account = addr(action.actor, "current principal account");
+  const references = refs(action.operation);
+  const sdkInputs = references.filter((ref) => ref.kind === "sdkInput");
+  const sdkProofs = references.filter((ref) => ref.kind === "sdkProof");
+  if (sdkInputs.length !== 1 || sdkProofs.length !== 1)
+    throw new Error("workload data: invalid current principal references");
+  const sdkInput = sdkInputs[0],
+    sdkProof = sdkProofs[0];
+  const principal = sdkInput.amount as Reference;
+  if (
+    !principal ||
+    principal.kind !== "currentPrincipal" ||
+    principal.contractRole !== "candidatePool" ||
+    addr(principal.contract, "current principal contract") !== pool ||
+    addr(principal.account, "current principal account") !== account ||
+    principal.getter !== "encryptedPrincipalOf(address)" ||
+    principal.handleType !== "euint64" ||
+    principal.clearType !== "uint64" ||
+    principal.abiType !== "uint64" ||
+    JSON.stringify(principal.constraints) !==
+      JSON.stringify(["checksummed-contract", "checksummed-account", "dependency-complete"]) ||
+    sdkInput.producer !== action.id ||
+    sdkInput.contractRole !== "candidatePool" ||
+    addr(sdkInput.actor, "current principal SDK actor") !== account ||
+    sdkInput.purpose !== "withdrawal" ||
+    sdkProof.producer !== action.id ||
+    sdkProof.field !== "inputProof"
+  )
+    throw new Error("workload data: invalid current principal descriptor");
+  const pin = pinned(input.pinnedRead, "pinned read");
+  const dependencies = action.dependencies ?? [];
+  if (input.dependencyCompletions.length !== dependencies.length)
+    throw new Error("workload data: incomplete current principal dependencies");
+  const actions = new Map(compiled.actions.map((entry) => [entry.id, entry]));
+  input.dependencyCompletions.forEach((completion, index) => {
+    const dependency = dependencies[index];
+    if (!completion || completion.actionId !== dependency)
+      throw new Error("workload data: unordered current principal dependencies");
+    const dependencyAction = actions.get(dependency);
+    if (!dependencyAction) throw new Error("workload data: foreign current principal dependency");
+    if (completion.kind === "canonical-success") {
+      canonicalDependency(completion.evidence, dependencyAction, pin.number);
+      return;
+    }
+    if (
+      completion.kind !== "conditional-SKIPPED" ||
+      !conditionalDependency(completion.evidence, dependencyAction, compiled, pool, pin)
+    )
+      throw new Error("workload data: unresolved current principal dependency");
+  });
+  const initial = pinned(await input.authority.blockAt(pin.number), "initial pinned header");
+  if (initial.number !== pin.number || initial.hash !== pin.hash)
+    throw new Error("workload data: unresolved pinned header");
+  const source = nonzeroH32(
+    await input.authority.readEncryptedPrincipalAt(pool, account, pin.number),
+    "current principal handle",
+  );
+  const clear = await input.authority.decryptOwnedUint64(pool, account, source);
+  const amount = BigInt(clearUint(clear, "current principal clear value"));
+  const encrypted = await input.authority.encryptEuint64(pool, account, amount);
+  if (!Array.isArray(encrypted.encryptedValues) || encrypted.encryptedValues.length !== 1)
+    throw new Error("workload data: expected one current principal encrypted value");
+  const handle = h32(encrypted.encryptedValues[0], "current principal encrypted value");
+  if (handle === source) throw new Error("workload data: current principal source handle reuse");
+  const proof = bytes(encrypted.inputProof, "current principal input proof");
+  if (proof === "0x") throw new Error("workload data: empty current principal input proof");
+  const rechecked = pinned(await input.authority.blockAt(pin.number), "rechecked pinned header");
+  if (rechecked.number !== pin.number || rechecked.hash !== pin.hash)
+    throw new Error("workload data: pinned header changed");
+  const scope = scopeFor(compiled, action, sdkInput, pool, {
+    producer: sdkInput.producer,
+    contractRole: sdkInput.contractRole,
+    actor: account,
+    purpose: sdkInput.purpose,
+    currentPrincipal: principal,
+    encryption: { contract: pool, actor: account, type: "euint64" },
+  });
+  return Object.freeze([
+    Object.freeze({ reference: sdkInput, value: handle, scope }),
+    Object.freeze({
+      reference: sdkProof,
+      value: proof,
+      scope: scopeFor(compiled, action, sdkProof, null, { inputReference: sdkInput }),
+    }),
+  ]);
+}
+
+function pinned(value: unknown, label: string): { number: bigint; hash: Hex } {
+  const record = value as PinnedRead;
+  return { number: BigInt(decimal(record?.number, label)), hash: h32(record?.hash, label) };
+}
+
+function canonicalDependency(evidence: CanonicalDependency, action: Action, pin: bigint): void {
+  if (!evidence || evidence.actionId !== action.id)
+    throw new Error("workload data: invalid dependency evidence");
+  const block = BigInt(decimal(evidence.blockNumber, "dependency block"));
+  if (block > pin) throw new Error("workload data: dependency after pinned read");
+  h32(evidence.blockHash, "dependency block hash");
+  if (action.kind === "externalSafe") {
+    if (evidence.kind !== "safe")
+      throw new Error("workload data: missing Safe dependency identity");
+    h32(evidence.userOperationHash, "Safe user operation hash");
+    addr(evidence.entryPoint, "Safe entry point");
+    addr(evidence.sender, "Safe sender");
+    h32(evidence.outerTransactionHash, "Safe outer transaction hash");
+  } else {
+    if (evidence.kind !== "eoa") throw new Error("workload data: invalid EOA dependency identity");
+    h32(evidence.transactionHash, "EOA transaction hash");
+  }
+}
+
+function conditionalDependency(
+  evidence: ConditionalCreditEvidence,
+  action: Action,
+  compiled: unknown,
+  pool: Address,
+  pin: { number: bigint; hash: Hex },
+): boolean {
+  if (
+    !/^claim-stage(?:8|33)-eoa-[0-9]{2}$/.test(action.id) &&
+    action.id !== "safe-conditional-wallet-claim"
+  )
+    return false;
+  try {
+    if (
+      evidence.actionId !== action.id ||
+      h32(evidence.workloadFingerprint, "conditional fingerprint") !==
+        workloadFingerprint(compiled) ||
+      evidence.condition !== "positive-credit-or-SKIPPED" ||
+      addr(evidence.pool, "conditional pool") !== pool ||
+      addr(evidence.account, "conditional account") !== addr(action.actor, "conditional actor") ||
+      evidence.getter !== "encryptedWinningsOf(address)" ||
+      evidence.clearCredit !== "0" ||
+      !["user-decrypt", "uninitialized-zero-handle"].includes(evidence.resolution) ||
+      BigInt(decimal(evidence.readBlock.number, "conditional read block")) !== pin.number ||
+      h32(evidence.readBlock.hash, "conditional read hash") !== pin.hash ||
+      h32(evidence.readBlock.recheckedHash, "conditional rechecked hash") !== pin.hash ||
+      evidence.dependencies.length !== (action.dependencies ?? []).length
+    )
+      return false;
+    nonzeroH32(evidence.handle, "conditional handle");
+    evidence.dependencies.forEach((dependency, index) => {
+      const child = (compiled as { actions: Action[] }).actions.find(
+        (entry) => entry.id === (action.dependencies ?? [])[index],
+      );
+      if (!child) throw new Error("missing conditional dependency");
+      canonicalDependency(dependency, child, pin.number);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+} */
 
 export type CanonicalReceipt = Readonly<{
   transactionHash: Hex;

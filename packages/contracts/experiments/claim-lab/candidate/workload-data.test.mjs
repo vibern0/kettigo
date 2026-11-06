@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   decryptPublic,
   decryptPublicMarker,
+  FIXED_ENTRY_POINT_07,
+  resolvePinnedCurrentPrincipal,
   resolveSdkInput,
   resolveSdkReferences,
 } from "./workload-data.ts";
@@ -20,6 +22,192 @@ const checksumPool = "0x52908400098527886E0F7030069857D2E4169EE7";
 const checksumActor = "0x8617E340B3D01FA5F11F306F4090FD50E238070D";
 const handle = (byte) => `0x${byte.repeat(32)}`;
 const uint64 = (value) => `0x${"00".repeat(31)}${value.toString(16).padStart(2, "0")}`;
+
+function principalFixture(compiled, actionId = "final-request-eoa-00") {
+  const action = compiled.actions.find((entry) => entry.id === actionId);
+  const block = { number: "100", hash: handle("aa") };
+  const completion = (dependency) => ({
+    kind: "canonical-success",
+    actionId: dependency,
+    evidence: {
+      kind: dependency.startsWith("safe-") ? "safe" : "eoa",
+      actionId: dependency,
+      ...(dependency.startsWith("safe-")
+        ? {
+            userOperationHash: handle("01"),
+            entryPoint: FIXED_ENTRY_POINT_07,
+            sender: compiled.actions.find((entry) => entry.id === dependency).actor,
+            outerTransactionHash: handle("02"),
+          }
+        : { transactionHash: handle("03") }),
+      blockNumber: "99",
+      blockHash: handle("bb"),
+    },
+  });
+  const completions = action.dependencies.map(completion);
+  return {
+    action,
+    input: {
+      compiled,
+      actionId,
+      pinnedRead: block,
+      dependencyCompletions: completions,
+      authority: {
+        readEncryptedPrincipalAt: async (gotPool, gotActor, gotBlock) => {
+          assert.equal(gotPool, action.target);
+          assert.equal(gotActor, action.actor);
+          assert.equal(gotBlock, 100n);
+          return handle("11");
+        },
+        decryptOwnedUint64: async (gotPool, gotActor, gotHandle) => {
+          assert.equal(gotPool, action.target);
+          assert.equal(gotActor, action.actor);
+          assert.equal(gotHandle, handle("11"));
+          return 7n;
+        },
+        encryptEuint64: async (gotPool, gotActor, value) => {
+          assert.equal(gotPool, action.target);
+          assert.equal(gotActor, action.actor);
+          assert.equal(value, 7n);
+          return { encryptedValues: [handle("22")], inputProof: "0x1234" };
+        },
+        blockAt: async (number) => (assert.equal(number, 100n), block),
+        completionFor: async (id) => completions.find((entry) => entry.actionId === id),
+      },
+    },
+  };
+}
+
+test("pinned current principal creates fresh SDK records for the exact final EOA action", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  const { input, action } = principalFixture(compiled);
+  const records = await resolvePinnedCurrentPrincipal(input);
+  assert.equal(records.length, 2);
+  assert.deepEqual(records[0].reference, action.operation.args[0]);
+  assert.equal(records[0].scope.reference, records[0].reference);
+  assert.equal(records[0].value, handle("22"));
+  assert.deepEqual(records[1].reference, action.operation.args[1]);
+  assert.equal(records[1].value, "0x1234");
+});
+
+test("pinned principal denies nonfinal descriptors and incomplete dependency certificates before SDK work", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  for (const change of [
+    (fixture) => (fixture.input.actionId = "safe-withdrawal-request"),
+    (fixture) => fixture.input.dependencyCompletions.pop(),
+    (fixture) => fixture.input.dependencyCompletions.reverse(),
+    (fixture) => (fixture.input.dependencyCompletions[0].evidence.outerTransactionHash = "0x01"),
+    (fixture) => (fixture.input.pinnedRead.hash = "0x01"),
+  ]) {
+    const fixture = principalFixture(compiled);
+    let decrypts = 0;
+    fixture.input.authority.decryptOwnedUint64 = async () => ((decrypts += 1), 7n);
+    change(fixture);
+    await assert.rejects(() => resolvePinnedCurrentPrincipal(fixture.input));
+    assert.equal(decrypts, 0);
+  }
+});
+
+test("pinned principal rejects source reuse and same-block reorg after SDK work", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  for (const mode of ["reuse", "reorg"]) {
+    const fixture = principalFixture(compiled);
+    let headers = 0;
+    fixture.input.authority.blockAt = async () => {
+      headers += 1;
+      return {
+        number: "100",
+        hash: mode === "reorg" && headers === 2 ? handle("cc") : handle("aa"),
+      };
+    };
+    if (mode === "reuse")
+      fixture.input.authority.encryptEuint64 = async () => ({
+        encryptedValues: [handle("11")],
+        inputProof: "0x01",
+      });
+    await assert.rejects(() => resolvePinnedCurrentPrincipal(fixture.input));
+  }
+});
+
+test("pinned principal compares every completion to the saved canonical source", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  const fixture = principalFixture(compiled);
+  fixture.input.dependencyCompletions[0].evidence.transactionHash = handle("44");
+  const trusted = principalFixture(compiled).input.dependencyCompletions;
+  fixture.input.authority.completionFor = async (id) =>
+    trusted.find((entry) => entry.actionId === id);
+  await assert.rejects(
+    () => resolvePinnedCurrentPrincipal(fixture.input),
+    /untrusted dependency completion/,
+  );
+});
+
+test("pinned principal accepts an earlier zero-handle conditional skip and rechecks its own block", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  const fixture = principalFixture(compiled);
+  const index = fixture.action.dependencies.findIndex((id) => id.startsWith("claim-stage8-eoa-"));
+  assert.notEqual(index, -1);
+  const actionId = fixture.action.dependencies[index];
+  const claim = compiled.actions.find((entry) => entry.id === actionId);
+  const child = (id) => ({
+    kind: id.startsWith("safe-") ? "safe" : "eoa",
+    actionId: id,
+    blockNumber: "90",
+    blockHash: handle("99"),
+    ...(id.startsWith("safe-")
+      ? {
+          userOperationHash: handle("11"),
+          entryPoint: FIXED_ENTRY_POINT_07,
+          sender: compiled.actions.find((entry) => entry.id === id).actor,
+          outerTransactionHash: handle("12"),
+        }
+      : { transactionHash: handle("13") }),
+  });
+  const skipped = {
+    kind: "conditional-SKIPPED",
+    actionId,
+    evidence: {
+      actionId,
+      workloadFingerprint: compiled.fingerprint,
+      condition: "positive-credit-or-SKIPPED",
+      pool: fixture.action.target,
+      account: claim.actor,
+      getter: "encryptedWinningsOf(address)",
+      readBlock: { number: "95", hash: handle("95"), recheckedHash: handle("95") },
+      dependencies: claim.dependencies.map(child),
+      handle: handle("00"),
+      clearCredit: "0",
+      resolution: "uninitialized-zero-handle",
+    },
+  };
+  fixture.input.dependencyCompletions[index] = skipped;
+  fixture.input.authority.blockAt = async (number) => ({
+    number: number.toString(),
+    hash: number === 95n ? handle("95") : handle("aa"),
+  });
+  assert.equal((await resolvePinnedCurrentPrincipal(fixture.input))[0].value, handle("22"));
+  skipped.evidence.resolution = "user-decrypt";
+  await assert.rejects(
+    () => resolvePinnedCurrentPrincipal(fixture.input),
+    /conditional handle resolution/,
+  );
+});
+
+test("SDK resolver admits a current principal only through pinned authority", async () => {
+  const compiled = compileCandidateWorkload(workloadDefinitionFixture(), workloadManifestFixture());
+  const fixture = principalFixture(compiled);
+  const records = await resolveSdkReferences({
+    compiled,
+    actionId: "final-request-eoa-00",
+    sdk: { encrypt: async () => assert.fail("wrapper SDK encryption must not run") },
+    pinnedCurrentPrincipal: {
+      pinnedRead: fixture.input.pinnedRead,
+      dependencyCompletions: fixture.input.dependencyCompletions,
+      authority: fixture.input.authority,
+    },
+  });
+  assert.equal(records[0].value, handle("22"));
+});
 
 test("SDK input normalizes its checksum pair and binds one encrypted value to its proof", async () => {
   const calls = [];
