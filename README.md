@@ -93,6 +93,19 @@ Contract tests cover confidential deposits, encrypted principal decryption,
 withdrawal/unwrap, public mocked prize funding, FHE-random draws, confidential
 claims, and Morpho yield routing.
 
+To exercise deposit, automatic enrollment, draw, claim and withdrawal with a
+passkey-owned Safe on an in-memory chain, run the following from the repository
+root using Node 24. Chromium supplies a temporary passkey. The test downloads
+hash-checked Safe contract bytecode and uses Hardhat's local FHE simulation.
+
+```bash
+browser_tools=$(mktemp -d)
+npm install --prefix "$browser_tools" playwright@1.63.0
+"$browser_tools/node_modules/.bin/playwright" install chromium
+PLAYWRIGHT_MODULE="$browser_tools/node_modules/playwright/index.mjs" LOCAL_VIRTUAL_PASSKEY=1 \
+  pnpm --dir packages/contracts exec hardhat test --network hardhat test/AdmissionKeeper.lifecycle.test.js
+```
+
 ## Sepolia deployment
 
 Frontend:
