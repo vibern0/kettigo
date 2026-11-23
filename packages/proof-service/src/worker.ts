@@ -149,6 +149,11 @@ function operatorResponse(status: number, headers?: HeadersInit) {
   return new Response(null, { status, headers: { "cache-control": "no-store", ...headers } });
 }
 
+function internalTickError(error: unknown) {
+  const message = error instanceof Error ? error.message : "unknown";
+  return message.replace(/https?:\/\/\S+/g, "[redacted]").slice(0, 160);
+}
+
 export async function handleInternalTick(request: Request, env: Env, deadlineMs = MAX_TICK_MS) {
   if (request.method !== "POST") return operatorResponse(405, { allow: "POST" });
   const contentLength = request.headers.get("content-length");
@@ -181,6 +186,7 @@ export async function handleInternalTick(request: Request, env: Env, deadlineMs 
     );
   } catch (error) {
     if (error instanceof OperatorBodyTooLarge) return operatorResponse(413);
+    console.error(JSON.stringify({ event: "internal_tick_error", message: internalTickError(error) }));
     return Response.json(
       { outcome: "HISTORY_UNAVAILABLE" },
       { status: 503, headers: { "cache-control": "no-store" } },

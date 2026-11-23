@@ -103,7 +103,10 @@ export class EthereumRpc implements RpcSource {
     try {
       const response = await fetch(this.url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "user-agent": "kettigo-proof-service/1.0",
+        },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
         signal: controller.signal,
       });
@@ -257,7 +260,11 @@ export class EthereumRpc implements RpcSource {
       logs: this.decodeMany(receipt.logs, block.number, block.number, true),
     };
   }
-  private async receiptTransactionHashes(block: BlockHeader, signal?: AbortSignal) {
+  private async receiptTransactionHashes(
+    block: BlockHeader,
+    allowBulk: boolean,
+    signal?: AbortSignal,
+  ) {
     const full = await this.call(
       "eth_getBlockByNumber",
       [`0x${block.number.toString(16)}`, false],
@@ -270,7 +277,7 @@ export class EthereumRpc implements RpcSource {
       number(canonical.number, "block number") !== block.number ||
       hash32(canonical.hash, "block hash") !== block.hash ||
       !Array.isArray(canonical.transactions) ||
-      canonical.transactions.length > MAX_RECEIPTS
+      (!allowBulk && canonical.transactions.length > MAX_RECEIPTS)
     )
       throw new Error("invalid full block response");
     const transactionHashes = canonical.transactions.map((tx) => {
@@ -282,28 +289,16 @@ export class EthereumRpc implements RpcSource {
       throw new Error("duplicate block transaction hash");
     return transactionHashes;
   }
-  private async receiptsForBlock(
-    block: BlockHeader,
-    transactionHashes: readonly string[],
-    signal?: AbortSignal,
-  ) {
+  private async bulkReceipts(block: BlockHeader, signal?: AbortSignal): Promise<unknown | null> {
     try {
-      return {
-        receipts: await this.call(
-          "eth_getBlockReceipts",
-          [`0x${block.number.toString(16)}`],
-          signal,
-        ),
-        fallback: false,
-      };
+      return await this.call(
+        "eth_getBlockReceipts",
+        [`0x${block.number.toString(16)}`],
+        signal,
+      );
     } catch (e) {
       if (!(e instanceof RpcFailure) || e.code !== -32601) throw e;
-      return {
-        receipts: await mapWithConcurrency(transactionHashes, 4, (tx) =>
-          this.call("eth_getTransactionReceipt", [tx], signal),
-        ),
-        fallback: true,
-      };
+      return null;
     }
   }
   private async checkedReceipts(
@@ -332,8 +327,14 @@ export class EthereumRpc implements RpcSource {
       throw new Error("incomplete receipt transaction set");
   }
   async receiptLogs(block: BlockHeader, signal?: AbortSignal) {
-    const transactionHashes = await this.receiptTransactionHashes(block, signal);
-    const { receipts, fallback } = await this.receiptsForBlock(block, transactionHashes, signal);
+    const bulkReceipts = await this.bulkReceipts(block, signal);
+    const fallback = bulkReceipts === null;
+    const transactionHashes = await this.receiptTransactionHashes(block, !fallback, signal);
+    const receipts = fallback
+      ? await mapWithConcurrency(transactionHashes, 4, (tx) =>
+          this.call("eth_getTransactionReceipt", [tx], signal),
+        )
+      : bulkReceipts;
     const checked = await this.checkedReceipts(receipts, block, transactionHashes, fallback);
     this.assertReceiptSet(checked, transactionHashes);
     return checked.flatMap((receipt) => receipt.logs);

@@ -56,6 +56,20 @@ function rpcLog(overrides: Record<string, unknown> = {}) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("EthereumRpc", () => {
+  it("identifies Worker RPC requests with the proof-service user agent", async () => {
+    expect.hasAssertions();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        expect(new Headers(init.headers).get("user-agent")).toBe("kettigo-proof-service/1.0");
+        return response("0xaa36a7");
+      }),
+    );
+    await expect(new EthereumRpc("https://example.test", namespace(), 0).chainId()).resolves.toBe(
+      "11155111",
+    );
+  });
+
   it(
     "aborts an in-flight provider request at the operation deadline",
     { timeout: 5000 },
@@ -126,7 +140,7 @@ describe("EthereumRpc", () => {
   );
 
   it(
-    "uses full-block transactions and every receipt only when block receipts is unsupported",
+    "uses full-block transactions and every receipt when block receipts is unsupported or null",
     { timeout: 5000 },
     async () => {
       expect.hasAssertions();
@@ -137,10 +151,7 @@ describe("EthereumRpc", () => {
         vi.fn(async (_url: string, init: RequestInit) => {
           const request = JSON.parse(String(init.body));
           calls.push(request.method);
-          if (request.method === "eth_getBlockReceipts")
-            return new Response(
-              JSON.stringify({ error: { code: -32601, message: "method not found" } }),
-            );
+          if (request.method === "eth_getBlockReceipts") return response(null);
           if (request.method === "eth_getBlockByNumber")
             return response({ number: "0x1", hash: blockHash, parentHash, transactions: [txHash] });
           if (request.method === "eth_getTransactionReceipt")
@@ -161,8 +172,8 @@ describe("EthereumRpc", () => {
         }),
       ).resolves.toHaveLength(1);
       expect(calls).toEqual([
-        "eth_getBlockByNumber",
         "eth_getBlockReceipts",
+        "eth_getBlockByNumber",
         "eth_getTransactionReceipt",
       ]);
     },
@@ -189,6 +200,43 @@ describe("EthereumRpc", () => {
           parentHash,
         }),
       ).rejects.toThrow("rpc eth_getBlockReceipts failed");
+    },
+  );
+
+  it(
+    "accepts a busy block when bulk receipts prove the complete transaction set",
+    { timeout: 5000 },
+    async () => {
+      expect.hasAssertions();
+      const hashes = Array.from(
+        { length: 19 },
+        (_, index) => `0x${index.toString(16).padStart(64, "0")}`,
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const request = JSON.parse(String(init.body));
+          if (request.method === "eth_getBlockByNumber")
+            return response({ number: "0x1", hash: blockHash, parentHash, transactions: hashes });
+          if (request.method === "eth_getBlockReceipts")
+            return response(
+              hashes.map((hash, index) => ({
+                transactionHash: hash,
+                blockNumber: "0x1",
+                blockHash,
+                logs: index === 0 ? [rpcLog({ transactionHash: hash })] : [],
+              })),
+            );
+          throw new Error(`unexpected ${request.method}`);
+        }),
+      );
+      await expect(
+        new EthereumRpc("https://example.test", namespace(), 0).receiptLogs({
+          number: 1,
+          hash: blockHash,
+          parentHash,
+        }),
+      ).resolves.toHaveLength(1);
     },
   );
 

@@ -196,6 +196,7 @@ describe("proof HTTP boundary", () => {
         body: { getReader: () => reader },
       } as unknown as Request;
       const provider = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
       vi.stubGlobal("fetch", provider);
 
       const response = await handleInternalTick(request, { ...config, OPERATOR_BEARER: "x" }, 25);
@@ -205,6 +206,7 @@ describe("proof HTTP boundary", () => {
       expect(reads).toBe(1);
       expect(cancellations).toBe(1);
       expect(provider).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('"event":"internal_tick_error"'));
     },
   );
   it(
