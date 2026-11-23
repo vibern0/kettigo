@@ -12,16 +12,31 @@ permissions:
 
 jobs:
   run:
+    name: ${{ matrix.pool.name }} keepers
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      # Both pools use the same transaction signer.
+      max-parallel: 1
+      matrix:
+        pool:
+          - name: Legacy
+            address: "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b"
+            start_block: "11864127"
+            minimum_prize: "1"
+          - name: V2
+            address: "0x30530991e296a663a32567C170b290fB88578408"
+            start_block: "12078643"
+            minimum_prize: "1000000"
     env:
       SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
       SEPOLIA_WRITE_RPC_URL: ${{ secrets.SEPOLIA_WRITE_RPC_URL }}
       KEEPER_PRIVATE_KEY: ${{ secrets.KEEPER_PRIVATE_KEY }}
-      NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS: "0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b"
-      MORPHO_KEEPER_START_BLOCK: "11864127"
+      NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS: ${{ matrix.pool.address }}
+      MORPHO_KEEPER_START_BLOCK: ${{ matrix.pool.start_block }}
       MORPHO_KEEPER_MAX_TXS: "1"
-      DRAW_KEEPER_MINIMUM_PRIZE: "1"
+      DRAW_KEEPER_MINIMUM_PRIZE: ${{ matrix.pool.minimum_prize }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
@@ -32,4 +47,17 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Restore V2 admission checkpoint
+        if: matrix.pool.name == 'V2'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/keeper/cache/admission-*.json
+          key: admission-11155111-${{ matrix.pool.address }}-${{ matrix.pool.start_block }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: admission-11155111-${{ matrix.pool.address }}-${{ matrix.pool.start_block }}-
       - run: pnpm keeper:all
+      - name: Save V2 admission checkpoint including pending retries
+        if: "!cancelled() && matrix.pool.name == 'V2' && hashFiles('packages/keeper/cache/admission-*.json') != ''"
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/keeper/cache/admission-*.json
+          key: admission-11155111-${{ matrix.pool.address }}-${{ matrix.pool.start_block }}-${{ github.run_id }}-${{ github.run_attempt }}
