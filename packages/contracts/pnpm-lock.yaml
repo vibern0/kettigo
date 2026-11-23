@@ -40,6 +40,9 @@ importers:
       '@fhevm/hardhat-plugin':
         specifier: 0.4.2
         version: 0.4.2(@fhevm/mock-utils@0.4.2(@zama-fhe/relayer-sdk@0.4.1)(ethers@6.17.0)(typescript@5.9.3))(@fhevm/solidity@0.11.1)(@nomicfoundation/hardhat-ethers@3.1.3(ethers@6.17.0)(hardhat@2.29.1(supports-color@8.1.1)(ts-node@10.9.2(@types/node@22.20.1)(typescript@5.9.3))(typescript@5.9.3))(supports-color@8.1.1))(@zama-fhe/relayer-sdk@0.4.1)(encrypted-types@0.0.4)(ethers@6.17.0)(hardhat@2.29.1(supports-color@8.1.1)(ts-node@10.9.2(@types/node@22.20.1)(typescript@5.9.3))(typescript@5.9.3))(supports-color@8.1.1)
+      '@fhevm/host-contracts':
+        specifier: 0.10.0
+        version: 0.10.0
       '@nomicfoundation/hardhat-chai-matchers':
         specifier: ^2.0.0
         version: 2.1.2(@nomicfoundation/hardhat-ethers@3.1.3(ethers@6.17.0)(hardhat@2.29.1(supports-color@8.1.1)(ts-node@10.9.2(@types/node@22.20.1)(typescript@5.9.3))(typescript@5.9.3))(supports-color@8.1.1))(chai@4.5.0)(ethers@6.17.0)(hardhat@2.29.1(supports-color@8.1.1)(ts-node@10.9.2(@types/node@22.20.1)(typescript@5.9.3))(typescript@5.9.3))
@@ -67,6 +70,9 @@ importers:
       '@types/node':
         specifier: ^22.5.0
         version: 22.20.1
+      '@zama-fhe/relayer-sdk':
+        specifier: 0.4.1
+        version: 0.4.1
       '@zama-fhe/sdk':
         specifier: 3.6.0
         version: 3.6.0(ethers@6.17.0)(typescript@5.9.3)(viem@2.55.19(typescript@5.9.3)(zod@4.6.5))

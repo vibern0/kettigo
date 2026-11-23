@@ -93,17 +93,37 @@ Contract tests cover confidential deposits, encrypted principal decryption,
 withdrawal/unwrap, public mocked prize funding, FHE-random draws, confidential
 claims, and Morpho yield routing.
 
-To exercise deposit, automatic enrollment, draw, claim and withdrawal with a
-passkey-owned Safe on an in-memory chain, run the following from the repository
-root using Node 24. Chromium supplies a temporary passkey. The test downloads
-hash-checked Safe contract bytecode and uses Hardhat's local FHE simulation.
+### Browser saver journey
+
+From the repository root, use Node 24 and pnpm 10.11.1. Install the dependencies
+and Chromium once, then run the journey on a fresh in-memory chain:
 
 ```bash
-browser_tools=$(mktemp -d)
-npm install --prefix "$browser_tools" playwright@1.63.0
-"$browser_tools/node_modules/.bin/playwright" install chromium
-PLAYWRIGHT_MODULE="$browser_tools/node_modules/playwright/index.mjs" LOCAL_VIRTUAL_PASSKEY=1 \
-  pnpm --dir packages/contracts exec hardhat test --network hardhat test/AdmissionKeeper.lifecycle.test.js
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+pnpm test:e2e:saver
+```
+
+Chromium starts with a funded, passkey-owned Safe. Playwright uses the app’s
+Savings and Results pages to deposit 3 USDC, observe admission, check a round,
+add its 1 USDC prize to savings, and withdraw all 4 USDC. The test verifies the
+wallet, savings and pending-withdrawal balances after delivery. The local
+admission, draw and withdrawal keepers run between saver actions. The browser
+retrieves the proof from the production archive routes after the indexer
+processes local blocks in an in-memory SQLite database.
+
+The browser harness mounts the production page components, navigation and
+providers. Chromium supplies a virtual passkey. An in-process Hardhat chain
+(ID `31337`) executes the signed Safe transactions and supplies test USDC, FHE
+simulation and a fast-forwarded draw clock. The proof archive indexes that
+same chain. Safe bytecode comes from hash-checked local fixtures. Once the
+dependencies, Solidity compiler and Chromium are installed, the journey can
+run with only loopback connections. It needs no wallet credentials or Pimlico key.
+
+The contract-level passkey test can also run independently:
+
+```bash
+LOCAL_VIRTUAL_PASSKEY=1 pnpm --filter @kettigo/contracts exec hardhat test --network hardhat test/AdmissionKeeper.lifecycle.test.js
 ```
 
 ## Sepolia deployment

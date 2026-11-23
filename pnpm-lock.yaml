@@ -29,6 +29,9 @@ importers:
       lint-staged:
         specifier: 17.6.0
         version: 17.6.0
+      playwright:
+        specifier: 1.63.0
+        version: 1.63.0
       prettier:
         specifier: 3.9.10
         version: 3.9.10
@@ -66,6 +69,9 @@ importers:
       '@fhevm/hardhat-plugin':
         specifier: 0.4.2
         version: 0.4.2(@fhevm/mock-utils@0.4.2(@zama-fhe/relayer-sdk@0.4.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(ethers@6.17.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(typescript@5.9.3))(@fhevm/solidity@0.11.1)(@nomicfoundation/hardhat-ethers@3.1.3(ethers@6.17.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hardhat@2.29.1(bufferutil@4.1.0)(ts-node@10.9.2(@types/node@22.20.4)(typescript@5.9.3))(typescript@5.9.3)(utf-8-validate@6.0.6)))(@zama-fhe/relayer-sdk@0.4.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(encrypted-types@0.0.4)(ethers@6.17.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hardhat@2.29.1(bufferutil@4.1.0)(ts-node@10.9.2(@types/node@22.20.4)(typescript@5.9.3))(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@fhevm/host-contracts':
+        specifier: 0.10.0
+        version: 0.10.0
       '@nomicfoundation/hardhat-chai-matchers':
         specifier: ^2.0.0
         version: 2.1.2(@nomicfoundation/hardhat-ethers@3.1.3(ethers@6.17.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hardhat@2.29.1(bufferutil@4.1.0)(ts-node@10.9.2(@types/node@22.20.4)(typescript@5.9.3))(typescript@5.9.3)(utf-8-validate@6.0.6)))(chai@4.5.0)(ethers@6.17.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hardhat@2.29.1(bufferutil@4.1.0)(ts-node@10.9.2(@types/node@22.20.4)(typescript@5.9.3))(typescript@5.9.3)(utf-8-validate@6.0.6))
@@ -93,6 +99,9 @@ importers:
       '@types/node':
         specifier: ^22.5.0
         version: 22.20.4
+      '@zama-fhe/relayer-sdk':
+        specifier: 0.4.1
+        version: 0.4.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       '@zama-fhe/sdk':
         specifier: 3.6.0
         version: 3.6.0(@tanstack/query-core@5.103.2)(ethers@6.17.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(viem@2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.6.5))
@@ -5965,6 +5974,16 @@ packages:
   pirates@4.0.7:
     resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
     engines: {node: '>= 6'}
+
+  playwright-core@1.63.0:
+    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.63.0:
+    resolution: {integrity: sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   pluralize@8.0.0:
     resolution: {integrity: sha512-Nc3IT5yHzflTfbjgqWcCPpo7DaKy4FnpB0l/zCAW0Tc7jxAiuqSxHasntB3D7887LSrA93kDJ9IXovxJYxyLCA==}
@@ -14593,6 +14612,12 @@ snapshots:
       thread-stream: 0.15.2
 
   pirates@4.0.7: {}
+
+  playwright-core@1.63.0: {}
+
+  playwright@1.63.0:
+    dependencies:
+      playwright-core: 1.63.0
 
   pluralize@8.0.0: {}
 
