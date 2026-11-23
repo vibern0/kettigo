@@ -23,6 +23,7 @@
     ]
   },
   "vars": {
+    "KEEPER_WORKFLOW_REF": "codex/merkle-fhe-production-integration",
     "NEXT_PUBLIC_CHAIN_ID": "11155111",
     "NEXT_PUBLIC_RPC_URL": "https://ethereum-sepolia-rpc.publicnode.com",
     "NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS": "0x30530991e296a663a32567C170b290fB88578408",

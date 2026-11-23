@@ -6,7 +6,7 @@ import {
   dispatchKeeperWorkflow,
 } from "../worker/github-keeper-dispatch.ts";
 
-test("builds the production keeper workflow request on main", async () => {
+test("defaults the production keeper workflow request to main", async () => {
   const request = buildKeeperWorkflowRequest("test-token");
 
   assert.equal(request.url, "https://api.github.com/repos/vibern0/kettigo/actions/workflows/keepers.yml/dispatches");
@@ -16,7 +16,7 @@ test("builds the production keeper workflow request on main", async () => {
   assert.equal(request.headers.get("Content-Type"), "application/json");
   assert.equal(request.headers.get("User-Agent"), "kettigo-cloudflare-keeper-dispatcher");
   assert.equal(request.headers.get("X-GitHub-Api-Version"), "2026-03-10");
-  assert.equal(await request.text(), '{"ref":"main"}');
+  assert.deepEqual(await request.json(), { ref: "main" });
 });
 
 test("returns GitHub's accepted dispatch status", async (t) => {

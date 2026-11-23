@@ -23,6 +23,7 @@ type Env = PublicRuntimeEnv & {
     prepare(sql: string): D1StatementLike;
   };
   GITHUB_WORKFLOW_AUTH: string;
+  KEEPER_WORKFLOW_REF?: string;
 };
 
 export default {
@@ -47,7 +48,7 @@ export default {
     }
 
     try {
-      const status = await dispatchKeeperWorkflow(env.GITHUB_WORKFLOW_AUTH);
+      const status = await dispatchKeeperWorkflow(env.GITHUB_WORKFLOW_AUTH, env.KEEPER_WORKFLOW_REF);
       console.log(JSON.stringify({ event: "keeper_dispatch", outcome: "accepted", status }));
     } catch (error) {
       console.error(

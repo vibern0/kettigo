@@ -40,10 +40,11 @@ separate liquidity buffers, and more careful keeper scheduling.
 
 ## Keeper safety
 
-The GitHub Actions keepers are intentionally idempotent. A lightweight
-Cloudflare Cron Trigger dispatches each run every five minutes; Cloudflare does
-not execute the onchain keeper. Each run reads current onchain state and executes
-at most one transaction, continuing the state machine on the next scheduled run.
+The Cloudflare Cron Trigger dispatches `keepers.yml` on
+`codex/merkle-fhe-production-integration` every five minutes. GitHub Actions
+runs the legacy and V2 pools sequentially using the same signer. Each pool has
+its own deployment block and draw threshold. A failed pool job leaves the
+other pool eligible to run.
 The Morpho keeper runs every five minutes:
 
 1. supply finalized adapter USDC to Morpho;
@@ -73,7 +74,8 @@ both capabilities.
 `MORPHO_KEEPER_MAX_TXS` is retained for configuration compatibility, but the
 scheduled runtime hard-caps every run to one transaction. When reusing a wrapper for a fresh pool, set
 `MORPHO_KEEPER_START_BLOCK` at or before the new pool deployment, before any
-requests can originate from it. The current deployment uses `11730807`.
+requests can originate from it. The hosted jobs use `11864127` for the legacy
+pool and `12078643` for V2.
 
 The withdrawal keeper runs every five minutes. It scans the current and recent
 withdrawal batch ids, closes expired nonempty open batches, and settles closed
@@ -102,6 +104,7 @@ A deposit enters a draw once admission confirms before that draw closes.
 Each pass scans the most recent 128 blocks and up to 64 pages of 2,000 finalized
 blocks from the saved cursor. It checks up to 12 accounts. Unfinished work
 carries over in a chain-, pool- and deployment-specific file under
-`packages/keeper/cache/`. Preserve that directory between runs for historical
-catch-up. On a fresh host, backfill starts at deployment while recent requests
+`packages/keeper/cache/`. GitHub Actions restores the latest V2 checkpoint and
+saves the updated cursor and retry queue after each pass. Keep that directory
+between runs on other hosts. On a fresh host, backfill starts at deployment while recent requests
 are processed immediately. Onchain state makes replay after a restart safe.
