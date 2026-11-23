@@ -67,6 +67,8 @@ export async function createVirtualPasskey() {
     const coordinate = value => BigInt(`0x${Buffer.from(value, "base64url").toString("hex")}`);
     return {
       close,
+      page,
+      origin,
       coordinates: { x: coordinate(jwk.x), y: coordinate(jwk.y) },
       signDigest(hexDigest) {
         assert.match(hexDigest, /^0x[0-9a-f]{64}$/i);

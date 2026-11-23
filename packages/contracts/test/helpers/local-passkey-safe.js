@@ -1,8 +1,8 @@
 const assert = require("node:assert/strict");
 const { ethers, network } = require("hardhat");
+const runtimes = require("../fixtures/passkey-safe/runtimes.json");
 
-// Canonical Safe 1.4.1 and Safe passkey module 0.2.1 runtime, with immutables at
-// their deployed addresses. Only this optional browser test downloads bytecode.
+// Canonical Safe 1.4.1 and passkey module 0.2.1 runtime hashes.
 const deployments = {
   singleton: [
     "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
@@ -20,11 +20,9 @@ const deployments = {
     "0x94a4F6affBd8975951142c3999aEAB7ecee555c2",
     "0xeaa32d0280053e2feea48a7c3fa15a535cd07c23ff60c9469cfa1999533e9332",
   ],
-  // The verifier has identical code on Ethereum and Sepolia. Sourcify archives it on Ethereum.
   verifier: [
     "0xc2b78104907F722DABAc4C69f826a522B2754De4",
     "0x3cd725b6ba67b40b7979190c41a015e82cf21e098eb61832ba623f8538bab7fc",
-    1,
   ],
 };
 const safeAbi = [
@@ -39,13 +37,8 @@ const safeAbi = [
 async function installDeployments() {
   assert.equal(network.name, "hardhat");
   await Promise.all(
-    Object.values(deployments).map(async ([address, hash, chain = 11155111]) => {
-      const response = await fetch(
-        `https://sourcify.dev/server/v2/contract/${chain}/${address}?fields=runtimeBytecode.onchainBytecode`,
-        { signal: AbortSignal.timeout(15_000) },
-      );
-      assert.ok(response.ok, `Missing verified runtime for ${address}: ${response.status}`);
-      const bytecode = (await response.json()).runtimeBytecode.onchainBytecode;
+    Object.values(deployments).map(async ([address, hash]) => {
+      const bytecode = runtimes[address];
       assert.equal(ethers.keccak256(bytecode), hash, `Runtime hash mismatch at ${address}`);
       await network.provider.send("hardhat_setCode", [address, bytecode]);
     }),
@@ -99,7 +92,7 @@ async function createLocalPasskeySafe(passkey, relayer) {
   return {
     address,
     nonce: () => safe.nonce(),
-    async send(calls) {
+    async send(calls, onSigned) {
       const packed = calls.map(({ to, data }) =>
         ethers.solidityPacked(
           ["uint8", "address", "uint256", "uint256", "bytes"],
@@ -119,10 +112,12 @@ async function createLocalPasskeySafe(passkey, relayer) {
       const nonce = await safe.nonce();
       const digest = await safe.getTransactionHash(...args, nonce);
       const signature = makeSafeSignature(sharedSigner, await passkey.signDigest(digest));
+      await onSigned?.(digest);
       const receipt = await (await safe.execTransaction(...args, signature)).wait();
       const event = receipt.logs.find((log) => log.fragment?.name === "ExecutionSuccess");
       assert.equal(event?.args.txHash, digest);
       assert.equal(await safe.nonce(), nonce + 1n);
+      return receipt;
     },
   };
 }
