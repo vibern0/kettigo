@@ -84,3 +84,24 @@ controls the bounded scan depth and defaults to `8`.
 Each function returns after broadcasting its transaction instead of waiting for a
 receipt. The next scheduled run reads the confirmed onchain state before choosing
 another action. This avoids platform retries while preserving idempotent progress.
+
+## V2 admission keeper
+
+`pnpm keeper:all` and `pnpm keeper:watch` run the admission keeper before the
+draw keeper. To run one admission pass, use `pnpm keeper:admission`. The
+candidate pool uses the deployment block in its Sepolia release manifest.
+For a different V2 deployment, set `ADMISSION_KEEPER_START_BLOCK` to that
+pool's deployment block. Leave the variable unset for legacy pools.
+
+The keeper finds accounts through the selected pool's `AdmissionRequested`
+events. It checks the current request, obtains a proof for its boolean marker,
+checks that the request is still current, and waits for the finalization
+receipt. Positive proofs admit the account. Negative proofs clear the request.
+A deposit enters a draw once admission confirms before that draw closes.
+
+Each pass scans the most recent 128 blocks and up to 64 pages of 2,000 finalized
+blocks from the saved cursor. It checks up to 12 accounts. Unfinished work
+carries over in a chain-, pool- and deployment-specific file under
+`packages/keeper/cache/`. Preserve that directory between runs for historical
+catch-up. On a fresh host, backfill starts at deployment while recent requests
+are processed immediately. Onchain state makes replay after a restart safe.

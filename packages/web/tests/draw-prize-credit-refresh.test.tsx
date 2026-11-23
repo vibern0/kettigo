@@ -238,6 +238,7 @@ test("reinvest refreshes an unadmitted member's current participation status", a
   fireEvent.click(await screen.findByRole("button", { name: "Add prize to savings" }));
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
+  expect(await screen.findByText(/Your savings will enter a future draw automatically/)).toBeTruthy();
   expect((await screen.findByRole("link", { name: "Savings" })).getAttribute("href")).toBe(
     "/savings?tab=prize&tag=one&tag=two&savings=candidate-v2",
   );

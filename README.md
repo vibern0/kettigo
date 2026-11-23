@@ -260,10 +260,14 @@ The user does not need to keep the app open or approve another transaction.
 
 From the repository root, run `pnpm keeper:watch` for continuous local processing
 (Ctrl+C stops it). `pnpm keeper:all` performs one pass. The watcher runs the
-Morpho, withdrawal, and draw keepers sequentially, retries every 15 seconds after
+Morpho, withdrawal, admission, and draw keepers sequentially, retries every 15 seconds after
 each pass, and continues with later lanes if an earlier keeper fails.
 Node 24 and the local keeper environment are required. Check configuration
 without sending transactions with `npm run keeper:withdrawal -- --check`.
+
+On the V2 pool, the admission keeper completes enrollment after the first deposit.
+The saver can close the app after depositing. Run `pnpm keeper:admission` for a
+single admission pass, or leave `pnpm keeper:watch` running for automatic processing.
 
 Withdrawal runs report confirmed `transactions` and unresolved `pending` work.
 Failed batches do not block other payouts. Requests are scanned from the first

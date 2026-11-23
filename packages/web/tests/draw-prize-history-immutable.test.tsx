@@ -22,8 +22,10 @@ const fixture = vi.hoisted(() => {
 vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
-    readContract: async ({ functionName }: { functionName: string }) =>
-      functionName === "encryptedWinningsOf" ? fixture.winningsHandle : 0n,
+    readContract: async ({ functionName }: { functionName: string }) => {
+      if (functionName === "drawId") return 30n;
+      return functionName === "encryptedWinningsOf" ? fixture.winningsHandle : 0n;
+    },
     getBlockNumber: async () => 0n,
     request: async () => [],
     watchBlockNumber: () => () => {},
@@ -67,9 +69,6 @@ vi.mock("@/lib/prize-check-coordinator", () => ({
   createPrizeCheckIntentStore: vi.fn(),
   createViemPrizeChainReader: fixture.readerFactory,
   createViemPrizeProofClient: fixture.proofFactory,
-}));
-vi.mock("@/lib/morpho-yield", () => ({
-  createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
 }));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn(), reportClientError: vi.fn() }));
 vi.mock("wagmi", () => ({ useBlockNumber: () => ({ data: undefined }) }));

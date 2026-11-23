@@ -83,13 +83,11 @@ test("Header and home render selected-scope hrefs without dropping repeated quer
   );
 });
 
-test("Header renders the fixed earlier-savings link for an actual alternate candidate origin", async () => {
+test("Header omits the earlier-savings link on an alternate candidate origin", () => {
   fixture.scopeId = "candidate-v2";
   expect(window.location.origin).not.toBe("https://kettigo.xyz");
   render(<Header />);
-  expect((await screen.findByRole("link", { name: "Earlier savings" })).getAttribute("href")).toBe(
-    "https://kettigo.xyz",
-  );
+  expect(screen.queryByRole("link", { name: "Earlier savings" })).toBeNull();
 });
 
 test("Profile renders no hidden navigation anchors", () => {

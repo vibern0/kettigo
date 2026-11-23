@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => {
     pool,
     award,
     version: "legacy1",
+    completedDraws: 30n,
     onboardingEnabled: false,
     proofUrl: "https://proof.example",
     listDraws: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     readContract: async ({ functionName }: { functionName: string }) => {
+      if (functionName === "drawId") return fixture.completedDraws;
       if (functionName === "encryptedWinningsOf") return `0x${"0".repeat(64)}`;
       return 0n;
     },
@@ -88,10 +90,6 @@ vi.mock("@/components/ActionCenter", () => ({
     },
   }),
 }));
-vi.mock("@/lib/morpho-yield", () => ({
-  createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
-  readProjectedMorphoYield: vi.fn(async () => ({ source: "stored", accruedYieldAssets: 0n })),
-}));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn() }));
 vi.mock("wagmi", () => ({ useBlockNumber: () => ({ data: undefined }) }));
 
@@ -108,6 +106,7 @@ function mount() {
 
 beforeEach(() => {
   fixture.version = "legacy1";
+  fixture.completedDraws = 30n;
   fixture.onboardingEnabled = false;
   fixture.proofUrl = "https://proof.example";
   fixture.listDraws.mockReset();
@@ -160,6 +159,16 @@ test("keeps the legacy draw page free of history reads", async () => {
   await screen.findByText("My winnings");
   expect(screen.queryByText("Your past results")).toBeNull();
   expect(fixture.readerFactory).not.toHaveBeenCalled();
+  expect(fixture.proofFactory).not.toHaveBeenCalled();
+});
+
+test("hides history and skips archive reads before the first draw closes", async () => {
+  fixture.version = "2";
+  fixture.completedDraws = 0n;
+  mount();
+  await screen.findByText("#1");
+  expect(screen.queryByText("Past results")).toBeNull();
+  expect(screen.queryByText("Your past results")).toBeNull();
   expect(fixture.proofFactory).not.toHaveBeenCalled();
 });
 

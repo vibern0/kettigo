@@ -59,6 +59,7 @@
     "web:build": "npm run build -w packages/web",
     "keeper:morpho": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs morpho",
     "keeper:withdrawal": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs withdrawal",
+    "keeper:admission": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs admission",
     "keeper:draw": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs draw",
     "keeper:all": "node packages/keeper/src/run-all-keepers.mjs",
     "keeper:watch": "node packages/keeper/src/watch-keepers.mjs"

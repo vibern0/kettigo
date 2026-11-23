@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useWallet } from "@/lib/wallet-context";
 import { shortAddress } from "@/lib/format";
@@ -12,7 +12,7 @@ import { m } from "motion/react";
 import { SheetViewport } from "@/components/SheetViewport";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { SELECTED_SCOPE } from "@/lib/runtime-config";
-import { isAlternateSavingsOrigin, scopeHref } from "@/lib/scope-navigation";
+import { scopeHref } from "@/lib/scope-navigation";
 
 const NAV = [
   { href: "/", label: "Home" },
@@ -34,16 +34,11 @@ export function Header() {
   } = useWallet();
   const [accountSheetOpen, setAccountSheetOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [alternateOrigin, setAlternateOrigin] = useState(false);
   const navItems = NAV;
   const currentHref = typeof window === "undefined" ? undefined : window.location.href;
   const selectedScopeId = SELECTED_SCOPE?.id;
   const scopedHref = (href: string) =>
     selectedScopeId ? scopeHref(href, selectedScopeId, currentHref) : href;
-
-  useEffect(() => {
-    setAlternateOrigin(isAlternateSavingsOrigin(window.location.origin));
-  }, []);
 
   async function copyAddress() {
     if (!session) return;
@@ -170,14 +165,6 @@ export function Header() {
               </Link>
             );
           })}
-          {selectedScopeId === "candidate-v2" && alternateOrigin && (
-            <a
-              href="https://kettigo.xyz"
-              className="px-3 py-1.5 text-sm font-medium text-white/90 hover:text-white whitespace-nowrap"
-            >
-              Earlier savings
-            </a>
-          )}
         </nav>
       </header>
       {accountSheet}

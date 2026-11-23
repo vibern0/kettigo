@@ -15,7 +15,8 @@ const fixture = vi.hoisted(() => ({
 vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
-    readContract: async () => 0n,
+    readContract: async ({ functionName }: { functionName: string }) =>
+      functionName === "drawId" ? 30n : 0n,
     getBlockNumber: async () => 0n,
     request: async () => [],
     watchBlockNumber: () => () => {},
@@ -54,10 +55,6 @@ vi.mock("@/lib/prize-check-coordinator", () => ({
   createPrizeCheckIntentStore: vi.fn(),
   createViemPrizeChainReader: fixture.readerFactory,
   createViemPrizeProofClient: vi.fn(),
-}));
-vi.mock("@/lib/morpho-yield", () => ({
-  createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
-  readProjectedMorphoYield: vi.fn(async () => ({ source: "stored", accruedYieldAssets: 0n })),
 }));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn() }));
 vi.mock("wagmi", () => ({ useBlockNumber: () => ({ data: undefined }) }));
@@ -103,7 +100,7 @@ test("replaces account and configured pool before reading the new selected round
   fixture.pool = fixture.alternatePool;
   fixture.session = { ...fixture.session, address: fixture.alternateAccount };
   rendered.rerender(tree());
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Round number" }), {
+  fireEvent.change(await screen.findByRole("spinbutton", { name: "Round number" }), {
     target: { value: "13" },
   });
   fireEvent.click(screen.getByRole("button", { name: "View round" }));

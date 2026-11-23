@@ -39,6 +39,7 @@ vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     readContract: async ({ functionName }: { functionName: string }) => {
+      if (functionName === "drawId") return 30n;
       if (functionName === "encryptedWinningsOf") return fixture.winningsHandle;
       return 0n;
     },
@@ -88,10 +89,6 @@ vi.mock("@/lib/prize-check-coordinator", () => ({
   createPrizeCheckIntentStore: vi.fn(),
   createViemPrizeChainReader: fixture.readerFactory,
   createViemPrizeProofClient: fixture.proofFactory,
-}));
-vi.mock("@/lib/morpho-yield", () => ({
-  createLatestBlockRefresher: () => ({ refresh: async () => {}, dispose() {} }),
-  readProjectedMorphoYield: vi.fn(async () => ({ source: "stored", accruedYieldAssets: 0n })),
 }));
 vi.mock("@/lib/client-errors", () => ({ reportClientToast: vi.fn(), reportClientError: vi.fn() }));
 vi.mock("wagmi", () => ({ useBlockNumber: () => ({ data: undefined }) }));

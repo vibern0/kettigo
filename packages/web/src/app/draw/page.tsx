@@ -16,7 +16,7 @@ import { getPrizeActions, getPrizeRevealFeedback, type PrizeActionId } from "@/l
 import { createLatestBlockRefresher } from "@/lib/morpho-yield";
 import { PrizeHistory } from "@/components/draw/PrizeHistory";
 import { DrawPoolSummary } from "@/components/draw/DrawPoolSummary";
-import { readDrawSnapshot } from "@/components/draw/draw-snapshot";
+import { readDrawSnapshot, type DrawSnapshot } from "@/components/draw/draw-snapshot";
 import {
   asDrawAddress as asAddress,
   drawOperationKey,
@@ -59,11 +59,7 @@ export default function DrawPage() {
   const [hydrated, setHydrated] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const [workingAction, setWorkingAction] = useState<WorkingAction>();
-  const [drawId, setDrawId] = useState<bigint | undefined>();
-  const [drawInterval, setDrawInterval] = useState<bigint | undefined>();
-  const [nextDrawAt, setNextDrawAt] = useState<bigint | undefined>();
-  const [participantCount, setParticipantCount] = useState<bigint | undefined>();
-  const [publicPrizeReserve, setPublicPrizeReserve] = useState<bigint | undefined>();
+  const [drawState, setDrawState] = useState<{ pool: string; snapshot: DrawSnapshot }>();
   const [winnings, setWinnings] = useState<bigint | undefined>();
   const [winningsOwner, setWinningsOwner] = useState<`0x${string}` | undefined>();
   const [creditReview, setCreditReview] = useState<CreditReview>();
@@ -91,6 +87,8 @@ export default function DrawPage() {
   const scope = `${session?.address?.toLowerCase() ?? ""}:${addresses.pool.toLowerCase()}:${runtime.mode2 ? "2" : "legacy1"}`;
   scopeRef.current = scope;
   const mode2 = hydrated && runtime.mode2;
+  const { drawId, drawInterval, nextDrawAt, participantCount, publicPrizeReserve } =
+    drawState?.pool === addresses.pool ? drawState.snapshot : {};
   const activeDrawId = drawId === undefined ? undefined : drawId + 1n;
   const roundsClosed = drawId ?? 0n;
   const visibleWinnings = session?.address === winningsOwner ? winnings : undefined;
@@ -160,13 +158,7 @@ export default function DrawPage() {
     const pool = asAddress(addresses.pool, "Prize pool");
     const refresher = createLatestBlockRefresher(
       (blockNumber) => readDrawSnapshot(pool, blockNumber),
-      (snapshot) => {
-        setDrawId(snapshot.drawId);
-        setDrawInterval(snapshot.drawInterval);
-        setNextDrawAt(snapshot.nextDrawAt);
-        setParticipantCount(snapshot.participantCount);
-        setPublicPrizeReserve(snapshot.publicPrizeReserve);
-      },
+      (snapshot) => setDrawState({ pool, snapshot }),
     );
     refreshRef.current = refresher.refresh;
     void refresher.refresh();
@@ -500,7 +492,7 @@ export default function DrawPage() {
         roundsClosed={roundsClosed}
       />
 
-      {mode2 && session && ready && isAddress(addresses.pool) && (
+      {mode2 && roundsClosed > 0n && session && ready && isAddress(addresses.pool) && (
         <PrizeHistory
           account={getAddress(session.address)}
           pool={getAddress(addresses.pool)}
@@ -525,7 +517,7 @@ export default function DrawPage() {
       )}
       {participationPending && (
         <p className="text-sm text-muted">
-          Your savings are waiting to be included in a future draw. Review participation in{" "}
+          Your savings will enter a future draw automatically. You can track participation in{" "}
           <Link href={savingsHref} className="text-brand hover:underline">
             Savings
           </Link>

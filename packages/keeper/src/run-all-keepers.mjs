@@ -3,7 +3,7 @@ import console from "node:console";
 import process from "node:process";
 import { fileURLToPath, URL } from "node:url";
 
-export const KEEPER_NAMES = ["morpho", "withdrawal", "draw"];
+export const KEEPER_NAMES = ["morpho", "withdrawal", "admission", "draw"];
 
 export async function runAllKeepers(run) {
   const results = [];

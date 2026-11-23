@@ -26,8 +26,10 @@ vi.mock("viem", async (original) => ({
   ...(await original<typeof import("viem")>()),
   createPublicClient: () => ({
     getBlockNumber: async () => 0n,
-    readContract: async ({ functionName }: { functionName: string }) =>
-      functionName === "encryptedWinningsOf" ? `0x${"1".repeat(64)}` : 0n,
+    readContract: async ({ functionName }: { functionName: string }) => {
+      if (functionName === "drawId") return 30n;
+      return functionName === "encryptedWinningsOf" ? `0x${"1".repeat(64)}` : 0n;
+    },
     request: async () => [],
     waitForTransactionReceipt: async () => ({ status: "success" }),
     watchBlockNumber: () => () => {},
@@ -75,9 +77,6 @@ vi.mock("@/lib/prize-check-coordinator", () => ({
   createPrizeCheckIntentStore: vi.fn(),
   createViemPrizeChainReader: fixture.reader,
   createViemPrizeProofClient: () => ({ listDraws: async () => ({ draws: [], kind: "draws" }) }),
-}));
-vi.mock("@/lib/morpho-yield", () => ({
-  createLatestBlockRefresher: () => ({ dispose() {}, refresh: async () => {} }),
 }));
 vi.mock("@/lib/client-errors", () => ({ reportClientError: vi.fn(), reportClientToast: vi.fn() }));
 vi.mock("canvas-confetti", () => ({

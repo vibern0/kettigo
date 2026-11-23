@@ -29,10 +29,12 @@ export function DrawPoolSummary({
             {participantCount === undefined ? "-" : participantCount.toString()}
           </p>
         </div>
-        <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
-          <p className="text-xs text-muted">Past results</p>
-          <p className="font-display text-2xl font-bold tabular-nums">{roundsClosed.toString()}</p>
-        </div>
+        {roundsClosed > 0n && (
+          <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
+            <p className="text-xs text-muted">Past results</p>
+            <p className="font-display text-2xl font-bold tabular-nums">{roundsClosed.toString()}</p>
+          </div>
+        )}
         <div className="rounded-2xl bg-white/35 border border-white/50 p-3 min-h-24">
           <p className="text-xs text-muted">Added this round</p>
           <p className="font-display text-xl font-bold tabular-nums">

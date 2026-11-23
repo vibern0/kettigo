@@ -28,7 +28,7 @@ import { useToast } from "@/components/Toast";
 import { DepositSheet } from "@/components/savings/DepositSheet";
 import { WithdrawalSheet } from "@/components/savings/WithdrawalSheet";
 import { SavingsStatus } from "@/components/savings/SavingsStatus";
-import { ParticipationPanel, type ParticipationPanelHandle } from "@/components/savings/ParticipationPanel";
+import { ParticipationPanel } from "@/components/savings/ParticipationPanel";
 import { TestnetWarning } from "@/components/TestnetWarning";
 import { useActionCenter } from "@/components/ActionCenter";
 import { SELECTED_SCOPE } from "@/lib/runtime-config";
@@ -186,13 +186,12 @@ export default function SavingsPage() {
   const [accessReviewStep, setAccessReviewStep] = useState<SheetStep>();
   const preparedDeposit = useRef<{ session: PasskeySmartSession; value: bigint; transaction: PreparedSmartTransaction; preparedAt: number }>();
   const preparedAccess = useRef<{ session: PasskeySmartSession; transaction: PreparedSmartTransaction; preparedAt: number }>();
-  const participation = useRef<ParticipationPanelHandle>(null);
+  const [participationRefresh, setParticipationRefresh] = useState(0);
   const reviewAbort = useRef<AbortController>();
   const [preparingDeposit, setPreparingDeposit] = useState(false);
   const depositPreparationId = useRef(0);
 
   function cancelOwnedReview() {
-    participation.current?.cancel();
     reviewAbort.current?.abort();
     reviewAbort.current = undefined;
     depositPreparationId.current += 1;
@@ -1128,7 +1127,15 @@ export default function SavingsPage() {
 
       <SavingsStatus walletBalance={usdcBalance} principal={principal} pendingTotal={withdrawalInProgress} pendingWithdrawals={pendingWithdrawals} loading={confidentialBalancesLoading} error={confidentialBalancesError} accessRequired={confidentialBalancesReadState === "access-required"} accessConfirming={accessReviewStep === "confirm"} accessAvailable={Boolean(session)} automaticWithdrawals={automaticWithdrawals} withdrawalRefreshError={withdrawalRefreshError} onAccessBack={() => { cancelOwnedReview(); setAccessReviewStep(undefined); }} onAccessConfirm={confirmBalanceAccess} onAccessReview={() => void reviewBalanceAccess()} />
 
-      <ParticipationPanel ref={participation} account={session?.address} pool={poolReady ? asAddress(addresses.pool, "Prize pool") : undefined} session={session ?? undefined} onReviewStart={cancelOwnedReview} />
+      {SELECTED_SCOPE?.mode === "v2" && session && poolReady && (
+        <ParticipationPanel
+          key={`${session.address}:${addresses.pool}`}
+          account={session.address}
+          pool={asAddress(addresses.pool, "Prize pool")}
+          freshDepositEnabled={freshDepositEnabled}
+          refreshCount={participationRefresh}
+        />
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <button
@@ -1204,7 +1211,7 @@ export default function SavingsPage() {
               "deposit",
               async (update, onSigned) => {
                 await depositConfidential(parsedDepositAmount, update, onSigned);
-                participation.current?.refresh();
+                setParticipationRefresh((count) => count + 1);
               },
               "Deposit complete.",
             )
@@ -1242,7 +1249,7 @@ export default function SavingsPage() {
               "withdraw",
               async (update, onSigned) => {
                 await withdrawConfidential(parsedWithdrawAmount, update, onSigned);
-                participation.current?.refresh();
+                setParticipationRefresh((count) => count + 1);
               },
               "Withdrawal requested.",
             )
