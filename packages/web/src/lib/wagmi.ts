@@ -1,15 +1,15 @@
 import { createConfig, http } from "wagmi";
-import { sepolia } from "wagmi/chains";
+import { deploymentChain } from "./deployment-chain.ts";
 import { CHAIN_ID, RPC_URL } from "./contracts";
 
 // wagmi is used for read-side ergonomics
 // (`useReadContracts`, `useBlockNumber`, etc.) — no wagmi connectors needed.
 
 export const wagmiConfig = createConfig({
-  chains: [sepolia],
+  chains: [deploymentChain],
   connectors: [],
   transports: {
-    [sepolia.id]: http(RPC_URL),
+    [deploymentChain.id]: http(RPC_URL),
   },
   ssr: true,
 });

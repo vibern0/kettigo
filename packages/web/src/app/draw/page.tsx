@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createPublicClient, encodeFunctionData, getAddress, http, isAddress } from "viem";
-import { sepolia } from "viem/chains";
+import { deploymentChain } from "@/lib/deployment-chain.ts";
 import { CONTRACTS, RPC_URL, confidentialPrizePoolAbi } from "@/lib/contracts";
 import { Countdown } from "@/components/Countdown";
 import { TestnetWarning } from "@/components/TestnetWarning";
@@ -47,7 +47,7 @@ type CreditReview = Readonly<{
 }>;
 
 const publicClient = createPublicClient({
-  chain: sepolia,
+  chain: deploymentChain,
   transport: http(RPC_URL),
 });
 

@@ -1,3 +1,4 @@
+import { deploymentChain } from "./deployment-chain.ts";
 import { encodeFunctionData, getAddress, isAddress, isHex, type Address, type Hex } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 
@@ -21,7 +22,7 @@ import type {
 } from "./smart-session.ts";
 
 export type PrizeCheckIntent = Readonly<{
-  chainId: 11155111;
+  chainId: typeof deploymentChain.id;
   pool: Address;
   account: Address;
   drawId: bigint;
@@ -54,7 +55,7 @@ type ReceiptSession = Pick<
 >;
 
 export type PrizeCheckCoordinatorDependencies = Readonly<{
-  chainId: 11155111;
+  chainId: typeof deploymentChain.id;
   pool: Address;
   account: Address;
   session: ReceiptSession;
@@ -109,7 +110,7 @@ function validOperation(value: unknown, account: Address): value is SafeUserOper
     return false;
   const operation = value as SafeUserOperationIdentity;
   return (
-    operation.chainId === 11155111 &&
+    operation.chainId === deploymentChain.id &&
     isAddress(operation.entryPoint) &&
     getAddress(operation.entryPoint) === ENTRY_POINT &&
     isAddress(operation.sender) &&
@@ -126,13 +127,13 @@ function intent(
   if (!validOperation(operation, scope.account))
     throw new Error("The prepared operation has a different scope.");
   return Object.freeze({
-    chainId: 11155111,
+    chainId: deploymentChain.id,
     pool: scope.pool,
     account: scope.account,
     drawId: scope.drawId,
     action: ACTION,
     operation: Object.freeze({
-      chainId: 11155111,
+      chainId: deploymentChain.id,
       entryPoint: getAddress(operation.entryPoint),
       sender: getAddress(operation.sender),
       userOperationHash: operation.userOperationHash,
@@ -153,7 +154,7 @@ export function createPrizeCheckIntentStore(
         throw new Error("invalid schema");
       if (
         value.action !== ACTION ||
-        value.chainId !== 11155111 ||
+        value.chainId !== deploymentChain.id ||
         typeof value.drawId !== "string" ||
         !/^[1-9][0-9]*$/.test(value.drawId) ||
         typeof value.pool !== "string" ||
@@ -233,7 +234,7 @@ function readState(
 }
 
 export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependencies) {
-  if (input.chainId !== 11155111) throw new Error("Unsupported chain.");
+  if (input.chainId !== deploymentChain.id) throw new Error("Unsupported chain.");
   const scope = Object.freeze({ pool: getAddress(input.pool), account: getAddress(input.account) });
   if (getAddress(input.session.address) !== scope.account)
     throw new Error("Session account differs from prize-check account.");
@@ -267,7 +268,7 @@ export function createPrizeCheckCoordinator(input: PrizeCheckCoordinatorDependen
       proof.drawId !== reviewed.drawId ||
       getAddress(proof.account) !== scope.account ||
       getAddress(proof.pool) !== scope.pool ||
-      proof.chainId !== 11155111n
+      proof.chainId !== BigInt(deploymentChain.id)
     )
       throw new Error("The proof is outside this prize-check scope.");
     const calls = dependencies.prepareReadSessionCalls
@@ -353,7 +354,7 @@ function sameIntentForScope(
     assertDraw(intentValue.drawId);
     return (
       intentValue.drawId === requestedDrawId &&
-      intentValue.chainId === 11155111 &&
+      intentValue.chainId === deploymentChain.id &&
       intentValue.action === ACTION &&
       same(intentValue.pool, scope.pool) &&
       same(intentValue.account, scope.account) &&

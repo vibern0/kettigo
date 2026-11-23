@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { createPublicClient, getAddress, http, type Address } from "viem";
-import { sepolia } from "viem/chains";
+import { deploymentChain } from "@/lib/deployment-chain.ts";
 import { confidentialPrizePoolAbi, RPC_URL } from "@/lib/contracts";
 
-const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
+const client = createPublicClient({ chain: deploymentChain, transport: http(RPC_URL) });
 const statusCopy = {
   loading: "Checking your savings status…",
   pending: "Your savings are being added to future draws automatically.",

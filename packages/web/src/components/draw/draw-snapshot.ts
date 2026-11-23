@@ -1,5 +1,5 @@
 import { createPublicClient, http, type Address } from "viem";
-import { sepolia } from "viem/chains";
+import { deploymentChain } from "@/lib/deployment-chain.ts";
 import { RPC_URL, confidentialPrizePoolAbi } from "@/lib/contracts";
 
 export type DrawSnapshot = Readonly<{
@@ -11,7 +11,7 @@ export type DrawSnapshot = Readonly<{
   publicPrizeReserve: bigint;
 }>;
 
-const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
+const client = createPublicClient({ chain: deploymentChain, transport: http(RPC_URL) });
 
 export async function readDrawSnapshot(
   pool: Address,

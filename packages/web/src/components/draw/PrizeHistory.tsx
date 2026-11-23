@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPublicClient, getAddress, http, type Address, type Hex } from "viem";
-import { sepolia } from "viem/chains";
+import { deploymentChain } from "@/lib/deployment-chain.ts";
 
 import {
   createPrizeCheckCoordinator,
@@ -24,7 +24,7 @@ import {
 } from "./prize-history-operation-lease";
 import type { ReviewLease } from "./review-lease";
 
-const client = createPublicClient({ chain: sepolia, transport: http(RPC_URL) });
+const client = createPublicClient({ chain: deploymentChain, transport: http(RPC_URL) });
 const requestClient = {
   request: (args: { method: string; params: readonly unknown[] }) => client.request(args as never),
 };
@@ -121,7 +121,7 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
   const createCoordinator = useCallback(() => {
     const reader = createViemPrizeChainReader(requestClient, getAddress(pool));
     return createPrizeCheckCoordinator({
-      chainId: 11155111,
+      chainId: deploymentChain.id,
       pool: getAddress(pool),
       account: getAddress(account),
       session,
@@ -130,7 +130,7 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
       readAward: (drawId, options) => reader.readAward(drawId, getAddress(account), options),
       getProofClient: () =>
         createViemPrizeProofClient({
-          chainId: 11155111,
+          chainId: deploymentChain.id,
           pool: getAddress(pool),
           account: getAddress(account),
           baseUrl: proofUrl,
@@ -150,7 +150,7 @@ export function PrizeHistory({ account, pool, session, proofUrl, reviewLease }: 
       listAbortRef.current = controller;
       try {
         const archive = createViemPrizeProofClient({
-          chainId: 11155111,
+          chainId: deploymentChain.id,
           pool: getAddress(pool),
           account: getAddress(account),
           baseUrl: proofUrl,

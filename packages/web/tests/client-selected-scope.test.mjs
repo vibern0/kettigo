@@ -21,6 +21,11 @@ test("accepts an emitted complete legacy tuple", () => {
   assert.deepEqual(validateSelectedPoolScope(legacy), legacy);
 });
 
+test("rejects a Hardhat chain ID in the deployed app's browser configuration", () => {
+  const selectedPoolScope = { ...legacy, chainId: 31337 };
+  assert.equal(readSelectedPoolScope({ selectedPoolScope }), undefined);
+});
+
 test("rejects partial tuples and mixed legacy roles", () => {
   assert.equal(validateSelectedPoolScope({ ...legacy, rpcUrl: "" }), undefined);
   assert.equal(

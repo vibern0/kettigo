@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { createPublicClient, encodeEventTopics, encodeFunctionData, getAddress, http, isAddress, parseEventLogs, toHex, zeroAddress, zeroHash } from "viem";
-import { sepolia } from "viem/chains";
+import { deploymentChain } from "@/lib/deployment-chain.ts";
 import {
   CONTRACTS,
   RPC_URL,
@@ -58,7 +58,7 @@ const WITHDRAWAL_LOG_LOOKBACK_BLOCKS = 10_000n;
 const MAX_USER_PRINCIPAL = 1_000_000_000n;
 
 const publicClient = createPublicClient({
-  chain: sepolia,
+  chain: deploymentChain,
   transport: http(RPC_URL),
 });
 

@@ -1,3 +1,4 @@
+import { deploymentChain } from "../src/lib/deployment-chain.ts";
 import { getAddress, type Address } from "viem";
 
 export type PoolScopeId = "legacy-e65" | "legacy-9c" | "candidate-v2";
@@ -5,7 +6,7 @@ export type PoolMode = "legacy1" | "v2";
 
 export type SelectedPoolScope = Readonly<{
   id: PoolScopeId;
-  chainId: 11155111;
+  chainId: typeof deploymentChain.id;
   usdc: Address;
   wrapper: Address;
   pool: Address;
@@ -129,7 +130,7 @@ function buildScope(value: {
     if (!proofServiceUrl || !proofNamespace) return undefined;
     return Object.freeze({
       id: value.id,
-      chainId: 11155111,
+      chainId: deploymentChain.id,
       usdc,
       wrapper,
       pool,
@@ -142,7 +143,7 @@ function buildScope(value: {
   }
   return Object.freeze({
     id: value.id,
-    chainId: 11155111,
+    chainId: deploymentChain.id,
     usdc,
     wrapper,
     pool,
@@ -162,7 +163,12 @@ function buildScope(value: {
 export function validateSelectedPoolScope(value: unknown): SelectedPoolScope | undefined {
   if (!isScopeInput(value)) return undefined;
   const id = stringValue(value.id);
-  if (value.chainId !== 11155111 || !id || !isPoolScopeId(id) || !isPoolMode(value.mode)) {
+  if (
+    value.chainId !== deploymentChain.id ||
+    !id ||
+    !isPoolScopeId(id) ||
+    !isPoolMode(value.mode)
+  ) {
     return undefined;
   }
   if (typeof value.onboardingEnabled !== "boolean") return undefined;

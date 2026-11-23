@@ -1,3 +1,4 @@
+import { deploymentChain } from "./deployment-chain.ts";
 import { getAddress, type Address, type Hex } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 
@@ -19,7 +20,7 @@ const EXPECTED_ENTRY_POINT = getAddress(entryPoint07Address);
 const HASH_PATTERN = /^0x[\da-fA-F]{64}$/;
 
 export type PendingOperationDisplay = Readonly<{
-  chainId: 11155111;
+  chainId: typeof deploymentChain.id;
   entryPoint: Address;
   sender: Address;
   userOperationHash: Hex;
@@ -27,12 +28,13 @@ export type PendingOperationDisplay = Readonly<{
 }>;
 
 function displayOperation(record: PendingOperationRecord): PendingOperationDisplay | undefined {
-  if (record.chainId !== 11155111 || !HASH_PATTERN.test(record.userOperationHash)) return undefined;
+  if (record.chainId !== deploymentChain.id || !HASH_PATTERN.test(record.userOperationHash))
+    return undefined;
   try {
     const entryPoint = getAddress(record.entryPoint);
     if (entryPoint !== EXPECTED_ENTRY_POINT) return undefined;
     return {
-      chainId: 11155111,
+      chainId: deploymentChain.id,
       entryPoint,
       sender: getAddress(record.sender),
       userOperationHash: record.userOperationHash,

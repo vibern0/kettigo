@@ -1,3 +1,4 @@
+import { deploymentChain } from "./deployment-chain.ts";
 // Contract addresses & ABIs. The active Kettigo ABIs come from the shared
 // protocol package.
 
@@ -18,7 +19,7 @@ export const CONTRACTS = {
   confidentialPrizePool: SELECTED_SCOPE?.pool ?? unavailableAddress,
 } as const;
 
-export const CHAIN_ID = SELECTED_SCOPE?.chainId ?? 11155111;
+export const CHAIN_ID = SELECTED_SCOPE?.chainId ?? deploymentChain.id;
 export const RPC_URL = SELECTED_SCOPE?.rpcUrl ?? "";
 export const PIMLICO_API_KEY = publicConfig(
   "NEXT_PUBLIC_PIMLICO_API_KEY",

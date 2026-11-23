@@ -1,3 +1,4 @@
+import { deploymentChain } from "./deployment-chain.ts";
 import { encodeAbiParameters, getAddress, keccak256 } from "viem";
 
 export type PrizeDraw = {
@@ -284,7 +285,7 @@ async function withDeadline<T>(
 
 export function createPrizeProofClient(options: PrizeProofClientOptions) {
   const chainId = BigInt(options.chainId);
-  if (chainId !== 11155111n) throw new Error("unsupported chain");
+  if (chainId !== BigInt(deploymentChain.id)) throw new Error("unsupported chain");
   const pool = addr(options.pool, "pool"),
     account = addr(options.account, "account"),
     base = new URL(options.baseUrl);

@@ -1,3 +1,4 @@
+import { deploymentChain } from "./deployment-chain.ts";
 import {
   validateSelectedPoolScope,
   type SelectedPoolScope,
@@ -27,7 +28,7 @@ function staticSelectedScope(): SelectedPoolScope | undefined {
     candidateOnboarding === "true" ? true : candidateOnboarding === "false" ? false : undefined;
   const candidate = validateSelectedPoolScope({
     id: "candidate-v2",
-    chainId: 11155111,
+    chainId: deploymentChain.id,
     usdc: process.env.NEXT_PUBLIC_CANDIDATE_V2_USDC_ADDRESS,
     wrapper: process.env.NEXT_PUBLIC_CANDIDATE_V2_CONFIDENTIAL_USDC_ADDRESS,
     pool: process.env.NEXT_PUBLIC_CANDIDATE_V2_CONFIDENTIAL_PRIZE_POOL_ADDRESS,
@@ -40,7 +41,7 @@ function staticSelectedScope(): SelectedPoolScope | undefined {
   if (process.env.NEXT_PUBLIC_POOL_VERSION === "2") return candidate;
 
   const shared = {
-    chainId: 11155111,
+    chainId: deploymentChain.id,
     usdc: process.env.NEXT_PUBLIC_USDC_ADDRESS,
     wrapper: process.env.NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS,
     pool: process.env.NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS,

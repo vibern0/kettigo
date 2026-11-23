@@ -4,7 +4,7 @@ import {
   getUserOperationHash,
   type UserOperation,
 } from "viem/account-abstraction";
-import { sepolia } from "viem/chains";
+import { deploymentChain } from "./deployment-chain.ts";
 
 import type { SafeUserOperationIdentity } from "./smart-session.ts";
 
@@ -13,11 +13,11 @@ export function getSafeUserOperationIdentity(
 ): SafeUserOperationIdentity {
   const sender = getAddress(userOperation.sender);
   return Object.freeze({
-    chainId: sepolia.id,
+    chainId: deploymentChain.id,
     entryPoint: getAddress(entryPoint07Address),
     sender,
     userOperationHash: getUserOperationHash({
-      chainId: sepolia.id,
+      chainId: deploymentChain.id,
       entryPointAddress: getAddress(entryPoint07Address),
       entryPointVersion: "0.7",
       userOperation: { ...userOperation, sender },
