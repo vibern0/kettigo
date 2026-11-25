@@ -132,7 +132,7 @@ the refreshed position after every confirmed action.
 From the repository root, the lab's focused checks are:
 
 ```bash
-npm run lab:test -- --run
+npm run lab:test
 npm run lab:typecheck
 npm run lab:build
 ```
