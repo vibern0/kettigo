@@ -93,6 +93,17 @@ Contract tests cover confidential deposits, encrypted principal decryption,
 withdrawal/unwrap, public mocked prize funding, FHE-random draws, confidential
 claims, and Morpho yield routing.
 
+## Analyze the contracts
+
+With pnpm and [uv](https://docs.astral.sh/uv/) installed, run
+`pnpm contracts:analyze` from the repository root. This compiles the contracts
+locally and runs the pinned Slither release against the Hardhat build, including
+the mocks and test fixtures. Each run prints a fresh report directory containing
+a Markdown checklist, JSON findings, and SARIF.
+
+The Solidity quality workflow runs the same command and uploads the reports as
+`slither-report`. Low, medium, or high impact findings fail the check.
+
 ### Browser saver journey
 
 From the repository root, use Node 24 and pnpm 10.11.1. Install the dependencies

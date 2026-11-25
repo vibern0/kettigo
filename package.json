@@ -42,6 +42,7 @@
     "lint:solidity:conditionals": "! rg -n '^[[:space:]]*if \\([^\\n]+\\) (revert|return|emit|[A-Za-z_].*;)' packages/contracts/contracts -g '*.sol' && ! rg -n -U 'if \\([^\\n]+\\)\\n\\s*(revert|return|emit|[A-Za-z_][^\\n;]*;)' packages/contracts/contracts -g '*.sol'",
     "format:solidity:check": "prettier --check \"packages/contracts/contracts/**/*.sol\"",
     "cf:build": "pnpm --filter @kettigo/landing build",
+    "contracts:analyze": "bash packages/contracts/scripts/analyze-solidity.sh",
     "contracts:compile": "npm run compile -w packages/contracts",
     "test:e2e:saver": "LOCAL_SAVER_UI=1 NODE_OPTIONS=--experimental-transform-types pnpm --filter @kettigo/contracts exec hardhat test --network hardhat test/Saver.browser.test.js",
     "contracts:test": "npm run test -w packages/contracts",
@@ -73,7 +74,6 @@
     ]
   },
   "devDependencies": {
-    "@cyfrin/aderyn": "0.6.8",
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
     "playwright": "1.63.0",
