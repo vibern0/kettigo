@@ -102,7 +102,9 @@ the mocks and test fixtures. Each run prints a fresh report directory containing
 a Markdown checklist, JSON findings, and SARIF.
 
 The Solidity quality workflow runs the same command and uploads the reports as
-`slither-report`. Low, medium, or high impact findings fail the check.
+`slither-report`. New or changed low, medium, or high impact findings fail the check.
+The contract review documents the verified exceptions and historical fixture
+limitations. [Slither review](packages/contracts/SLITHER.md)
 
 ### Browser saver journey
 
