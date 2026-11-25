@@ -111,10 +111,11 @@ test("one scheduled pass attempts every lane when an earlier lane fails", async 
     if (name === "morpho") throw new Error("morpho unavailable");
   });
 
-  assert.deepEqual(attempts, ["morpho", "withdrawal", "draw"]);
+  assert.deepEqual(attempts, ["morpho", "withdrawal", "admission", "draw"]);
   assert.deepEqual(result, [
     { name: "morpho", ok: false, error: "morpho unavailable" },
     { name: "withdrawal", ok: true },
+    { name: "admission", ok: true },
     { name: "draw", ok: true },
   ]);
 });

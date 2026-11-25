@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.11.1",
   "description": "Kettigo — mobile-first no-loss prize savings with passkey-owned Safe accounts.",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "workspaces": [
     "packages/*"
@@ -42,7 +42,9 @@
     "lint:solidity:conditionals": "! rg -n '^[[:space:]]*if \\([^\\n]+\\) (revert|return|emit|[A-Za-z_].*;)' packages/contracts/contracts -g '*.sol' && ! rg -n -U 'if \\([^\\n]+\\)\\n\\s*(revert|return|emit|[A-Za-z_][^\\n;]*;)' packages/contracts/contracts -g '*.sol'",
     "format:solidity:check": "prettier --check \"packages/contracts/contracts/**/*.sol\"",
     "cf:build": "pnpm --filter @kettigo/landing build",
+    "contracts:analyze": "bash packages/contracts/scripts/analyze-solidity.sh",
     "contracts:compile": "npm run compile -w packages/contracts",
+    "test:e2e:saver": "LOCAL_SAVER_UI=1 NODE_OPTIONS=--experimental-transform-types pnpm --filter @kettigo/contracts exec hardhat test --network hardhat test/Saver.browser.test.js",
     "contracts:test": "npm run test -w packages/contracts",
     "coverage": "SOLIDITY_COVERAGE=true pnpm --dir packages/contracts exec hardhat coverage",
     "contracts:deploy:sepolia": "npm run deploy:sepolia -w packages/contracts",
@@ -59,6 +61,7 @@
     "web:build": "npm run build -w packages/web",
     "keeper:morpho": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs morpho",
     "keeper:withdrawal": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs withdrawal",
+    "keeper:admission": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs admission",
     "keeper:draw": "node --no-warnings --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs packages/keeper/src/run-web-keeper.mjs draw",
     "keeper:all": "node packages/keeper/src/run-all-keepers.mjs",
     "keeper:watch": "node packages/keeper/src/watch-keepers.mjs"
@@ -71,9 +74,9 @@
     ]
   },
   "devDependencies": {
-    "@cyfrin/aderyn": "0.6.8",
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
+    "playwright": "1.63.0",
     "prettier": "3.9.10",
     "prettier-plugin-solidity": "2.4.1",
     "solhint": "6.2.5",

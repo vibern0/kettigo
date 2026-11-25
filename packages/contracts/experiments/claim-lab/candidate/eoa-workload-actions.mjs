@@ -1,0 +1,59 @@
+import { deepFreeze } from "./eoa-workload-graph-utils.mjs";
+import { addFinal, addReserveStages } from "./eoa-workload-stages.mjs";
+import {
+  addInitialBatch,
+  addInitialDraws,
+  addInitialMorpho,
+  addParticipantFunding,
+  addSafeRejoin,
+  addSetup,
+} from "./eoa-workload-lifecycle.mjs";
+import { addParticipantLifecycle } from "./eoa-workload-participant-lifecycle.mjs";
+import { addSponsorTail } from "./eoa-workload-sponsor-tail.mjs";
+import { resolveTarget } from "./eoa-workload-templates.mjs";
+
+export function buildActions(definition, manifest) {
+  const actions = [];
+  const add = createActionAdder(actions, definition);
+  const call = (signature, args, value = "0") => ({ signature, args, value });
+  const native = (value) => ({ signature: "nativeTransfer()", args: [], data: "0x", value });
+  const transfer = (recipient, amount) => call("transfer(address,uint256)", [recipient, amount]);
+  addSetup(add, call, native, transfer, definition, manifest);
+  addParticipantFunding(add, call, native, transfer, definition);
+  addInitialDraws(add, call, definition);
+  addInitialMorpho(add, call, definition);
+  addInitialBatch(add, call, definition);
+  addParticipantLifecycle(add, call, definition);
+  addSafeRejoin(add, call, definition);
+  addReserveStages(add, call, definition);
+  addFinal(add, call, definition);
+  addSponsorTail(actions);
+  return Object.freeze(actions.map((action) => deepFreeze(action)));
+}
+
+function createActionAdder(actions, definition) {
+  return (id, phase, actorRole, targetRole, operation, dependencies = [], extra = {}) => {
+    const actor =
+      actorRole === "participant"
+        ? definition.actors.eoaParticipants[extra.actorIndex]
+        : definition.actors[actorRole];
+    actions.push({
+      id,
+      phase,
+      kind: actorRole === "safeParticipant" ? "externalSafe" : "eoa",
+      status: actorRole === "safeParticipant" ? "PENDING" : "planned",
+      actorRole,
+      actor,
+      actorIndex: actorRole === "participant" ? extra.actorIndex : null,
+      targetRole,
+      target: resolveTarget(definition, targetRole, extra.actorIndex),
+      operation,
+      dependencies: [...dependencies],
+      concurrencyGroup: extra.concurrencyGroup || "serial",
+      concurrency: extra.concurrency || { id: extra.concurrencyGroup || "serial", width: 1 },
+      allocation: extra.allocation || { id: null, usdcMicro: "0", valueWei: "0" },
+      refs: extra.refs || {},
+      provenance: extra.provenance || null,
+    });
+  };
+}

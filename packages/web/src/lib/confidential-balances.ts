@@ -2,17 +2,12 @@
 
 import { createPublicClient, http } from "viem";
 import { sepolia } from "viem/chains";
-import {
-  CONTRACTS,
-  RPC_URL,
-  confidentialPrizePoolAbi,
-  confidentialUsdcAbi,
-} from "./contracts";
+import { CONTRACTS, RPC_URL, confidentialPrizePoolAbi, confidentialUsdcAbi } from "./contracts";
 import type { PasskeySmartSession } from "./smart-session";
 import {
   asChecksumAddress,
   clearValueToBigInt,
-  decryptWithSmartReadSession,
+  decryptWithExistingSmartReadSession,
   isZeroEncryptedHandle,
 } from "./zama";
 
@@ -32,13 +27,10 @@ type DecryptedBalances = {
   principal?: bigint;
 };
 
-async function decryptHandles(
-  requests: DecryptRequest[],
-  currentSession: PasskeySmartSession,
-) {
+async function decryptHandles(requests: DecryptRequest[], currentSession: PasskeySmartSession) {
   if (requests.length === 0) return {};
 
-  const results = await decryptWithSmartReadSession(
+  const results = await decryptWithExistingSmartReadSession(
     currentSession,
     requests.map((request) => ({
       encryptedValue: request.handle,

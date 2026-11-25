@@ -86,10 +86,12 @@ test("draw keeper submits one close transaction when the draw is eligible", asyn
   });
 });
 
-test("production draw keeper closes an overdue round with a nonzero prize", async () => {
+test("legacy production draw keeper closes an overdue round with a nonzero prize", async () => {
   const workflow = readFileSync(".github/workflows/keepers.yml", "utf8");
-  const configuredMinimum = workflow.match(/DRAW_KEEPER_MINIMUM_PRIZE: "(\d+)"/)?.[1];
-  assert.ok(configuredMinimum, "production keeper minimum is configured");
+  const legacyConfig = workflow.split("- name: Legacy")[1]?.split("- name:")[0];
+  const configuredMinimum = legacyConfig?.match(/minimum_prize: "(\d+)"/)?.[1];
+  assert.ok(configuredMinimum, "legacy keeper minimum is configured");
+  assert.ok(workflow.includes("DRAW_KEEPER_MINIMUM_PRIZE: ${{ matrix.pool.minimum_prize }}"));
 
   const writes = [];
   const result = await runDrawKeeper({

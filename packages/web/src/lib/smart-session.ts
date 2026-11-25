@@ -1,4 +1,13 @@
 import type { Address, Hex } from "viem";
+import type {
+  SafeUserOperationIdentity,
+  SafeUserOperationReceipt,
+} from "./canonical-user-operation-receipt.ts";
+
+export type {
+  SafeUserOperationIdentity,
+  SafeUserOperationReceipt,
+} from "./canonical-user-operation-receipt.ts";
 
 export type SmartAccountCall = {
   to: Address;
@@ -9,12 +18,35 @@ export type SmartAccountCall = {
 export type PasskeySmartSession = {
   address: Address;
   signTypedData: (typedData: unknown) => Promise<Hex>;
-  prepareTransaction: (calls: SmartAccountCall[]) => Promise<PreparedSmartTransaction>;
+  prepareTransaction: (
+    calls: SmartAccountCall[],
+    options?: PrepareSmartTransactionOptions,
+  ) => Promise<PreparedSmartTransaction>;
   sendTransaction: (calls: SmartAccountCall[], options?: SmartTransactionOptions) => Promise<Hex>;
+  lookupUserOperation?: (operation: SafeUserOperationIdentity) => Promise<SafeUserOperationReceipt>;
+  getPendingOperation?: () => PendingOperationRecord | null;
+  recoverPendingOperation?: () => Promise<PendingOperationRecoveryResult>;
 };
+
+export type PrepareSmartTransactionOptions = { signal?: AbortSignal };
+
+export type PendingOperationRecord = Readonly<{
+  chainId: 11155111;
+  entryPoint: Address;
+  sender: Address;
+  userOperationHash: Hex;
+  createdAt: number;
+  phase: "prepared" | "attempted";
+}>;
+
+export type PendingOperationRecoveryResult =
+  | Readonly<{ state: "none" }>
+  | Readonly<{ state: "not-submitted"; operation: SafeUserOperationIdentity }>
+  | SafeUserOperationReceipt;
 
 export type SmartTransactionOptions = {
   onSigned?: () => void;
+  onOperationPrepared?: (operation: SafeUserOperationIdentity) => void | Promise<void>;
 };
 
 export async function sendSmartTransaction(

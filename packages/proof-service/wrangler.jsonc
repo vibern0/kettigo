@@ -1,0 +1,16 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "kettigo-proof-service",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-04",
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["* * * * *"] },
+  "d1_databases": [
+    {
+      "binding": "PROOF_DB",
+      "database_name": "kettigo-proof-v2-sepolia",
+      "database_id": "60fc25ef-1686-4c1a-b8b4-604456d00bdb",
+      "migrations_dir": "migrations",
+    },
+  ],
+}

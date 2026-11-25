@@ -7,6 +7,10 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IMorphoBlue} from "./MorphoYieldAdapter.sol";
 
+interface IMockMorphoWithdrawCallback {
+  function onMorphoWithdraw(uint256 assets) external;
+}
+
 // Test-only market double; production indexing is owned by the adapter and pool events.
 // aderyn-fp-next-line(state-change-without-event)
 contract MockMorphoBlue is IMorphoBlue {
@@ -16,6 +20,7 @@ contract MockMorphoBlue is IMorphoBlue {
   error InconsistentInput();
   error InsufficientShares();
   error SharesUnsupported();
+  error CallbackFailed();
 
   uint256 private constant VIRTUAL_SHARES = 1e6;
   uint256 private constant VIRTUAL_ASSETS = 1;
@@ -24,6 +29,17 @@ contract MockMorphoBlue is IMorphoBlue {
   mapping(bytes32 id => Market marketState) private _markets;
   mapping(bytes32 id => mapping(address user => Position userPosition)) private _positions;
   mapping(bytes32 id => uint128 assets) private _queuedYield;
+  address private _withdrawCallback;
+  uint256 private _withdrawCallbackAssets;
+
+  // aderyn-fp-next-line(state-change-without-event)
+  function configureWithdrawCallback(address callback, uint256 assets) external {
+    if (callback == address(0)) {
+      revert CallbackFailed();
+    }
+    _withdrawCallback = callback;
+    _withdrawCallbackAssets = assets;
+  }
 
   // aderyn-fp-next-line(state-change-without-event)
   function createMarket(MarketParams calldata params) external returns (bytes32 marketId) {
@@ -110,7 +126,20 @@ contract MockMorphoBlue is IMorphoBlue {
     p.supplyShares -= withdrawnShares;
     m.totalSupplyAssets -= withdrawnAssets.toUint128();
     m.totalSupplyShares -= uint128(withdrawnShares);
+    _notifyWithdrawCallback();
     IERC20(params.loanToken).safeTransfer(receiver, withdrawnAssets);
+  }
+
+  function _notifyWithdrawCallback() private {
+    address callback = _withdrawCallback;
+    if (callback == address(0)) {
+      return;
+    }
+    try IMockMorphoWithdrawCallback(callback).onMorphoWithdraw(_withdrawCallbackAssets) {
+      return;
+    } catch {
+      revert CallbackFailed();
+    }
   }
 
   function idToMarketParams(bytes32 marketId) external view returns (MarketParams memory) {

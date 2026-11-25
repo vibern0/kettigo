@@ -3,7 +3,8 @@ import "@fhevm/hardhat-plugin";
 import "@nomicfoundation/hardhat-toolbox";
 import * as dotenv from "dotenv";
 
-dotenv.config();
+const localSaverTest = process.env.LOCAL_SAVER_UI === "1";
+if (!localSaverTest) dotenv.config();
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY ?? "";
 const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL ?? "https://rpc.sepolia.org";
@@ -18,7 +19,7 @@ const config: HardhatUserConfig = {
       evmVersion: "cancun",
     },
   },
-  networks: {
+  networks: localSaverTest ? {} : {
     sepolia: {
       url: SEPOLIA_RPC_URL,
       chainId: 11155111,

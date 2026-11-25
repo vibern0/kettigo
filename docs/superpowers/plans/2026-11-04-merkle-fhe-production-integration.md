@@ -12,6 +12,15 @@
 
 ## Status and authorization
 
+**Execution update, 2026-11-04:** The user subsequently authorized implementation,
+commits, Sepolia deployment/testing and a pull request. The user approved the
+[Worker + D1 amendment](2026-11-04-merkle-fhe-cloudflare-proof-storage-amendment.md)
+to Task 3 and the separate [live-run envelope](../../releases/merkle-fhe-v2-run-envelope.md).
+The publication-only statements below describe the original planning change;
+they do not supersede that later authorization. The untouched retention canary
+still cannot be checked before its due date. Codacy Cloud authentication is
+currently blocked; the user requested continued work with that gate reported.
+
 As checked against fetched `origin/main` on 2026-11-04, `packages/contracts/contracts/ConfidentialPrizePool.sol` still defines `MAX_PARTICIPANTS = 32` and enforces it at registration. No Merkle claim or proof archive is integrated into the application contract/frontend. Research lives under `packages/contracts/experiments/`. Before execution, reconcile deployed bytecode and application addresses with the release manifest; this repository check is not an independent audit of an out-of-band deployment.
 
 **Plan only.** Do not implement, run funded experiments, deploy, migrate funds, or change application addresses as part of publishing this document. Execution and release happen later. Publishing research on `main` did not activate it in the app.

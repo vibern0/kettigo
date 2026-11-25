@@ -8,7 +8,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest"
+    "test": "node tests/workbench-fix.browser.mjs && node tests/final-fix.browser.mjs"
   },
   "dependencies": {
     "@kettigo/protocol": "workspace:*",
@@ -22,7 +22,6 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.2",
     "typescript": "^5.6.2",
-    "vite": "^5.4.8",
-    "vitest": "^2.1.1"
+    "vite": "^5.4.8"
   }
 }

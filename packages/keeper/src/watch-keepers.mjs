@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { KEEPER_NAMES } from "./run-all-keepers.mjs";
+
 let child;
 let stopped = false;
 let wake;
@@ -28,9 +30,10 @@ async function run(name) {
 }
 
 while (!stopped) {
-  await run("morpho");
-  if (!stopped) await run("withdrawal");
-  if (!stopped) await run("draw");
+  for (const name of KEEPER_NAMES) {
+    if (stopped) break;
+    await run(name);
+  }
   if (!stopped) await new Promise((resolve) => {
     const timer = setTimeout(resolve, 15_000);
     wake = () => { clearTimeout(timer); resolve(); };

@@ -13,6 +13,21 @@ export type ZamaReadSessionKey = {
   expiresAtMs: number;
 };
 
+export class ZamaReadSessionAccessRequiredError extends Error {
+  readonly code = "ZAMA_READ_SESSION_ACCESS_REQUIRED";
+
+  constructor() {
+    super("Existing read access is required before this value can be revealed.");
+    this.name = "ZamaReadSessionAccessRequiredError";
+  }
+}
+
+function assertActive(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("The read session was aborted.", "AbortError");
+  }
+}
+
 function readSessionStorageKey(safeAddress: string) {
   return `${READ_SESSION_STORAGE_PREFIX}:${safeAddress.toLowerCase()}`;
 }
@@ -20,12 +35,14 @@ function readSessionStorageKey(safeAddress: string) {
 function isStoredReadSessionKey(value: unknown): value is ZamaReadSessionKey {
   if (value === null || typeof value !== "object") return false;
   const record = value as Partial<ZamaReadSessionKey>;
-  return typeof record.privateKey === "string"
-    && /^0x[0-9a-fA-F]{64}$/.test(record.privateKey)
-    && typeof record.address === "string"
-    && /^0x[0-9a-fA-F]{40}$/.test(record.address)
-    && typeof record.expiresAtMs === "number"
-    && Number.isFinite(record.expiresAtMs);
+  return (
+    typeof record.privateKey === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(record.privateKey) &&
+    typeof record.address === "string" &&
+    /^0x[0-9a-fA-F]{40}$/.test(record.address) &&
+    typeof record.expiresAtMs === "number" &&
+    Number.isFinite(record.expiresAtMs)
+  );
 }
 
 export function getOrCreateZamaReadSessionKey(
@@ -77,10 +94,7 @@ export function loadZamaReadSessionKey(
   }
 }
 
-export function signZamaReadSessionTypedData(
-  privateKey: Hex,
-  typedData: EIP712TypedData,
-) {
+export function signZamaReadSessionTypedData(privateKey: Hex, typedData: EIP712TypedData) {
   const { EIP712Domain: _, ...types } = typedData.types;
   return privateKeyToAccount(privateKey).signTypedData({
     domain: typedData.domain as any,
@@ -123,9 +137,10 @@ export function createPersistentCredentialOptions<Storage>(storage: Storage) {
   };
 }
 
-export function createZamaSessionManager<Session extends object, Resource extends ZamaSessionResource>(
-  createResource: (session: Session) => Resource,
-) {
+export function createZamaSessionManager<
+  Session extends object,
+  Resource extends ZamaSessionResource,
+>(createResource: (session: Session) => Resource) {
   type SessionResource = {
     resource: Resource;
     tail: Promise<void>;
@@ -154,7 +169,10 @@ export function createZamaSessionManager<Session extends object, Resource extend
 
     const entry = getOrCreate(session);
     const result = entry.tail.then(() => operation(entry.resource));
-    entry.tail = result.then(() => undefined, () => undefined);
+    entry.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
@@ -196,12 +214,14 @@ export function createDelegatedZamaSessionManager<
   isSessionKeyValid,
   createResource,
   ensureDelegated,
+  assertDelegated,
 }: {
   loadSessionKey(session: Session): Promise<SessionKey | undefined>;
   createSessionKey(session: Session): Promise<SessionKey>;
   isSessionKeyValid(key: SessionKey): boolean;
   createResource(key: SessionKey): Resource;
   ensureDelegated(session: Session, key: SessionKey, contracts: Address[]): Promise<void>;
+  assertDelegated?(session: Session, key: SessionKey, contracts: Address[]): Promise<void>;
 }) {
   type Entry = {
     key: SessionKey;
@@ -245,7 +265,63 @@ export function createDelegatedZamaSessionManager<
       await ensureDelegated(session, entry.key, contracts);
       return operation(entry.resource, entry.key);
     });
-    state.tail = result.then(() => undefined, () => undefined);
+    state.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async function runExisting<Result>(
+    session: Session,
+    contracts: Address[],
+    operation: (resource: Resource, key: SessionKey) => Promise<Result>,
+    options?: { signal?: AbortSignal },
+  ) {
+    assertActive(options?.signal);
+    if (closedSessions.has(session)) {
+      throw new Error("Zama session is closed.");
+    }
+
+    const state = getOrCreateState(session);
+    const result = state.tail.then(async () => {
+      assertActive(options?.signal);
+      if (closedSessions.has(session)) throw new Error("Zama session is closed.");
+
+      if (state.entry && !isSessionKeyValid(state.entry.key)) {
+        state.entry.resource.terminate();
+        state.entry = undefined;
+      }
+
+      if (!state.entry) {
+        const key = await loadSessionKey(session);
+        assertActive(options?.signal);
+        if (closedSessions.has(session)) throw new Error("Zama session is closed.");
+        if (!key || !isSessionKeyValid(key)) throw new ZamaReadSessionAccessRequiredError();
+
+        const resource = createResource(key);
+        if (closedSessions.has(session) || options?.signal?.aborted) {
+          resource.terminate();
+          assertActive(options?.signal);
+          throw new Error("Zama session is closed.");
+        }
+        state.entry = { key, resource };
+      }
+
+      const entry = state.entry;
+      if (!assertDelegated) throw new ZamaReadSessionAccessRequiredError();
+      await assertDelegated(session, entry.key, contracts);
+      assertActive(options?.signal);
+      if (closedSessions.has(session)) throw new Error("Zama session is closed.");
+      const value = await operation(entry.resource, entry.key);
+      assertActive(options?.signal);
+      if (closedSessions.has(session)) throw new Error("Zama session is closed.");
+      return value;
+    });
+    state.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
@@ -278,5 +354,5 @@ export function createDelegatedZamaSessionManager<
     return clearing;
   }
 
-  return { run, clear };
+  return { run, runExisting, clear };
 }

@@ -12,9 +12,9 @@ import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 contract ConfidentialUSDC is ZamaEthereumConfig, ERC7984ERC20Wrapper, Multicall {
   /// @notice Creates the cUSDC wrapper around the configured ERC-20.
   constructor(
-    IERC20 underlying
+    IERC20 underlyingToken
   )
     ERC7984("Confidential USDC", "cUSDC", "https://kettigo.local/cusdc")
-    ERC7984ERC20Wrapper(underlying)
+    ERC7984ERC20Wrapper(underlyingToken)
   {}
 }

@@ -170,44 +170,34 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
     nonReentrant
     returns (uint256 restoredAssets)
   {
-    if (assets > suppliedPrincipal) {
-      revert PrincipalWithdrawalExceedsSupply(assets, suppliedPrincipal);
-    }
-
     uint256 supplied = suppliedPrincipal;
-    bool fullPrincipalRestore = assets == supplied;
-    // The adapter is nonReentrant, and only the trusted pool can call this flow.
-    // aderyn-fp-next-line(reentrancy-state-change)
+    uint256 availableIdlePrincipal = usdc.balanceOf(address(this)) - idlePrincipal;
+    uint256 idleAssets = assets < availableIdlePrincipal ? assets : availableIdlePrincipal;
+    uint256 morphoAssets = assets - idleAssets;
+    if (morphoAssets > supplied) {
+      revert PrincipalWithdrawalExceedsSupply(morphoAssets, supplied);
+    }
+    bool fullPrincipalRestore = morphoAssets > 0 && morphoAssets == supplied;
     uint256 sharesToWithdraw =
       fullPrincipalRestore ? morpho.position(marketId, address(this)).supplyShares : 0;
-    uint256 assetsToWithdraw = fullPrincipalRestore ? 0 : assets;
-
-    uint256 withdrawnAssets;
-    uint256 withdrawnShares;
-    if (sharesToWithdraw > 0 || assetsToWithdraw > 0) {
-      // aderyn-fp-next-line(reentrancy-state-change)
-      (withdrawnAssets, withdrawnShares) = morpho.withdraw(
-        _marketParams,
-        assetsToWithdraw,
-        sharesToWithdraw,
-        address(this),
-        address(this)
-      );
-    }
-
+    uint256 assetsToWithdraw = fullPrincipalRestore ? 0 : morphoAssets;
     uint256 reserveUsed = fullPrincipalRestore ? idlePrincipal : 0;
-    uint256 available = withdrawnAssets + reserveUsed;
-    if (available < assets) {
-      revert PrincipalLoss(assets, available);
-    }
-
-    suppliedPrincipal = supplied - assets;
+    suppliedPrincipal = supplied - morphoAssets;
     if (fullPrincipalRestore) {
       idlePrincipal = 0;
     }
+
+    (uint256 withdrawnAssets, uint256 withdrawnShares) = _withdrawFromMorpho(
+      assetsToWithdraw,
+      sharesToWithdraw
+    );
+    uint256 available = withdrawnAssets + reserveUsed;
+    if (available < morphoAssets) {
+      revert PrincipalLoss(morphoAssets, available);
+    }
     _wrapAndSendToPool(assets, false);
 
-    uint256 surplusAssets = available - assets;
+    uint256 surplusAssets = available - morphoAssets;
     if (surplusAssets > 0) {
       _wrapAndSendToPool(surplusAssets, true);
       emit YieldHarvested(surplusAssets, withdrawnShares);
@@ -239,13 +229,7 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
       revert AmountTooLargeForConfidentialToken(harvestedAssets);
     }
 
-    (uint256 withdrawnAssets, uint256 withdrawnShares) = morpho.withdraw(
-      _marketParams,
-      harvestedAssets,
-      0,
-      address(this),
-      address(this)
-    );
+    (uint256 withdrawnAssets, uint256 withdrawnShares) = _withdrawFromMorpho(harvestedAssets, 0);
 
     _wrapAndSendToPool(withdrawnAssets, true);
 
@@ -284,6 +268,8 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
   ) private returns (uint256 assetsSupplied, uint256 sharesSupplied) {
     uint256 reserve = idlePrincipal == 0 && assets > 0 ? PRINCIPAL_ROUNDING_RESERVE : 0;
     uint256 assetsToSupply = assets - reserve;
+    idlePrincipal += reserve;
+    suppliedPrincipal += assets;
 
     if (assetsToSupply > 0) {
       usdc.forceApprove(address(morpho), assetsToSupply);
@@ -296,10 +282,31 @@ contract MorphoYieldAdapter is Ownable, ReentrancyGuard {
       );
     }
 
-    idlePrincipal += reserve;
-    suppliedPrincipal += assets;
-
     emit PoolPrincipalSupplied(assets, sharesSupplied);
+  }
+
+  function _withdrawFromMorpho(
+    uint256 assets,
+    uint256 shares
+  ) private returns (uint256 withdrawnAssets, uint256 withdrawnShares) {
+    if (assets == 0 && shares == 0) {
+      return (0, 0);
+    }
+
+    uint256 balanceBefore = usdc.balanceOf(address(this));
+    (withdrawnAssets, withdrawnShares) = morpho.withdraw(
+      _marketParams,
+      assets,
+      shares,
+      address(this),
+      address(this)
+    );
+    // Preserve idle funds and count at most the assets attributed to this withdrawal.
+    uint256 expectedBalance = balanceBefore + withdrawnAssets;
+    uint256 balanceAfter = usdc.balanceOf(address(this));
+    if (balanceAfter < expectedBalance) {
+      revert PrincipalLoss(expectedBalance, balanceAfter);
+    }
   }
 
   function _wrapAndSendToPool(uint256 assets, bool asPrizeFunding) private {

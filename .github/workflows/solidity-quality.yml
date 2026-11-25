@@ -35,32 +35,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm contracts:compile
       - run: pnpm lint:solidity
       - run: pnpm format:solidity:check
-      - name: Run Aderyn
-        run: |
-          mkdir -p aderyn-report
-          pnpm exec aderyn packages/contracts --output aderyn-report/aderyn.md
-          pnpm exec aderyn packages/contracts --output aderyn-report/aderyn.sarif
-          pnpm exec aderyn packages/contracts --output aderyn-report/aderyn.json
-      - name: Enforce reviewed Aderyn findings
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
-
-          const report = JSON.parse(readFileSync("aderyn-report/aderyn.json", "utf8"));
-          const findings = Object.entries(report.issue_count ?? {}).filter(([, count]) => count > 0);
-
-          if (findings.length > 0) {
-            console.error(`Aderyn findings require remediation or a reviewed suppression: ${findings.map(([severity, count]) => `${severity}=${count}`).join(", ")}`);
-            process.exit(1);
-          }
-          NODE
-      - name: Upload Aderyn report
-        if: always()
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.12.19"
+      - name: Compile contracts and run Slither
+        id: slither
+        run: pnpm contracts:analyze
+      - name: Upload Slither reports
+        if: ${{ !cancelled() && steps.slither.outcome != 'skipped' && hashFiles('packages/contracts/cache/slither-report.*/slither.*') != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: aderyn-report
-          path: aderyn-report/
+          name: slither-report
+          path: packages/contracts/cache/slither-report.*/slither.*
           if-no-files-found: error

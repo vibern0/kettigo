@@ -12,7 +12,8 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "cd ../.. && node --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs --test packages/web/tests/*.test.mjs packages/web/test/*.test.mjs && pnpm --dir packages/web exec vitest run --config vitest.config.mts"
+    "test": "cd ../.. && pnpm test:e2e:saver",
+    "test:worker": "cd ../.. && node --experimental-strip-types --import ./packages/keeper/src/register-ts-loader.mjs --test packages/web/tests/*.test.mjs"
   },
   "dependencies": {
     "@kettigo/protocol": "workspace:*",
@@ -36,7 +37,6 @@
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260924.1",
     "@netlify/plugin-nextjs": "^5.15.13",
-    "@testing-library/react": "16.3.3",
     "@types/canvas-confetti": "1.9.0",
     "@types/node": "^22.5.0",
     "@types/react": "^18.3.11",
@@ -45,11 +45,9 @@
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-next": "15.5.27",
-    "jsdom": "30.1.1",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
-    "vite": "8.3.1",
-    "vitest": "4.1.11"
+    "vite": "8.3.1"
   }
 }

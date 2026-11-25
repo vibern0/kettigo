@@ -8,8 +8,6 @@ dist/
 build/
 .next/
 out/
-!packages/web/out/
-!packages/web/out/**
 .worktrees/
 .superpowers/
 artifacts/

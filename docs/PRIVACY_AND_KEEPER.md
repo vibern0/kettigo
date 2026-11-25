@@ -40,10 +40,11 @@ separate liquidity buffers, and more careful keeper scheduling.
 
 ## Keeper safety
 
-The GitHub Actions keepers are intentionally idempotent. A lightweight
-Cloudflare Cron Trigger dispatches each run every five minutes; Cloudflare does
-not execute the onchain keeper. Each run reads current onchain state and executes
-at most one transaction, continuing the state machine on the next scheduled run.
+The Cloudflare Cron Trigger dispatches `keepers.yml` on
+`codex/merkle-fhe-production-integration` every five minutes. GitHub Actions
+runs the legacy and V2 pools sequentially using the same signer. Each pool has
+its own deployment block and draw threshold. A failed pool job leaves the
+other pool eligible to run.
 The Morpho keeper runs every five minutes:
 
 1. supply finalized adapter USDC to Morpho;
@@ -73,7 +74,8 @@ both capabilities.
 `MORPHO_KEEPER_MAX_TXS` is retained for configuration compatibility, but the
 scheduled runtime hard-caps every run to one transaction. When reusing a wrapper for a fresh pool, set
 `MORPHO_KEEPER_START_BLOCK` at or before the new pool deployment, before any
-requests can originate from it. The current deployment uses `11730807`.
+requests can originate from it. The hosted jobs use `11864127` for the legacy
+pool and `12078643` for V2.
 
 The withdrawal keeper runs every five minutes. It scans the current and recent
 withdrawal batch ids, closes expired nonempty open batches, and settles closed
@@ -84,3 +86,25 @@ controls the bounded scan depth and defaults to `8`.
 Each function returns after broadcasting its transaction instead of waiting for a
 receipt. The next scheduled run reads the confirmed onchain state before choosing
 another action. This avoids platform retries while preserving idempotent progress.
+
+## V2 admission keeper
+
+`pnpm keeper:all` and `pnpm keeper:watch` run the admission keeper before the
+draw keeper. To run one admission pass, use `pnpm keeper:admission`. The
+candidate pool uses the deployment block in its Sepolia release manifest.
+For a different V2 deployment, set `ADMISSION_KEEPER_START_BLOCK` to that
+pool's deployment block. Leave the variable unset for legacy pools.
+
+The keeper finds accounts through the selected pool's `AdmissionRequested`
+events. It checks the current request, obtains a proof for its boolean marker,
+checks that the request is still current, and waits for the finalization
+receipt. Positive proofs admit the account. Negative proofs clear the request.
+A deposit enters a draw once admission confirms before that draw closes.
+
+Each pass scans the most recent 128 blocks and up to 64 pages of 2,000 finalized
+blocks from the saved cursor. It checks up to 12 accounts. Unfinished work
+carries over in a chain-, pool- and deployment-specific file under
+`packages/keeper/cache/`. GitHub Actions restores the latest V2 checkpoint and
+saves the updated cursor and retry queue after each pass. Keep that directory
+between runs on other hosts. On a fresh host, backfill starts at deployment while recent requests
+are processed immediately. Onchain state makes replay after a restart safe.

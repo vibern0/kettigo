@@ -28,8 +28,7 @@ node packages/morpho-lab/tests/final-fix.browser.mjs
 
 It writes desktop/mobile screenshots into the local final-review report
 directory under `.superpowers/sdd/2026-09-17-morpho-lab/`. It does not generate a
-live Zama proof or submit funding; unit tests decode the funding multicall and
-cover sequence guards.
+live Zama proof or submit funding.
 
 ## Local Morpho EVM Check
 

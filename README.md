@@ -93,6 +93,52 @@ Contract tests cover confidential deposits, encrypted principal decryption,
 withdrawal/unwrap, public mocked prize funding, FHE-random draws, confidential
 claims, and Morpho yield routing.
 
+## Analyze the contracts
+
+With pnpm and [uv](https://docs.astral.sh/uv/) installed, run
+`pnpm contracts:analyze` from the repository root. This compiles the contracts
+locally and runs the pinned Slither release against the Hardhat build, including
+the mocks and test fixtures. Each run prints a fresh report directory containing
+a Markdown checklist, JSON findings, and SARIF.
+
+The Solidity quality workflow runs the same command and uploads the reports as
+`slither-report`. New or changed low, medium, or high impact findings fail the check.
+The contract review documents the verified exceptions and historical fixture
+limitations. [Slither review](packages/contracts/SLITHER.md)
+
+### Browser saver journey
+
+From the repository root, use Node 24 and pnpm 10.11.1. Install the dependencies
+and Chromium once, then run the journey on a fresh in-memory chain:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+pnpm test:e2e:saver
+```
+
+Chromium starts with a funded, passkey-owned Safe. Playwright uses the app’s
+Savings and Results pages to deposit 3 USDC, observe admission, check a round,
+add its 1 USDC prize to savings, and withdraw all 4 USDC. The test verifies the
+wallet, savings and pending-withdrawal balances after delivery. The local
+admission, draw and withdrawal keepers run between saver actions. The browser
+retrieves the proof from the production archive routes after the indexer
+processes local blocks in an in-memory SQLite database.
+
+The browser harness mounts the production page components, navigation and
+providers. Chromium supplies a virtual passkey. An in-process Hardhat chain
+(ID `31337`) executes the signed Safe transactions and supplies test USDC, FHE
+simulation and a fast-forwarded draw clock. The proof archive indexes that
+same chain. Safe bytecode comes from hash-checked local fixtures. Once the
+dependencies, Solidity compiler and Chromium are installed, the journey can
+run with only loopback connections. It needs no wallet credentials or Pimlico key.
+
+The contract-level passkey test can also run independently:
+
+```bash
+LOCAL_VIRTUAL_PASSKEY=1 pnpm --filter @kettigo/contracts exec hardhat test --network hardhat test/AdmissionKeeper.lifecycle.test.js
+```
+
 ## Sepolia deployment
 
 Frontend:
@@ -102,36 +148,35 @@ Frontend:
 - **Status:** fresh safe-withdrawals contracts deployed; run a new app
   end-to-end exercise before judging from the live URL.
 
-Current confidential deployment:
+Current candidate deployment:
 
-The addresses below use automatic withdrawal delivery, deployed September 16,
-2026. This is a fresh Sepolia test deployment, replacing the previous pool without
-migrating its disposable test balances or pending claims. Local frontend and
-keeper configuration must point to the same pool.
+The addresses below use automatic withdrawal delivery, deployed November 6,
+2026. This is a fresh Sepolia deployment. Earlier positions remain available
+through the retained legacy scopes; local frontend and keeper configuration must
+point to the candidate pool below.
 
 - **USDC underlying:** `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`
-- **ConfidentialUSDC:** `0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a`
-- **ConfidentialPrizePool:** `0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b`
-- **MorphoYieldAdapter:** `0xb2dAb46E04c875E6C8c1B966cFC3E1f40f063e90`
+- **ConfidentialUSDC:** `0xe64c1836b96253104a753E60188f691173Ded624`
+- **ConfidentialPrizePool:** `0x30530991e296a663a32567C170b290fB88578408`
+- **MorphoYieldAdapter:** `0x6c180a345F6eA433AfE59c35c2a611B0d15d1c09`
 - **Chain:** Ethereum Sepolia (`11155111`)
 - **Draw interval:** `86400` seconds (24 hours)
 - **Withdrawal batch interval:** `300` seconds; delivery continues automatically
   after settlement, subject to proof availability and market liquidity.
-- **Pool deployment transaction:** `0x2f4bd61e8879daf74a709c9bda2acea4c63b37d85a35aaf1c65c3b002153d904`
-- **Keeper scan start block:** `11719086`
+- **Pool deployment block:** `12078643`
 
 Frontend env values:
 
 ```bash
 NEXT_PUBLIC_USDC_ADDRESS=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238
-NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS=0x6B26B258436bcCE719Be8F9B30F87FDFD9BdFA8a
-NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS=0xe65D6459a7Ce01315FbB0998C37233c6FeE3aB8b
+NEXT_PUBLIC_CONFIDENTIAL_USDC_ADDRESS=0xe64c1836b96253104a753E60188f691173Ded624
+NEXT_PUBLIC_CONFIDENTIAL_PRIZE_POOL_ADDRESS=0x30530991e296a663a32567C170b290fB88578408
 NEXT_PUBLIC_CHAIN_ID=11155111
 ```
 
-### Example Sepolia run
+### Earlier Sepolia run
 
-The deployed pool has been exercised end to end on Sepolia with real wrapped
+The preceding deployment was exercised end to end on Sepolia with real wrapped
 USDC deposits, sponsor-funded prizes, round closes, prize claims, and a USDC
 withdrawal request. As of August 26, 2026, the pool had closed 8 rounds, started
 round 9, and registered 1 participant:
@@ -261,10 +306,14 @@ The user does not need to keep the app open or approve another transaction.
 
 From the repository root, run `pnpm keeper:watch` for continuous local processing
 (Ctrl+C stops it). `pnpm keeper:all` performs one pass. The watcher runs the
-Morpho, withdrawal, and draw keepers sequentially, retries every 15 seconds after
+Morpho, withdrawal, admission, and draw keepers sequentially, retries every 15 seconds after
 each pass, and continues with later lanes if an earlier keeper fails.
 Node 24 and the local keeper environment are required. Check configuration
 without sending transactions with `npm run keeper:withdrawal -- --check`.
+
+On the V2 pool, the admission keeper completes enrollment after the first deposit.
+The saver can close the app after depositing. Run `pnpm keeper:admission` for a
+single admission pass, or leave `pnpm keeper:watch` running for automatic processing.
 
 Withdrawal runs report confirmed `transactions` and unresolved `pending` work.
 Failed batches do not block other payouts. Requests are scanned from the first
