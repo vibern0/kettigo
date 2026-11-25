@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-labelledby="title desc">
-  <title id="title">Kettigo</title>
-  <desc id="desc">A rounded cobalt k with a citron spark.</desc>
-  <rect width="192" height="192" rx="42" fill="#2548F4"/>
-  <path d="M55 42c0-9 7-16 16-16s16 7 16 16v39l38-33c7-6 17-5 23 2s5 17-2 23l-32 28 35 28c7 6 8 16 2 23s-16 8-23 2L87 121v29c0 9-7 16-16 16s-16-7-16-16V42Z" fill="#FFF9EF"/>
-  <path d="m126 78 5 12 12 5-12 5-5 12-5-12-12-5 12-5 5-12Z" fill="#E4F66A"/>
-</svg>
