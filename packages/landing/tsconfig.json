@@ -19,7 +19,6 @@
     "types": [
       "vite/client",
       "vitest/globals",
-      "@testing-library/jest-dom",
       "@cloudflare/workers-types",
       "@cloudflare/vitest-plugin/types"
     ]

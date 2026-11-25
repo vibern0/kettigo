@@ -33,6 +33,8 @@ export default defineConfig({
       "tests/**/*-worker.test.ts",
       "tests/worker-routing.test.ts",
       "tests/security-privacy.test.ts",
+      "tests/validation.test.ts",
+      "tests/turnstile.test.ts",
     ],
     passWithNoTests: true,
     deps: {
