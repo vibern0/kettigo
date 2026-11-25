@@ -237,6 +237,23 @@ describe("ConfidentialPrizePool", function () {
     ).to.equal(1_250_000n);
   });
 
+  it("initializes decryptable zero handles for a new account and its delegate", async function () {
+    const { pool, poolAddress } = await deployFixture();
+    await pool.connect(alice).setDecryptDelegate(bob.address);
+    for (const handle of [
+      await pool.encryptedPrincipalOf(alice.address),
+      await pool.encryptedWinningsOf(alice.address),
+    ]) {
+      expect(await fhevm.userDecryptEuint(FhevmType.euint64, handle, poolAddress, bob)).to.equal(0n);
+    }
+  });
+
+  it("lets a new account claim its zero winnings", async function () {
+    const { pool, poolAddress } = await deployFixture();
+    await expect(pool.connect(alice).claimPrize()).to.emit(pool, "PrizeClaimed");
+    expect(await decryptPoolWinnings(pool, poolAddress, alice)).to.equal(0n);
+  });
+
   it("wraps and deposits in one multicall", async function () {
     const { usdc, confidentialUsdc, confidentialUsdcAddress, pool, poolAddress } =
       await deployFixture();
@@ -425,7 +442,14 @@ describe("ConfidentialPrizePool", function () {
     ).to.be.rejected;
 
     const winner = aliceWinnings > 0n ? alice : bob;
-    await pool.connect(winner).claimPrize();
+    const claim = await pool.connect(winner).claimPrize();
+    const receipt = await claim.wait();
+    const [transfer] = await confidentialUsdc.queryFilter(
+      confidentialUsdc.filters.ConfidentialTransfer(poolAddress, winner.address),
+      receipt!.blockNumber,
+      receipt!.blockNumber,
+    );
+    await expect(claim).to.emit(pool, "PrizeClaimed").withArgs(winner.address, transfer.args[2]);
 
     const encryptedWinnerBalance = await confidentialUsdc.confidentialBalanceOf(winner.address);
     expect(await decryptPoolWinnings(pool, poolAddress, winner)).to.equal(0n);

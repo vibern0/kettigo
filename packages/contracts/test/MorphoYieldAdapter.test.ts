@@ -235,7 +235,7 @@ describe("MorphoYieldAdapter", function () {
       f.adapter.interface.getError("ReentrancyGuardReentrantCall")!.selector,
     );
     expect(await f.callback.settleWithdrawalRevertData()).to.equal(
-      f.pool.interface.encodeErrorResult("WithdrawalBatchNotClosed", [0n]),
+      f.pool.interface.getError("ReentrancyGuardReentrantCall")!.selector,
     );
   }
 
@@ -361,6 +361,27 @@ describe("MorphoYieldAdapter", function () {
     expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, encryptedPoolBalance)).to.equal(
       USDC(250),
     );
+  });
+
+  it("restores available USDC first and draws only the shortfall from Morpho", async function () {
+    const { usdc, confidentialUsdc, pool, adapter } = await deployFixture();
+    const adapterAddress = await adapter.getAddress();
+    await usdc.transfer(adapterAddress, USDC(100));
+    await pool.supplyAvailableMorphoPrincipal();
+    await usdc.transfer(adapterAddress, USDC(40));
+
+    await expect(pool.restoreMorphoPrincipal(USDC(25)))
+      .to.emit(adapter, "PoolPrincipalRestored")
+      .withArgs(0n, 0n);
+    expect(await adapter.availablePrincipalAssets()).to.equal(USDC(15));
+    expect(await adapter.suppliedPrincipal()).to.equal(USDC(100));
+
+    await pool.restoreMorphoPrincipal(USDC(20));
+    expect(await adapter.availablePrincipalAssets()).to.equal(0n);
+    expect(await adapter.idlePrincipal()).to.equal(1n);
+    expect(await adapter.suppliedPrincipal()).to.equal(USDC(95));
+    const balance = await confidentialUsdc.confidentialBalanceOf(await pool.getAddress());
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, balance)).to.equal(USDC(45));
   });
 
   it("keeps enough idle principal to cover Morpho virtual-share rounding", async function () {

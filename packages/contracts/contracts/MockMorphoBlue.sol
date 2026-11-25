@@ -7,6 +7,10 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IMorphoBlue} from "./MorphoYieldAdapter.sol";
 
+interface IMockMorphoWithdrawCallback {
+  function onMorphoWithdraw(uint256 assets) external;
+}
+
 // Test-only market double; production indexing is owned by the adapter and pool events.
 // aderyn-fp-next-line(state-change-without-event)
 contract MockMorphoBlue is IMorphoBlue {
@@ -122,17 +126,20 @@ contract MockMorphoBlue is IMorphoBlue {
     p.supplyShares -= withdrawnShares;
     m.totalSupplyAssets -= withdrawnAssets.toUint128();
     m.totalSupplyShares -= uint128(withdrawnShares);
-    address callback = _withdrawCallback;
-    if (callback != address(0)) {
-      // solhint-disable-next-line avoid-low-level-calls
-      (bool callbackSucceeded, ) = callback.call(
-        abi.encodeWithSignature("onMorphoWithdraw(uint256)", _withdrawCallbackAssets)
-      );
-      if (!callbackSucceeded) {
-        revert CallbackFailed();
-      }
-    }
+    _notifyWithdrawCallback();
     IERC20(params.loanToken).safeTransfer(receiver, withdrawnAssets);
+  }
+
+  function _notifyWithdrawCallback() private {
+    address callback = _withdrawCallback;
+    if (callback == address(0)) {
+      return;
+    }
+    try IMockMorphoWithdrawCallback(callback).onMorphoWithdraw(_withdrawCallbackAssets) {
+      return;
+    } catch {
+      revert CallbackFailed();
+    }
   }
 
   function idToMarketParams(bytes32 marketId) external view returns (MarketParams memory) {

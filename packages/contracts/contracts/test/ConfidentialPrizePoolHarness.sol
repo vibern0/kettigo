@@ -15,22 +15,20 @@ contract ConfidentialPrizePoolHarness is ConfidentialPrizePool {
 
   function scaledRandomTicket(
     externalEuint64 encryptedRandomWord,
-    externalEuint64 encryptedTotalPrincipal,
+    externalEuint64 encryptedTotal,
     bytes calldata inputProof
   ) external returns (euint128) {
     euint64 randomWord = FHE.fromExternal(encryptedRandomWord, inputProof);
-    euint64 totalPrincipal = FHE.fromExternal(encryptedTotalPrincipal, inputProof);
+    euint64 totalPrincipal = FHE.fromExternal(encryptedTotal, inputProof);
     euint128 ticket = _scaledRandomTicket(randomWord, totalPrincipal);
 
-    FHE.allowThis(ticket);
-    return ticket;
+    return FHE.allowThis(ticket);
   }
 
   /// @dev Test-only harness hook for exercising production overflow guards.
   // aderyn-fp-next-line(state-change-without-event)
   function seedTotalPrincipal(externalEuint64 encryptedTotal, bytes calldata inputProof) external {
-    _totalPrincipal = FHE.fromExternal(encryptedTotal, inputProof);
-    FHE.allowThis(_totalPrincipal);
+    _totalPrincipal = FHE.allowThis(FHE.fromExternal(encryptedTotal, inputProof));
   }
 
   /// @dev Test-only hook: creates a depth-32 proof boundary without creating 2^32 users.
@@ -42,7 +40,6 @@ contract ConfidentialPrizePoolHarness is ConfidentialPrizePool {
   /// @dev Test-only hook for independently checking frozen weighted intervals.
   // aderyn-fp-next-line(state-change-without-event)
   function seedDrawTicket(uint256 drawId_, uint128 ticket) external {
-    draws[drawId_].ticket = FHE.asEuint128(ticket);
-    FHE.allowThis(draws[drawId_].ticket);
+    draws[drawId_].ticket = FHE.allowThis(FHE.asEuint128(ticket));
   }
 }

@@ -295,7 +295,14 @@ describe("ConfidentialPrizePool membership", function () {
         token.confidentialBalanceOf(await pool.getAddress()),
         pool.morphoPendingDepositCount(),
       ]);
-    await pool.connect(alice).claimPrizeToSavings();
+    const reinvest = await pool.connect(alice).claimPrizeToSavings();
+    const receipt = await reinvest.wait();
+    const [credit] = await pool.queryFilter(
+      pool.filters.PrizeAddedToSavings(alice.address),
+      receipt!.blockNumber,
+      receipt!.blockNumber,
+    );
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, credit.args[1])).to.equal(0n);
     for (const [after, before] of [
       [await pool.encryptedPrincipalOf(alice.address), principalBefore],
       [await pool.encryptedTotalPrincipal(), totalBefore],

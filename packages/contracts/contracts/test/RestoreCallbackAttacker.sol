@@ -2,6 +2,8 @@
 // aderyn-fp-next-line(push-zero-opcode,unspecific-solidity-pragma)
 pragma solidity ^0.8.28;
 
+import {IMockMorphoWithdrawCallback} from "../MockMorphoBlue.sol";
+
 interface IRestoreCallbackPool {
   function restoreMorphoPrincipal(uint256 assets) external returns (uint256);
   function closeDraw() external returns (bytes32);
@@ -24,7 +26,9 @@ interface IRestoreCallbackAdapter {
 
 /// @dev Test-only callback target used to exercise the Morpho withdrawal boundary.
 // aderyn-fp-next-line(state-change-without-event)
-contract RestoreCallbackAttacker {
+contract RestoreCallbackAttacker is IMockMorphoWithdrawCallback {
+  error InvalidCallbackTarget();
+
   address private immutable _pool;
   address private immutable _adapter;
 
@@ -45,6 +49,9 @@ contract RestoreCallbackAttacker {
   bytes private _withdrawalProof;
 
   constructor(address pool_, address adapter_) {
+    if (pool_ == address(0) || adapter_ == address(0)) {
+      revert InvalidCallbackTarget();
+    }
     _pool = pool_;
     _adapter = adapter_;
   }

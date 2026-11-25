@@ -6,6 +6,7 @@ import {FHE, ebool, euint64, euint128, externalEuint64} from "@fhevm/solidity/li
 import {IERC7984} from "@openzeppelin/confidential-contracts/interfaces/IERC7984.sol";
 import {IERC7984ERC20Wrapper} from "@openzeppelin/confidential-contracts/interfaces/IERC7984ERC20Wrapper.sol";
 import {IERC7984Receiver} from "@openzeppelin/confidential-contracts/interfaces/IERC7984Receiver.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {EncryptedSnapshotTree} from "./libraries/EncryptedSnapshotTree.sol";
 
@@ -26,7 +27,7 @@ interface IMorphoPrizeYieldAdapter {
 }
 
 /// @notice Confidential principal accounting, public mocked prize funding, and no-loss withdrawal.
-contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
+contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver, ReentrancyGuardTransient {
   using EncryptedSnapshotTree for EncryptedSnapshotTree.Tree;
   uint64 public constant MAX_USER_PRINCIPAL = 1e9;
   bytes4 public constant PRIZE_FUNDING_DATA = bytes4(keccak256("Kettigo.prize"));
@@ -258,7 +259,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Closes the ready draw without scanning members; historical members check their own proofs.
-  function closeDraw() external returns (euint128) {
+  function closeDraw() external nonReentrant returns (euint128) {
     if (block.timestamp < nextDrawAt) {
       revert DrawNotReady(nextDrawAt);
     }
@@ -393,18 +394,15 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Moves the caller's prize winnings from the pool to their cUSDC balance.
-  function claimPrize() external returns (euint64) {
-    euint64 amount = _winnings[msg.sender];
-    _winnings[msg.sender] = FHE.asEuint64(0);
-
+  function claimPrize() external nonReentrant returns (euint64) {
+    euint64 amount = FHE.allowTransient(_winnings[msg.sender], address(token));
+    euint64 transferred = token.confidentialTransfer(msg.sender, amount);
+    _winnings[msg.sender] = FHE.sub(_winnings[msg.sender], transferred);
     _allowAccount(_winnings[msg.sender], msg.sender);
-    FHE.allowThis(amount);
-    FHE.allow(amount, address(token));
+    _allowAccount(transferred, msg.sender);
 
-    token.confidentialTransfer(msg.sender, amount);
-
-    emit PrizeClaimed(msg.sender, amount);
-    return amount;
+    emit PrizeClaimed(msg.sender, transferred);
+    return transferred;
   }
 
   /// @notice Moves the caller's prize winnings directly into their active pool savings.
@@ -441,15 +439,16 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     FHE.allowThis(_totalPrincipal);
     FHE.allowThis(_pendingMorphoPrincipal);
 
-    emit PrizeAddedToSavings(msg.sender, amount);
-    return amount;
+    _allowAccount(credited, msg.sender);
+    emit PrizeAddedToSavings(msg.sender, credited);
+    return credited;
   }
 
   /// @notice Lets another address decrypt the caller's pool balance and winnings.
   function setDecryptDelegate(address delegate) external {
     _decryptDelegate[msg.sender] = delegate;
-    _allowAccount(_principal[msg.sender], msg.sender);
-    _allowAccount(_winnings[msg.sender], msg.sender);
+    _principal[msg.sender] = _allowAccount(_principal[msg.sender], msg.sender);
+    _winnings[msg.sender] = _allowAccount(_winnings[msg.sender], msg.sender);
 
     emit DecryptDelegateUpdated(msg.sender, delegate);
   }
@@ -458,8 +457,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   function setMorphoYieldAdapter(
     IMorphoPrizeYieldAdapter adapter,
     uint256 unwrapInterval
-  ) external {
-    _onlyOwner();
+  ) external onlyOwner {
     if (unwrapInterval > 0 && address(adapter) == address(0)) {
       revert MorphoYieldAdapterNotSet();
     }
@@ -472,8 +470,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Supplies finalized USDC batch principal from the adapter into Morpho.
-  function supplyFinalizedMorphoPrincipal(uint256 assets) external returns (uint256 shares) {
-    _onlyOwner();
+  function supplyFinalizedMorphoPrincipal(
+    uint256 assets
+  ) external onlyOwner returns (uint256 shares) {
     IMorphoPrizeYieldAdapter adapter = _requireMorphoYieldAdapter();
 
     shares = adapter.supplyPoolPrincipal(assets);
@@ -504,10 +503,9 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Restores Morpho principal as cUSDC liquidity in the pool.
-  // Owner-only entry reaches an immutable pool-bound adapter protected by onlyPrizePool and nonReentrant.
-  // aderyn-fp-next-line(reentrancy-state-change)
-  function restoreMorphoPrincipal(uint256 assets) external returns (uint256 restoredAssets) {
-    _onlyOwner();
+  function restoreMorphoPrincipal(
+    uint256 assets
+  ) external onlyOwner nonReentrant returns (uint256 restoredAssets) {
     if (_unfundedWithdrawalBatchCount != 0) {
       revert ManualMorphoRestoreBlocked();
     }
@@ -516,16 +514,14 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     }
     IMorphoPrizeYieldAdapter adapter = _requireMorphoYieldAdapter();
 
-    restoredAssets = adapter.restorePrincipalToPool(assets); // aderyn-fp(reentrancy-state-change)
+    // A withdrawal queued during restoration must reserve its share of the incoming liquidity.
+    _pendingMorphoPrincipal = FHE.add(_pendingMorphoPrincipal, FHE.asEuint64(uint64(assets)));
+    ++morphoPendingDepositCount;
+    FHE.allowThis(_pendingMorphoPrincipal);
+    restoredAssets = adapter.restorePrincipalToPool(assets);
     if (restoredAssets != assets) {
       revert WithdrawalRestorationMismatch(assets, restoredAssets);
     }
-    _pendingMorphoPrincipal = FHE.add(
-      _pendingMorphoPrincipal,
-      FHE.asEuint64(uint64(restoredAssets))
-    );
-    ++morphoPendingDepositCount;
-    FHE.allowThis(_pendingMorphoPrincipal);
     emit MorphoPrincipalRestored(restoredAssets);
   }
 
@@ -604,7 +600,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
     uint64 cleartextTotal,
     uint64 cleartextMorphoRestore,
     bytes calldata decryptionProof
-  ) external returns (uint256 restoredAssets) {
+  ) external nonReentrant returns (uint256 restoredAssets) {
     if (_withdrawalBatchStatus[batchId] == WithdrawalBatchStatus.Funded) {
       revert WithdrawalBatchAlreadyFunded(batchId);
     }
@@ -780,7 +776,7 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Requests a timed pending-principal unwrap for Morpho keepers.
-  function requestMorphoPrincipalUnwrap() external returns (bytes32 unwrapRequestId) {
+  function requestMorphoPrincipalUnwrap() external nonReentrant returns (bytes32 unwrapRequestId) {
     if (morphoPendingDepositCount == 0) {
       revert NoPendingMorphoPrincipal();
     }
@@ -825,14 +821,15 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Grants the pool, account, and optional delegate access to an encrypted value.
-  function _allowAccount(euint64 value, address account) internal {
-    FHE.allowThis(value);
+  function _allowAccount(euint64 value, address account) internal returns (euint64) {
+    value = FHE.allowThis(value);
     FHE.allow(value, account);
 
     address delegate = _decryptDelegate[account];
     if (delegate != address(0)) {
       FHE.allow(value, delegate);
     }
+    return value;
   }
 
   function _refreshAdmission(address account, PendingAdmission storage pending) internal {
@@ -925,10 +922,11 @@ contract ConfidentialPrizePool is ZamaEthereumConfig, IERC7984Receiver {
   }
 
   /// @notice Restricts keeper/admin helpers to the deployer owner.
-  function _onlyOwner() internal view {
+  modifier onlyOwner() {
     if (msg.sender != owner) {
       revert OnlyOwner();
     }
+    _;
   }
 
   /// @notice Returns the configured Morpho adapter or reverts if disabled.
